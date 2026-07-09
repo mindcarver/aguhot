@@ -55,3 +55,19 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-evidence-source-ingest-and-archive.md`
   summary: worker 运行时硬化不足——关闭处理非重入（双 SIGINT 触发 double-close）、无 `unhandledRejection` 处理、BullMQ `concurrency`/`stalledInterval`/`maxStalledCount` 用默认
   evidence: `apps/worker/src/index.ts` 的 shutdown 处理器无 `shuttingDown` 守卫，二次信号会并发二次调用 `worker.close()`/`closeRedis()`；无 `process.on('unhandledRejection'|'uncaughtException')`，BullMQ 运行时未捕获 rejection 可能使进程处于僵死态。`registerSourceIngestWorker` 的 Worker options 仅传 `connection`，并发/stalled 走 BullMQ 默认（V1 单源可接受）。应在 worker 成熟/上生产前补重入守卫、rejection 处理与显式并发/stalled 配置。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-candidate-hot-event-clustering.md`
+  summary: cluster job 不由 ingest 完成自动触发——两 job（source-ingest / event-cluster）独立、幂等，但管道 chaining/cron 编排未落地
+  evidence: `apps/worker/src/index.ts` 同时注册 `registerSourceIngestWorker` + `registerEventClusterWorker`，但两者无任何触发关系：ingest 归档 archived 记录后不自动入队 cluster job，cluster job 也不订阅 ingest 完成事件。当前需手动 `enqueueEventCluster`（verify-cluster 脚本与未来运营命令路径）才能跑聚类。这是有意为之的解耦（两 job 各自幂等、可独立重跑、失败互不阻塞），但生产管道需要编排（ingest → 定时/事件触发 cluster）。应在真实运营负载与编排需求出现时引入 repeat job（BullMQ `Queue.upsertJobScheduler`）或 ingest-completed 事件触发 cluster 入队，属 epic defer。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-candidate-hot-event-clustering.md`
+  summary: 聚类相似度 O(N²) 两两比对 + 粗粒度 CJK 单字分词 + 静态停用词集 + 无界增长签名——recall/性能 ceiling 已登记，升级路径为真实分词/min-hash/embedding
+  evidence: `packages/core/src/modules/event-assembly/clustering.ts` 的 `clusterRecords` 对每批未链接 archived 记录做 O(N²) 两两 overlap-coefficient 比对（`ponytail:` 注释已标明 ceiling 与升级路径：inverted-index 候选生成 / min-hash / LSH）。`tokenize` 对 CJK 做单字分词（`一-鿿` 各成一 token）减极小静态停用词集（`CJK_STOPWORDS`），无字典分词（无 jieba/hanlp），故复合标题（"央行降准"→央|行|降|准）无法区分词边界。`signatureOf` 的 token 并集随簇成员增长无界（大簇签名膨胀，未来 overlap 计算成本上升）。V1 ingest 体量（每 job 几条到几十条 archived）下全可接受；真实源规模化后应升级分词、候选生成、签名封顶（如取 top-K token 或带衰减权重）。属 epic defer（真实源采购 + 运营负载观察后定方案）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-candidate-hot-event-clustering.md`
+  summary: `verify:cluster`（worker 聚类管道唯一行为验证）与 `verify:cluster-logic`（core 纯聚类自检）均未接入任何 recurring 验证门
+  evidence: `apps/worker/src/verify-cluster.ts` 是覆盖 AC1/AC2 的唯一端到端验证（需 live PG+Redis），`packages/core/src/modules/event-assembly/clustering.selfcheck.ts` 是纯聚类逻辑自检（无 infra），但两者仅由显式 `pnpm --filter worker verify:cluster` / `pnpm --filter core verify:cluster-logic` 触发；全仓无 `.github/workflows`、无 turbo.json、根 `package.json` 的 `build/typecheck/lint` 均不调用它们，bmad-loop gate `commands=[]`（与 spec-1-1/1-4 既有 "e2e/verify 未接入自动化验证门" deferred 同根）。`pnpm -r typecheck/lint/build` 全绿仍可放行聚类分组/增量合并/时间窗分隔逻辑的回归。应在平台 CI/turbo 门就绪时把两脚本（+ service container PG/Redis for verify:cluster）一并接入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-candidate-hot-event-clustering.md`
+  summary: 候选标题为朴素派生（簇内最新 publishedAt 记录的标题，非 AI）——真正标题/解释/摘要生成归 explain job（1.8）
+  evidence: `packages/core/src/modules/event-assembly/cluster-events.ts` 的 `deriveTitle` 取簇内最新 publishedAt 记录的 title（null 则回退 summary 片段→占位"未命名候选"），纯字符串派生、无 LLM 调用、无 NFR3 AI 标识义务（派生非生成，见 Design Notes）。候选 `summary` 字段未填充（HotEvent schema 无 summary 列，解释/摘要归 1.8 ExplanationVersion）。incremental merge 时标题稳定（新建后不改，标题修订归 1.9 运营动作）。真正的事件级标题/解释/摘要生成是独立 explain job（epic worker job 划分 ingest/cluster/explain/publish/digest），属 1.8 详情页范围。

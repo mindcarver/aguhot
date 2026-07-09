@@ -65,8 +65,70 @@ model EvidenceRecord {
 
   source EvidenceSource @relation(fields: [sourceId], references: [id])
 
+  // Read-only reverse relation (Prisma navigation metadata, not a write path):
+  // lets event-assembly query unlinked archived records efficiently via
+  // `where: { evidenceLinks: { none: {} } }` (compiles to NOT EXISTS). Adding
+  // this relation does NOT change source-ingest's write-ownership of
+  // evidence_records (AD-2): event-assembly only writes hot_event_evidence rows
+  // that reference evidence_records.id, never evidence_records itself.
+  evidenceLinks HotEventEvidence[]
+
   // Indexes reference the Prisma field name, not the @map column name.
   @@index([sourceId])
   @@index([status])
   @@map("evidence_records")
+}
+
+// A candidate hot event produced by clustering archived evidence records.
+// The event-assembly module is the sole writer of this table (AD-2): it only
+// ever creates/updates candidates here via clusterEvents. A candidate is never
+// visible publicly until review-workflow (1.6) transitions publication_status
+// to "published" and publish-orchestrator (1.7+) writes a published_* read
+// model — this story never creates that read model and never sets "published".
+//
+// `publication_status` is a String column with a TS union (no Prisma enum, per
+// erasableSyntaxOnly). This story only assigns "candidate"; the transitions to
+// "published"/"taken_down" etc. belong to review-workflow (1.6) and are not
+// enumerated here. `cluster_signature` is the sorted token-union signature of
+// the cluster's member records (see signatureOf in clustering.ts); it is the
+// key used for incremental merge: a newly archived record whose tokens overlap
+// an existing candidate's signature joins that candidate instead of spawning a
+// duplicate. `title` is a naive derivation (latest published_at record's title,
+// non-AI) — real title/explanation generation is the separate explain job (1.8).
+model HotEvent {
+  id                 String   @id // UUIDv7, assigned in application code (newTraceId)
+  title              String
+  clusterSignature   String   @map("cluster_signature")
+  publicationStatus  String   @map("publication_status") // PublicationStatus union value ("candidate")
+  traceId            String?  @map("trace_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  evidence HotEventEvidence[]
+
+  @@index([publicationStatus])
+  @@map("hot_events")
+}
+
+// Link table between a candidate HotEvent and its supporting EvidenceRecord.
+// Each candidate is traceable to >= 1 evidence record (AC1). The link table is
+// also the "already processed" marker: clusterEvents queries archived records
+// with `evidenceLinks: { none: {} }` (NOT EXISTS), so a re-run over the same
+// evidence set has an empty processing set — the idempotency key. The unique
+// constraint on (hot_event_id, evidence_record_id) is the tail guard against a
+// duplicate link under concurrency.
+model HotEventEvidence {
+  id               String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId       String   @map("hot_event_id")
+  evidenceRecordId String   @map("evidence_record_id")
+  traceId          String?  @map("trace_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  hotEvent     HotEvent       @relation(fields: [hotEventId], references: [id])
+  evidenceRecord EvidenceRecord @relation(fields: [evidenceRecordId], references: [id])
+
+  @@unique([hotEventId, evidenceRecordId])
+  @@index([evidenceRecordId])
+  @@index([hotEventId])
+  @@map("hot_event_evidence")
 }

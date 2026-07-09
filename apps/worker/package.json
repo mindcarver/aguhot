@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "verify:ingest": "tsx src/verify-ingest.ts",
+    "verify:cluster": "tsx src/verify-cluster.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "build": "tsc --noEmit"

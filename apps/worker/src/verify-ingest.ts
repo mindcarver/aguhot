@@ -15,8 +15,13 @@
  *      failure_reason (AC3).
  *   4. Broken source B -> EvidenceSource.lastError non-empty, but source A's
  *      items still archived (single-source isolation, AC3).
- *   5. Only evidence_ tables were written (no published_ or HotEvent tables,
- *      AC2 1.4 part: ingest product isolated from public read path).
+ *   5. Write isolation (AC2 1.4 part): ingest only touches evidence_ tables —
+ *      row counts of every non-evidence_/non-_prisma_migrations table are
+ *      unchanged across the run. (Originally "non-evidence table must not
+ *      exist"; refactored in 1.5 because 1.5's migration adds hot_events/
+ *      hot_event_evidence. Write-isolation is the stronger, forward-compatible
+ *      AD-2 assertion: ingest must not write any table it does not own, whether
+ *      or not that table exists.)
  */
 
 import { fileURLToPath } from "node:url";
@@ -94,6 +99,13 @@ async function main(): Promise<void> {
     const sourceA = await seedSourceA(prisma);
     const sourceB = await seedSourceB(prisma);
 
+    // Capture baseline row counts of every non-evidence_ table so we can prove
+    // write isolation (AC2): ingest must not touch any table it does not own,
+    // whether or not that table exists. This is the forward-compatible AD-2
+    // assertion — 1.5 adds hot_events/hot_event_evidence tables, so the old
+    // "no non-evidence table exists" check would falsely fail.
+    const baseline = await nonEvidenceTableRowCounts(prisma);
+
     // --- Run 1: enqueue a source-ingest job and await it via QueueEvents. ---
     const traceId = newTraceId();
     const worker = registerSourceIngestWorker();
@@ -150,15 +162,23 @@ async function main(): Promise<void> {
       ok: (await prisma.evidenceRecord.count({ where: { sourceId: sourceB.id } })) === 0,
     });
 
-    // AC2 (1.4 part): only evidence_* written.
-    const tables = await listTables(prisma);
-    const nonEvidence = tables.filter(
-      (t) => !t.startsWith("evidence_") && t !== "_prisma_migrations",
-    );
+    // AC2 (1.4 part): write isolation — ingest only touches evidence_ tables.
+    // Row counts of every other table (hot_events, hot_event_evidence, etc.)
+    // must be unchanged across the ingest run.
+    const after = await nonEvidenceTableRowCounts(prisma);
+    const changed: string[] = [];
+    for (const [table, count] of baseline) {
+      if (after.get(table) !== count) changed.push(`${table}: ${count} -> ${after.get(table) ?? "?"}`);
+    }
+    // Also catch any table that newly appeared (non-evidence table created mid-run
+    // would be a severe write-isolation breach).
+    for (const [table, count] of after) {
+      if (!baseline.has(table)) changed.push(`${table}: appeared with ${count}`);
+    }
     assertions.push({
-      name: "AC2 only evidence_ tables present (no published_ or HotEvent)",
-      ok: nonEvidence.length === 0,
-      detail: `unexpected tables: ${nonEvidence.join(", ") || "(none)"}`,
+      name: "AC2 write isolation: non-evidence_ table row counts unchanged",
+      ok: changed.length === 0,
+      detail: changed.length > 0 ? `changed: ${changed.join(", ")}` : "all unchanged",
     });
 
     // --- Run 2: dedup — same source, expect no new records. ---
@@ -270,13 +290,35 @@ async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
   await prisma.evidenceSource.deleteMany({});
 }
 
-async function listTables(prisma: ReturnType<typeof getPrisma>): Promise<string[]> {
-  const rows = await prisma.$queryRawUnsafe<{ tablename: string }[]>(`
+/**
+ * Return row counts of every non-evidence_ table (excluding _prisma_migrations).
+ * Used for the write-isolation assertion: ingest must not change any of these.
+ */
+async function nonEvidenceTableRowCounts(
+  prisma: ReturnType<typeof getPrisma>,
+): Promise<Map<string, number>> {
+  const tables = await prisma.$queryRawUnsafe<{ tablename: string }[]>(`
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public'
+      AND tablename NOT LIKE 'evidence\\_%' ESCAPE '\\'
+      AND tablename != '_prisma_migrations'
     ORDER BY tablename
   `);
-  return rows.map((r) => r.tablename);
+  const counts = new Map<string, number>();
+  for (const { tablename } of tables) {
+    // Identifier guard: `tablename` comes from pg_tables, but interpolating an
+    // identifier into $queryRawUnsafe is a copy-paste footgun and SQL
+    // identifiers cannot be parameterized — validate it is a plain lower-snake
+    // identifier before interpolation.
+    if (!/^[a-z_][a-z0-9_]*$/.test(tablename)) {
+      throw new Error(`[verify-ingest] refusing unsafe table identifier: ${tablename}`);
+    }
+    const rows = await prisma.$queryRawUnsafe<{ n: bigint }[]>(
+      `SELECT COUNT(*)::bigint AS n FROM "${tablename}"`,
+    );
+    counts.set(tablename, Number(rows[0]?.n ?? 0));
+  }
+  return counts;
 }
 
 // --- fixture path resolution -------------------------------------------------
