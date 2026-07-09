@@ -5,13 +5,24 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "verify:ingest": "tsx src/verify-ingest.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "build": "tsc --noEmit"
   },
+  "dependencies": {
+    "@aguhot/config": "workspace:*",
+    "@aguhot/core": "workspace:*",
+    "bullmq": "^5.79.3",
+    "fast-xml-parser": "^5.2.0",
+    "ioredis": "5.10.1"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.0",
     "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.63.0"
   }

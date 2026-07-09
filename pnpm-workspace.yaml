@@ -1,3 +1,16 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# pnpm 10 native build-script allowlist. Only the packages listed here may run
+# their install-lifecycle scripts; everything else (notably unrs-resolver and
+# resolve, whose postinstalls hang on China network / do nothing useful) stays
+# skipped. This replaces the repo-wide `ignore-scripts=true` that 1.1 set to
+# dodge unrs-resolver: that flag also silently skipped the Prisma engine
+# download, leaving @prisma/client without a runtime engine. Allowlisting the
+# three Prisma packages restores the engine download while keeping the
+# unrs/resolve bypass intact.
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "prisma"
+  - "@prisma/engines"

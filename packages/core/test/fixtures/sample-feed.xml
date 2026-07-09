@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Deterministic RSS 2.0 fixture for source-ingest verification.
+
+  This file is the offline, committed evidence source used by the worker's
+  verify-ingest integration script (apps/worker/src/verify-ingest.ts). It is
+  intentionally crafted to exercise every row of the I/O & Edge-Case Matrix:
+    - items 1 & 2: well-formed (url + title + pubDate) -> status archived
+    - item 3 (no-link): missing <link> -> status missing_fields, failure_reason "missing url"
+    - item 4 (no-pubdate): missing <pubDate> -> status missing_fields, failure_reason "missing published_at"
+
+  No network access is needed: RssAdapter.fetch() reads this via the file: scheme.
+-->
+<rss version="2.0">
+  <channel>
+    <title>AGUHOT verify fixture feed</title>
+    <link>https://example.invalid/aguhot-verify-feed</link>
+    <description>Committed fixture for deterministic source-ingest verification.</description>
+    <item>
+      <title>央行宣布全面降准 0.5 个百分点</title>
+      <link>https://example.invalid/articles/pbrr-cut-50bps</link>
+      <pubDate>Wed, 09 Jul 2026 09:30:00 +0800</pubDate>
+      <description>人民银行决定于 2026 年 7 月 15 日下调金融机构存款准备金率 0.5 个百分点。</description>
+    </item>
+    <item>
+      <title>科创板 50 指数日内涨超 2%</title>
+      <link>https://example.invalid/articles/star50-up-2pct</link>
+      <pubDate>Wed, 09 Jul 2026 14:05:00 +0800</pubDate>
+      <description>半导体与新能源权重走强，科创 50 指数午后涨幅扩大至 2.3%。</description>
+    </item>
+    <item>
+      <title>缺失链接的占位条目</title>
+      <pubDate>Wed, 09 Jul 2026 18:00:00 +0800</pubDate>
+      <description>该条目缺少 link 字段，应被归档为 missing_fields。</description>
+    </item>
+    <item>
+      <title>缺失发布时间的占位条目</title>
+      <link>https://example.invalid/articles/missing-pubdate</link>
+      <description>该条目缺少 pubDate 字段，应被归档为 missing_fields。</description>
+    </item>
+  </channel>
+</rss>
