@@ -11,18 +11,19 @@ export const metadata: Metadata = {
  * placeholder): exists only so the primary nav target `/daily` is anonymously
  * reachable (HTTP 200, inside the public shell). The daily-digest content
  * lands in a later story; this page renders no business content and has no
- * session dependency (AD-8). No `dark:` variants (theme cleanup is 1.3).
+ * session dependency (AD-8). H1 uses `font-display` and colors use `@theme`
+ * ink tokens (Story 1.3).
  */
 export default function DailyPlaceholderPage() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-20">
       <header className="space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">日报</h1>
-        <p className="text-lg text-neutral-600">AGUHOT · 每日热点精选</p>
+        <h1 className="text-4xl font-display font-semibold tracking-tight">日报</h1>
+        <p className="text-lg text-ink-secondary">AGUHOT · 每日热点精选</p>
       </header>
       <section className="mt-12 space-y-3">
         <h2 className="text-xl font-semibold">当前状态</h2>
-        <p className="text-neutral-700">日报为结构性占位页，每日热点精选将在后续迭代中陆续开放。</p>
+        <p className="text-ink-secondary">日报为结构性占位页，每日热点精选将在后续迭代中陆续开放。</p>
       </section>
     </div>
   );

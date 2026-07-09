@@ -21,7 +21,7 @@ export default function OperatorPlaceholderPage() {
     <main className="min-h-screen">
       <div className="mx-auto max-w-3xl px-6 py-20">
         <h1 className="text-2xl font-bold">运营复核台</h1>
-        <p className="mt-4 text-neutral-700 dark:text-neutral-300">
+        <p className="mt-4 text-ink-secondary">
           1.1 未实现 · 该入口为结构性占位，运营复核队列与发布闸门将在后续迭代中落地。
         </p>
       </div>

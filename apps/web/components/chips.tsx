@@ -1,0 +1,118 @@
+import { cn } from "@/lib/utils";
+
+/**
+ * Token-driven display primitives — Story 1.3.
+ *
+ * Three small chip primitives that consume the `@theme` tokens in
+ * globals.css. They are display-only (no client behavior) so they stay server
+ * components. They exist to:
+ *   - prove the tokens are consumable as Tailwind utilities, and
+ *   - anchor AC1/AC2 on the `/design` preview surface.
+ *
+ * Market semantics follow DESIGN's a11y floor: a reaction chip carries BOTH a
+ * Chinese text label (涨/跌/平) AND color — color is never the sole signal.
+ */
+
+/**
+ * AI-content label.
+ *
+ * Uses `accent-warm` (DESIGN: reserved for the AI label / light
+ * explanation-layer emphasis). "AI" is the text. `rounded-full` per DESIGN
+ * `ai-label` radius.
+ */
+export function AiLabel({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full bg-accent-warm px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-accent-warm-foreground",
+        className,
+      )}
+    >
+      AI
+    </span>
+  );
+}
+
+/**
+ * Filter pill — default vs active.
+ *
+ * DESIGN `filter-pill`: default is a light surface with secondary ink; active
+ * flips to the brand background with brand-foreground ink. `rounded-full`.
+ * `active` is a controlled prop so callers (and tests) can pin either state.
+ */
+export function FilterPill({
+  active = false,
+  children,
+  className,
+}: {
+  active?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-3 py-1 text-sm",
+        active
+          ? "bg-brand text-brand-foreground"
+          : "bg-surface-base text-ink-secondary",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Market-reaction chip tone.
+ *
+ * `up`/`down`/`flat` map to DESIGN market-up/down/flat. The chip's background
+ * uses the corresponding `-soft` token and its text/value uses the solid
+ * market token, so red/green enter the UI only as chips — never as full-bleed
+ * card coloring (DESIGN: don't let it look like a trading terminal).
+ */
+export type ReactionTone = "up" | "down" | "flat";
+
+const REACTION_LABEL: Record<ReactionTone, string> = {
+  up: "涨",
+  down: "跌",
+  flat: "平",
+};
+
+const REACTION_TONE_CLASS: Record<ReactionTone, string> = {
+  up: "bg-market-up-soft text-market-up",
+  down: "bg-market-down-soft text-market-down",
+  flat: "bg-market-flat-soft text-market-flat",
+};
+
+/**
+ * Market-reaction chip.
+ *
+ * Renders the Chinese text label (涨/跌/平) next to the numeric `value`. The
+ * value uses `font-mono` (IBM Plex Mono numeric layer) so digits stay stable;
+ * the label stays in the sans body face. Both the text label and color carry
+ * the semantics (a11y floor: color is not the only signal).
+ */
+export function ReactionChip({
+  tone,
+  value,
+  className,
+}: {
+  tone: ReactionTone;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-sm",
+        REACTION_TONE_CLASS[tone],
+        className,
+      )}
+    >
+      <span>{REACTION_LABEL[tone]}</span>
+      <span className="font-mono">{value}</span>
+    </span>
+  );
+}

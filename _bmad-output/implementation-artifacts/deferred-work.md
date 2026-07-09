@@ -25,3 +25,16 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-responsive-navigation-and-public-shell.md`
   summary: 公共壳层现在横跨两套暗色策略——首页保留既有 `dark:` 变体，1.2 新增的侧栏/抽屉/占位页为纯亮色；深色 OS 偏好下首页浅字叠白底不可读
   evidence: Story 1.2 的 Never 约束明确将 dark 清理与颜色 token 划归 1.3，故本 story 未触碰。`apps/web/app/globals.css` 仅有 `@import "tailwindcss"` 与空 `@theme`，Tailwind v4 默认 `dark:` 解析为 `@media (prefers-color-scheme: dark)`；根 `<html>`/`<body>` 无深色背景，故首页 `dark:text-neutral-300` 等在深色 OS 下渲染为浅字白底（不可读，1.1 即存在）。新增的 `public-nav.tsx` 侧栏/抽屉用 `bg-white`/`bg-neutral-50`、三张占位页不带 `dark:`，与首页保留的 `dark:` 变体并存。需在 1.3 落地主题系统（`@theme` token + `@custom-variant dark` 或主题 provider）时统一处理：移除首页 `dark:` 死代码或为其接入真正深色画布、并为壳层 chrome 接入 token。
+  resolution: 已于 Story 1.3 解决——`@theme` 落地全部 DESIGN token、壳层 chrome 与各页面接入 token、首页/运营台 `dark:` 死代码与 `<html suppressHydrationWarning>` 一并移除（DESIGN V1 仅暖底亮色，未引入暗色分支）。深色 OS 下页面保持亮色，由 `e2e/design.spec.ts` 的 `colorScheme:"dark"` describe 钉住。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-visual-tokens-and-typography-foundation.md`
+  summary: DESIGN `label` 字面（IBM Plex Sans）未加载，chip/标签暂用 `font-sans` + `uppercase tracking-wide text-xs` 近似
+  evidence: Story 1.3 的 AC1 只命名「标题/正文/数字」三层，DESIGN.md `label`（IBM Plex Sans，过滤项/分组标签/栏位名）非三层之一；为避免无消费者的 Latin webfont 与额外 `--font-label` token（ponytail：不预埋无消费者 token），1.3 仅加载 IBM Plex Mono（数字层），chip 与标签用 sans + uppercase/tracking 近似 label 观感。`apps/web/components/chips.tsx` 当前未使用 Plex Sans。升级路径：当 1.7+ 真实过滤器/标签落地且 label 保真度需要时，加 `next/font/google` `IBM_Plex_Sans` + 一行 `--font-label` token，chip/标签 class 由 `font-sans` 换为 `font-label`。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-visual-tokens-and-typography-foundation.md`
+  summary: `--color-focus-ring` token 已落地但无任何交互元素消费（导航链接/汉堡按钮无 focus-visible 焦点环）
+  evidence: 1.3 在 `globals.css` `@theme` 落地 `--color-focus-ring`（DESIGN token），但 `apps/web/app/(public)/_components/public-nav.tsx` 的导航链接与汉堡按钮仅有 hover 态、无 `focus-visible:ring-focus-ring`/outline，焦点可见性与 1.2 一致未变（1.2 即无焦点环）。该 token 目前仅由 `/design` 色板可视化证明。焦点可见性属可达性范畴，消费该 token 归 Epic 3.5（语义与键盘可达性基线）统一处理，不在 1.3（纯 token foundation）范围内。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-visual-tokens-and-typography-foundation.md`
+  summary: 市场反应 chip 的 `flat` 态文字对比度约 3.4:1，低于 WCAG AA（14px 非粗体需 4.5:1）
+  evidence: `apps/web/components/chips.tsx` 的 `ReactionChip` flat 用 `text-market-flat`（#8E7759）叠 `bg-market-flat-soft`（#EFE7DA），对比度约 3.4:1；该取值逐字来自 DESIGN.md，属设计源对比度问题而非实现偏差。chip 带「平」文本标签（a11y 地板：色彩非唯一语义），且当前仅 `/design` 预览消费；待 1.7+ 真实市场反应 chip 落地、需 WCAG 校验时统一处理（必要时调整 market-flat token 或对 chip 文字加粗/放大）。

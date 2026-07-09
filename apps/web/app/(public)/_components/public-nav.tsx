@@ -66,8 +66,8 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
               className={cn(
                 "block min-h-11 rounded-md px-3 py-2 text-base",
                 isActive(pathname, item.href)
-                  ? "bg-neutral-100 font-semibold text-neutral-900"
-                  : "text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900",
+                  ? "bg-surface-muted font-semibold text-ink-primary"
+                  : "text-ink-secondary hover:bg-surface-base hover:text-ink-primary",
               )}
             >
               {item.label}
@@ -75,8 +75,8 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
           </li>
         ))}
       </ul>
-      <div className="mt-6 border-t border-neutral-200 pt-4">
-        <p className="px-3 pb-2 text-xs uppercase tracking-wide text-neutral-500">内部入口</p>
+      <div className="mt-6 border-t border-border-hairline pt-4">
+        <p className="px-3 pb-2 text-xs uppercase tracking-wide text-ink-tertiary">内部入口</p>
         <Link
           href={OPERATOR_NAV_ITEM.href}
           onClick={onNavigate}
@@ -84,8 +84,8 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
           className={cn(
             "block min-h-11 rounded-md px-3 py-2 text-base",
             isActive(pathname, OPERATOR_NAV_ITEM.href)
-              ? "bg-neutral-100 font-semibold text-neutral-900"
-              : "text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900",
+              ? "bg-surface-muted font-semibold text-ink-primary"
+              : "text-ink-secondary hover:bg-surface-base hover:text-ink-primary",
           )}
         >
           {OPERATOR_NAV_ITEM.label}
@@ -147,9 +147,9 @@ export function PublicNav() {
   return (
     <>
       {/* Desktop: sticky left-rail aside (>=768px). */}
-      <aside className="hidden md:flex md:w-60 md:sticky md:top-0 md:h-screen md:flex-col md:border-r md:border-neutral-200 md:bg-neutral-50">
+      <aside className="hidden md:flex md:w-60 md:sticky md:top-0 md:h-screen md:flex-col md:border-r md:border-border-hairline md:bg-surface-base">
         <div className="flex h-16 items-center px-6">
-          <Link href="/" className="text-lg font-bold tracking-tight text-neutral-900">
+          <Link href="/" className="text-lg font-bold tracking-tight text-ink-primary">
             AGUHOT
           </Link>
         </div>
@@ -159,7 +159,7 @@ export function PublicNav() {
       </aside>
 
       {/* Mobile: sticky top header + drawer (<768px). */}
-      <header className="md:hidden sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-neutral-200 bg-neutral-50 px-4">
+      <header className="md:hidden sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-border-hairline bg-surface-base px-4">
         <button
           ref={openButtonRef}
           type="button"
@@ -167,7 +167,7 @@ export function PublicNav() {
           aria-expanded={open}
           aria-controls={drawerId}
           aria-label={open ? "关闭导航菜单" : "打开导航菜单"}
-          className="inline-flex size-11 items-center justify-center rounded-md text-neutral-700 hover:bg-neutral-100 hover:text-neutral-900"
+          className="inline-flex size-11 items-center justify-center rounded-md text-ink-secondary hover:bg-surface-muted hover:text-ink-primary"
         >
           <svg
             aria-hidden="true"
@@ -193,7 +193,7 @@ export function PublicNav() {
             )}
           </svg>
         </button>
-        <Link href="/" className="text-lg font-bold tracking-tight text-neutral-900">
+        <Link href="/" className="text-lg font-bold tracking-tight text-ink-primary">
           AGUHOT
         </Link>
       </header>
@@ -208,7 +208,7 @@ export function PublicNav() {
             aria-label="关闭导航菜单"
             tabIndex={-1}
             onClick={closeDrawer}
-            className="absolute inset-0 cursor-default bg-black/40"
+            className="absolute inset-0 cursor-default bg-overlay"
           />
           {/* Drawer panel sits above the overlay (z-40).
               Non-modal disclosure dialog: the intent's a11y floor requires
@@ -220,7 +220,7 @@ export function PublicNav() {
             id={drawerId}
             role="dialog"
             aria-label="导航菜单"
-            className="absolute left-0 top-16 z-40 h-[calc(100vh-4rem)] w-72 max-w-[85vw] overflow-y-auto border-r border-neutral-200 bg-white px-3 py-4 shadow-lg"
+            className="absolute left-0 top-16 z-40 h-[calc(100vh-4rem)] w-72 max-w-[85vw] overflow-y-auto border-r border-border-hairline bg-surface-raised px-3 py-4 shadow-lg"
           >
             <NavList pathname={pathname} onNavigate={closeDrawer} />
           </div>
