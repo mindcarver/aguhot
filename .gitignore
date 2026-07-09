@@ -1,0 +1,8 @@
+# OS
+.DS_Store
+
+# BMad per-machine personal settings (not shared across team)
+_bmad/config.user.toml
+
+# bmad-loop runtime state (created by `bmad-loop init`)
+.bmad-loop/
