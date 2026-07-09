@@ -1,0 +1,23 @@
+/*
+ * AGUHOT global stylesheet — Tailwind CSS 4 entry.
+ *
+ * Per Story 1.1: this file only provides the Tailwind 4 CSS-first entry
+ * (`@import "tailwindcss"`) and an EMPTY `@theme` placeholder. Design tokens
+ * (warm canvas, deep-ink text, Source Han Serif/Sans, IBM Plex Mono, brand /
+ * market red-green decoupling) land in Story 1.3, mapped from DESIGN.md.
+ *
+ * No tailwind.config.js is needed — Tailwind 4 is CSS-first via
+ * `@tailwindcss/postcss` (see postcss.config.mjs).
+ */
+
+@import "tailwindcss";
+
+/*
+ * @theme placeholder — Story 1.3 will populate with:
+ *   --color-canvas, --color-ink, --color-brand, --color-market-up/down,
+ *   --font-display (Source Han Serif SC), --font-sans (Source Han Sans SC),
+ *   --font-mono (IBM Plex Mono), and AI-label accent-warm token.
+ * Intentionally empty for 1.1.
+ */
+@theme {
+}

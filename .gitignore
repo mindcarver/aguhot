@@ -8,3 +8,39 @@ _bmad/config.user.yaml
 # bmad-loop runtime state only; policy.toml + hook script ARE tracked
 .bmad-loop/runs/
 .bmad-loop/cache/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+out/
+.turbo/
+
+# Env (only .env.example is tracked)
+.env
+.env.local
+.env.*.local
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+.playwright/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# Claude Code scheduled-task runtime state (cron; changes on every fire)
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock

@@ -1,0 +1,12 @@
+node_modules
+dist
+.next
+.turbo
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+_bmad
+_bmad-output
+design-artifacts
+docs
