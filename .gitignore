@@ -3,6 +3,8 @@
 
 # BMad per-machine personal settings (not shared across team)
 _bmad/config.user.toml
+_bmad/config.user.yaml
 
-# bmad-loop runtime state (created by `bmad-loop init`)
-.bmad-loop/
+# bmad-loop runtime state only; policy.toml + hook script ARE tracked
+.bmad-loop/runs/
+.bmad-loop/cache/
