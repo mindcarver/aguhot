@@ -2,8 +2,9 @@
 title: '初始化公共站点脚手架与匿名首页壳层 (1.1)'
 type: 'feature'
 created: '2026-07-09'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '07fbc3d3a1e65105aabe1a371aa4cddeb571dcb8'
+final_revision: 'c1e2b33b106222f9a7e43a05424b5ed09d57866c'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -99,3 +100,54 @@ Tailwind 4 为 CSS-first 配置：`globals.css` 中 `@import "tailwindcss";`，t
 
 **Manual checks (if no CLI):**
 - 确认 `apps/web/app/(public)/page.tsx` 为 server component 且无 auth / redirect；`apps/web` 无任何拦截 `(public)` 的中间件。
+
+## Review Triage Log
+
+### 2026-07-10 — Review pass
+- intent_gap: 0
+- bad_spec: 0
+- patch: 1: (high 1, medium 0, low 0)
+- defer: 5: (high 0, medium 4, low 1)
+- reject: 12
+- addressed_findings:
+  - `[high]` `[patch]` shadcn 管线断裂：`apps/web/components.json` 含非 schema 字段 `"base": "base"`，导致 `shadcn add` 以 "Invalid configuration" 失败（matrix Row 4 与 spec 任务"验证 `shadcn add` 可用"未达成）。已在 matrix 审计阶段删除该字段，并用 pinned 的 `shadcn@4.12.0 add button` 验证管线可用（随后回退 button 与 radix-ui 以遵守"不强制安装业务组件"）。
+  - 其余 5 条 defer 已写入 `deferred-work.md`（各自指向后续 story）；12 条 reject 为误报 / 推测 / 在 pnpm 工作流中未触发，已静默丢弃。
+
+## Auto Run Result
+
+Status: done
+
+### 实施变更摘要
+恢复并完成 Story 1-1（公共站点脚手架与匿名首页壳层）。先前 run 已提交正确对齐 spine 的 pnpm monorepo 脚手架（commit `dbea0a5`）；本 run 修补了使 spec 验证门失败的缺口，并修复一处 shadcn 管线断裂缺陷（matrix Row 4）。
+
+### 变更文件（一行描述）
+- `apps/web/components.json` — 删除非 schema 字段 `"base": "base"`，修复 `shadcn add` "Invalid configuration" 失败（matrix Row 4）
+- `apps/web/next.config.ts` — 增 `allowedDevOrigins: ["127.0.0.1"]`，避免系统 HTTP 代理拦截 Playwright loopback HMR 探测
+- `apps/web/playwright.config.ts` — baseURL/webServer.url 由 `localhost` 改 `127.0.0.1`，确定回环绑定
+- `apps/web/package.json` — e2e 脚本加 `NO_PROXY/no_proxy=localhost,127.0.0.1`（试装 radix-ui 后已移除）
+- `apps/worker/package.json`、`packages/{config,core,ui}/package.json` — 补 `eslint` + `typescript-eslint` devDep，使各 workspace `lint: eslint src` 可解析
+- `eslint.config.js` — 根 ignores 增补 `_bmad/**`、`.agents/**`、`.claude/**`，避免 lint vendor 脚本
+- `.gitignore` — 增加 `*.tsbuildinfo`；`git rm --cached` 全部 workspace 的 tsbuildinfo 缓存
+- `pnpm-lock.yaml` — 依赖增删后重生成
+
+### 评审结论分布
+- patch：1（shadcn 管线修复，已应用并复验）
+- defer：5（指向后续 story，见 `deferred-work.md`）
+- reject：12（误报 / 推测 / pnpm 工作流中未触发）
+- intent_gap / bad_spec：0
+
+### 是否建议跟进评审
+false —— 本评审 pass 未产生 review-driven 代码改动；shadcn 修复属 matrix 审计（验证）阶段产物且已复验全绿。
+
+### 验证执行
+- `pnpm install`：成功
+- `pnpm -r typecheck`：5/5 workspace 通过
+- `pnpm -r lint`：5/5 通过
+- `pnpm --filter web build`：Next 16.2.10 构建成功，`/`、`/_not-found`、`/console` 静态预渲染（构建时未设 `DATABASE_URL`/`REDIS_URL`，覆盖 matrix Row 3）
+- `pnpm --filter web e2e`：2/2 Playwright 通过（首页 200、骨架文案、无 `/login` 重定向，覆盖 matrix Row 1）
+- shadcn 管线：`shadcn@4.12.0 add button` 成功创建组件（验证后回退，覆盖 matrix Row 4）
+- AD-8 人工核对：无 `middleware.ts`；`(public)/page.tsx` 为纯 server component，无 auth / redirect / `"use client"`
+
+### 残留风险 / 残留产物
+- 5 条 defer 见 `_bmad-output/implementation-artifacts/deferred-work.md`（env 模块设计、`.npmrc` ignore-scripts、e2e/CI 自动化门、`/console` 公开路由、dark 主题死代码）。
+- 磁盘构建缓存（`.next/`、`node_modules/`、`*.tsbuildinfo`）已 gitignore，不入产物。

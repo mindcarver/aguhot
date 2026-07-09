@@ -18,6 +18,7 @@ build/
 .next/
 out/
 .turbo/
+*.tsbuildinfo
 
 # Env (only .env.example is tracked)
 .env

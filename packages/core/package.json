@@ -11,6 +11,8 @@
     "build": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "eslint": "^9.0.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0"
   }
 }

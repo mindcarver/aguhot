@@ -16,6 +16,12 @@ export default tseslint.config(
       "**/coverage/**",
       "**/playwright-report/**",
       "**/test-results/**",
+      // Vendor tooling shipped by BMAD/WDS planning modules — plain Node .js
+      // scripts using require/process, not part of the AGUHOT app code that
+      // this TS-aware config is meant to govern.
+      "_bmad/**",
+      ".agents/**",
+      ".claude/**",
     ],
   },
   js.configs.recommended,
