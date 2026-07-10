@@ -28,6 +28,7 @@ import {
   getCandidateDetail,
   getPrisma,
   listPendingCandidates,
+  listPublishedHotEvents,
   newTraceId,
   resetPrisma,
   IllegalTransitionError,
@@ -174,6 +175,22 @@ async function main(): Promise<void> {
       detail: publishedRow ? `evidenceCount=${publishedRow.evidenceCount}` : "no row",
     });
 
+    // --- Story 1.7 public read: listPublishedHotEvents returns the approved row ---
+    // The public read query (first consumer of the read model, AD-3) must surface
+    // the just-published event with consistent title/evidenceCount/latestEvidenceAt.
+    const publishedList = await listPublishedHotEvents({ prisma, traceId: newTraceId() });
+    const approvedInList = publishedList.find((p) => p.hotEventId === approvedCandidate.id);
+    assertions.push({
+      name: "1.7 public read: listPublishedHotEvents returns the approved row",
+      ok: approvedInList !== undefined &&
+          approvedInList.title === approvedCandidate.title &&
+          approvedInList.evidenceCount === 1 &&
+          approvedInList.latestEvidenceAt.getTime() === publishedRow!.latestEvidenceAt.getTime(),
+      detail: approvedInList
+        ? `evidenceCount=${approvedInList.evidenceCount}, latest=${approvedInList.latestEvidenceAt.toISOString()}`
+        : "approved row missing from list",
+    });
+
     // --- AC2: reject candidate → rejected, no read model row -----------------
     const rejectTrace = newTraceId();
     const rejectResult = await decideReview({
@@ -240,6 +257,16 @@ async function main(): Promise<void> {
     assertions.push({
       name: "AC2 takedown: published_hot_events row deleted (public-invisible)",
       ok: publishedRowAfterTakedown === null,
+    });
+
+    // --- Story 1.7 public read: listPublishedHotEvents no longer contains the row ---
+    // After takedown the public read query must not surface the taken-down event
+    // (row existence = currently published; the surface IS the query result set).
+    const publishedListAfterTakedown = await listPublishedHotEvents({ prisma, traceId: newTraceId() });
+    assertions.push({
+      name: "1.7 public read: listPublishedHotEvents excludes the taken-down row",
+      ok: !publishedListAfterTakedown.some((p) => p.hotEventId === approvedCandidate.id),
+      detail: `${publishedListAfterTakedown.length} rows after takedown`,
     });
 
     const takenDownEvent = await prisma.hotEvent.findUniqueOrThrow({

@@ -22,6 +22,10 @@
 
 import type { PrismaClient } from "../../../generated/client.js";
 import type { PublishAction } from "../review-workflow/types.js";
+import type {
+  ListPublishedHotEventsOptions,
+  PublishedHotEventSummary,
+} from "./types.js";
 
 export interface RefreshPublishedReadModelOptions {
   prisma: PrismaClient;
@@ -111,4 +115,44 @@ export async function refreshPublishedReadModel(
       // publishedAt deliberately omitted on update: preserve first-publish time.
     },
   });
+}
+
+/**
+ * List all currently-published hot events for the public feed — Story 1.7.
+ *
+ * This is the first public consumer of the published_hot_events read model (AD-3:
+ * public reads only published_* read models). Row existence = currently
+ * published, so this is a plain `SELECT published_hot_events` with NO where
+ * filter (no status column to forget). Ordering is the product's priority rule:
+ * evidenceCount DESC (multi-source coverage first), then latestEvidenceAt DESC
+ * (more recently updated first).
+ *
+ * Returns the minimal projection the public feed card needs (title,
+ * evidenceCount, latestEvidenceAt, publishedAt). There is no `since`/window
+ * parameter: the query returns every published row and the web layer applies any
+ * date-window filter in JS (Design Notes — V1 published volume is tiny, and
+ * windowing is a UI concern that lets the same query distinguish "no published
+ * events" empty state from "window has no results" state via one fetch).
+ *
+ * This query only SELECTs published_hot_events. It never reads hot_events,
+ * evidence_records, review_decisions, publication_decisions, or hot_event_evidence
+ * — the read model is the sole public surface (AD-3).
+ */
+export async function listPublishedHotEvents(
+  options: ListPublishedHotEventsOptions,
+): Promise<PublishedHotEventSummary[]> {
+  const { prisma } = options;
+
+  const rows = await prisma.publishedHotEvent.findMany({
+    select: {
+      hotEventId: true,
+      title: true,
+      evidenceCount: true,
+      latestEvidenceAt: true,
+      publishedAt: true,
+    },
+    orderBy: [{ evidenceCount: "desc" }, { latestEvidenceAt: "desc" }],
+  });
+
+  return rows;
 }

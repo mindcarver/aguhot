@@ -8,7 +8,17 @@ import { expect, test } from "@playwright/test";
  *   - the public shell + default entry copy renders
  *   - no /login redirect (AD-8: public paths are anonymously usable)
  *
- * No DB/Redis is required: the homepage is a static server component.
+ * Evolution (Story 1.7): the homepage is now `force-dynamic` and reads the
+ * published_hot_events read model at request time (AD-3 public read, the feed).
+ * That means `goto("/")` now needs request-time DATABASE_URL (the page calls
+ * getPrisma, which throws loudly if DATABASE_URL is missing). This is the
+ * intentional AD-3 evolution documented in spec-1-7 Design Notes: the dev/CI
+ * environment runs local PG, so the public e2e (home/navigation/design) now
+ * requires DATABASE_URL at request time. The masthead assertions (H1 「AGUHOT」 +
+ * 「可信热点发布闭环」) are unchanged so this file stays green against the
+ * force-dynamic feed page. The page renders an honest empty state when the read
+ * model is empty — the assertions target the always-present masthead, not feed
+ * content, so they hold regardless of published rows.
  */
 test.describe("匿名公共首页 (Story 1.1)", () => {
   test("访问 / 返回 200 且渲染公共骨架文案", async ({ page }) => {

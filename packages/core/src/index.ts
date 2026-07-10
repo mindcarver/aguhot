@@ -3,14 +3,19 @@
  *
  * Story 1.4 introduced the `source-ingest` module (evidence source ingest &
  * archive). Story 1.5 added the `event-assembly` module (candidate hot-event
- * clustering). Story 1.6 adds `review-workflow` (the publish gate: decideReview
+ * clustering). Story 1.6 added `review-workflow` (the publish gate: decideReview
  * + list/get queries) and `publish-orchestrator` (the published_hot_events read
- * model owner). Later stories add theme-linking, market-reaction, etc. under
- * this package, per ARCHITECTURE-SPINE.md Structural Seed.
+ * model owner). Story 1.7 adds `listPublishedHotEvents` — the first public read
+ * of the published read model — consumed by the public homepage `(public)/page.tsx`
+ * (the homepage declares `force-dynamic` so its core import / getPrisma() call is
+ * not evaluated at build time, keeping the public build DATABASE_URL-free).
+ * Later stories add theme-linking, market-reaction, etc. under this package, per
+ * ARCHITECTURE-SPINE.md Structural Seed.
  *
- * The public web app does NOT import this package: public routes must stay
- * DATABASE_URL-free (AD-3/AD-6). Only the worker runtime and the operator
- * routes consume these exports.
+ * Public read note: as of 1.7 the public homepage imports this package (AD-3
+ * public-read via the read model). DB-read routes declare `force-dynamic` so
+ * `next build` stays DATABASE_URL-free; static public routes (layout, /daily,
+ * /topics, /favorites, /design) still do NOT import core.
  */
 
 // Shared kernel.
@@ -92,6 +97,14 @@ export type {
   ResolvedTransition,
 } from "./modules/review-workflow/types.js";
 
-// publish-orchestrator module (Story 1.6 — the published_hot_events read-model owner).
-export { refreshPublishedReadModel } from "./modules/publish-orchestrator/publish-service.js";
+// publish-orchestrator module (Story 1.6 — the published_hot_events read-model owner;
+// Story 1.7 — listPublishedHotEvents public read query, first consumer of the read model).
+export {
+  refreshPublishedReadModel,
+  listPublishedHotEvents,
+} from "./modules/publish-orchestrator/publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
+export type {
+  ListPublishedHotEventsOptions,
+  PublishedHotEventSummary,
+} from "./modules/publish-orchestrator/types.js";

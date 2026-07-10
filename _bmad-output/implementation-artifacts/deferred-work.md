@@ -71,3 +71,23 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-candidate-hot-event-clustering.md`
   summary: 候选标题为朴素派生（簇内最新 publishedAt 记录的标题，非 AI）——真正标题/解释/摘要生成归 explain job（1.8）
   evidence: `packages/core/src/modules/event-assembly/cluster-events.ts` 的 `deriveTitle` 取簇内最新 publishedAt 记录的 title（null 则回退 summary 片段→占位"未命名候选"），纯字符串派生、无 LLM 调用、无 NFR3 AI 标识义务（派生非生成，见 Design Notes）。候选 `summary` 字段未填充（HotEvent schema 无 summary 列，解释/摘要归 1.8 ExplanationVersion）。incremental merge 时标题稳定（新建后不改，标题修订归 1.9 运营动作）。真正的事件级标题/解释/摘要生成是独立 explain job（epic worker job 划分 ingest/cluster/explain/publish/digest），属 1.8 详情页范围。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-public-hot-event-feed.md`
+  summary: 一句话解释/摘要、分类筛选、市场反应排序理由、整卡进详情、骨架与流式全部 defer——读模型当前列集无对应数据列，待 1.8/Epic 2 数据源落地时接入
+  evidence: `published_hot_events` 读模型为 1.6 最小投影（title/evidenceCount/latestEvidenceAt/publishedAt），无解释列、无 category、无 market reaction。epic 卡片字段「一句话解释」归 1.8 explain job → `ExplanationVersion`；「分类筛选维度」归 Epic 2.2（概念/行业关联）；「市场反应排序理由/ReactionChip」归 Epic 2.1（市场反应信号）；「整卡点击进详情」归 1.8 详情页。1.7 只呈现读模型实有字段（标题/来源数/更新时间/evidenceCount+recency 两信号排序理由 chip），伪造这些字段会违反 NFR「空态绝不渲染假数据」与 AD-3（为凑解释去读 evidence_records 摘要）。这不是 intent gap（无任何「应实现」的可辩护读法——数据不存在），而是与 1.6 defer 同型的数据依赖 defer。
+  resolution: 已于 Story 1.7 登记为数据依赖 defer——随 1.8（解释/详情）/Epic 2.1（市场反应）/Epic 2.2（分类关联）落地时分别接入卡片字段与筛选维度。1.7 排序理由 chip 仅用 evidenceCount（多源）+ recency（近期）两信号。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-public-hot-event-feed.md`
+  summary: `pnpm --filter web e2e`（home/navigation/design）现 request 期依赖 DATABASE_URL——首页 force-dynamic + import @aguhot/core 所致，属 1.7 有意演化
+  evidence: `apps/web/app/(public)/page.tsx` 声明 `export const dynamic = "force-dynamic"` 并 `getPrisma()` + `listPublishedHotEvents` 读读模型（AD-3 公开读首次落地）。force-dynamic 路由在请求期求值，故 `goto("/")` 触发 getPrisma → 需 request 期 DATABASE_URL。1.6 build 不变量（`next build` 无 DATABASE_URL）仍成立（force-dynamic 不在 build 期求值），但运行期 e2e 现需 DB。这是 AD-3 公开读的必然结果，1.6 无法预见（彼时无公开 DB 读）。`(public)/layout.tsx` 及 /daily /topics /favorites /design 保持静态、不 import core，故仅 `/` 动态。home.spec.ts 文件头已注释说明该演化。dev/CI 环境本就跑 PG，无额外基础设施负担。
+  resolution: 已于 Story 1.7 接受为有意演化——home.spec.ts 注释说明，dev/CI 跑 PG 即可。若未来需公开 e2e 在无 DB 环境跑（如 PR 预览无 service container），需为 home/navigation/design 引入「首页 force-dynamic 但 DB 缺失时优雅降级」或拆分 masthead-only 冒烟路径，属平台 CI 门就绪时的决策。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-public-hot-event-feed.md`
+  summary: `listPublishedHotEvents` V1 全表读 + JS 日期窗口过滤，已发布集增长后有 scale ceiling——升级路径为 SQL `WHERE latest_evidence_at >= $1` + 索引
+  evidence: `packages/core/src/modules/publish-orchestrator/publish-service.ts` 的 `listPublishedHotEvents` 做 `prisma.publishedHotEvent.findMany`（无 where、无 since 参数），返回全部已发布行（按 evidenceCount DESC + latestEvidenceAt DESC 排序），web 层 `filterByWindow` 在 JS 按窗口过滤。Design Notes 明示这是 V1 选择：规模极小（ingest 每批数条到数十条，已发布子集更少），一次查询同时区分「无已发布」空态 vs「窗口无结果」态。已发布集增长后（数千+行）全表读 + JS 过滤会成为瓶颈，需改 SQL `WHERE latest_evidence_at >= $1` + 给 `latest_evidence_at` 加索引、并将窗口计算下推到 core（但保留 totalExist 判断或两次查询以区分两空态）。ponytail：不预埋无消费者的 since 参数；待真实负载出现再改。
+  resolution: 已于 Story 1.7 登记为 scale ceiling——待已发布集体量增长至全表读有可测延迟时，将窗口过滤下推为 SQL WHERE + 索引。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-public-hot-event-feed.md`
+  summary: filter-pill「clear」态目前以「全部」pill 实现，未额外造可 dismiss chip——YAGNI；DESIGN 若需显式 clear 控件待真实多筛选维度落地时再评估
+  evidence: `apps/web/app/(public)/_components/feed-filters.tsx` 的窗口 pill 组中，「全部」(window=all) 即清除控件（恒可见、当前窗口非 all 时点之恢复全部）。epic「活动筛选可视且可清除，不丢阅读上下文」由 URL 驱动原生满足。未造额外的「× 清除」chip（YAGNI：单维度筛选下「全部」pill 即是 clear 语义的最简形式）。DESIGN `filter-pill` 定义了 default/active/clear 三态，但 1.7 只用 default/active（clear 态以「全部」pill 实现）。多筛选维度（Epic 2.2 分类 + 日期同时活动）落地时，可能需要显式「清除全部」控件，届时再评估。
+  resolution: 已于 Story 1.7 以「全部」pill 实现 clear 语义——多筛选维度落地时再评估是否需显式 dismiss chip。

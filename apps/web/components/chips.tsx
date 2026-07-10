@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { cn } from "@/lib/utils";
 
 /**
@@ -11,6 +13,11 @@ import { cn } from "@/lib/utils";
  *
  * Market semantics follow DESIGN's a11y floor: a reaction chip carries BOTH a
  * Chinese text label (涨/跌/平) AND color — color is never the sole signal.
+ *
+ * Story 1.7: FilterPill gains an optional `href`. When provided it renders as a
+ * `<Link>` (URL-driven filter — server-rendered, shareable, zero client JS). This
+ * is the first real consumer of FilterPill (1.3 deferred "wire up when a real
+ * filter lands"). Without `href` it keeps the `<span>` display form.
  */
 
 /**
@@ -34,34 +41,45 @@ export function AiLabel({ className }: { className?: string }) {
 }
 
 /**
- * Filter pill — default vs active.
+ * Filter pill — default vs active, optionally a link.
  *
  * DESIGN `filter-pill`: default is a light surface with secondary ink; active
  * flips to the brand background with brand-foreground ink. `rounded-full`.
  * `active` is a controlled prop so callers (and tests) can pin either state.
+ *
+ * Story 1.7: an optional `href` turns the pill into a `<Link>` for URL-driven
+ * filtering (server-rendered, shareable URL, no client JS / useState). When
+ * omitted the pill renders as a display-only `<span>` (keeps 1.3 / /design use).
+ * The active/default class styles are identical in both forms.
  */
 export function FilterPill({
   active = false,
+  href,
   children,
   className,
 }: {
   active?: boolean;
+  href?: string;
   children: React.ReactNode;
   className?: string;
 }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-3 py-1 text-sm",
-        active
-          ? "bg-brand text-brand-foreground"
-          : "bg-surface-base text-ink-secondary",
-        className,
-      )}
-    >
-      {children}
-    </span>
+  const pillClass = cn(
+    "inline-flex items-center rounded-full px-3 py-1 text-sm",
+    active
+      ? "bg-brand text-brand-foreground"
+      : "bg-surface-base text-ink-secondary",
+    className,
   );
+
+  if (href !== undefined) {
+    return (
+      <Link href={href} className={pillClass}>
+        {children}
+      </Link>
+    );
+  }
+
+  return <span className={pillClass}>{children}</span>;
 }
 
 /**

@@ -9,5 +9,9 @@
  * or any other module's aggregate — only published_hot_events.
  */
 
-export { refreshPublishedReadModel } from "./publish-service.js";
+export { refreshPublishedReadModel, listPublishedHotEvents } from "./publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./publish-service.js";
+export type {
+  ListPublishedHotEventsOptions,
+  PublishedHotEventSummary,
+} from "./types.js";
