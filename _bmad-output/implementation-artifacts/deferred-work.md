@@ -783,3 +783,39 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: `verify:*` selfcheck 未接入 CI/precommit defer——`verify:watchlist`/`verify:session-cookie`/`verify:follow-ref`/`verify:cluster-logic` 等纯 selfcheck 脚本仅手动运行，无 CI workflow / git hook / 根 `verify` 聚合脚本驱动
   evidence: Story 3.3 review (verification-gap) 指出 `verify:watchlist`（钉 AC3 离线归类）与新增 `verify:session-cookie`（钉 mint/verify 回环、防 sign() twin 漂移）在全仓 grep 仅命中 package.json 脚本行 + 自身注释，repo 无 `.github/`、无 `.husky/`、根 `package.json` 仅 build/typecheck/lint/format——selfcheck 回归只能靠开发者记得手动跑。这是 repo-wide 既有约定（`verify:follow-ref` 等同为手动），非 3.3 引入。
   resolution: 已于 Story 3.3 review 登记为 repo-wide verify 接入 defer——待 CI/hook 基建引入时，把所有 `verify:*` selfcheck 聚合进根 `verify`/`test` 脚本 + precommit/CI，使 AC3 离线归类与 session-cookie 回环等关键不变量自动运行。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: 显式入口的来源感知仅覆盖 search origin——home/theme/daily 来源仍渲「返回首页」label（href 恢复该来源，仅 label 不区分）；未来可把来源感知 label 扩到这三类来源
+  evidence: Story 3.4 BackLink 的 `searchLabel` prop + `isSearchReturn` 仅区分「搜索来源」vs「其他」。从 `/?window=7d`/`/topics/{slug}`/`/daily?date=D` 进详情时，href 仍正确恢复该来源 URL（2.5 字节不变），但 label 仍是通用「返回首页」（未变成「返回首页（7 日窗口）」/「返回主题」/「返回日报」）。AC2 与 epic 仅点名 search 须有显式「返回搜索结果」入口；home/theme/daily 的显式 label 未被要求，且扩到这三类会动 2.5 loop.spec 对 home/theme/daily origin 的 label 断言（当前断言「返回首页」），扩大 3.4 回归面。故本 story 仅 search 来源做来源感知 label。
+  resolution: 已于 Story 3.4 登记为 label 扩展 defer——待真实用户反馈「想从 label 直接看出自己是从首页窗口/主题/日报进来的」时，给 BackLink 再增 `homeLabel`/`themeLabel`/`dailyLabel` 可选 prop + 对应 `isHomeReturn`/`isThemeReturn`/`isDailyReturn` 谓词（或泛化 `originLabel` + origin 分类），并同步更新 loop.spec 的 label 断言。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: bfcache / browser-back 的通用 scroll 恢复（`history.scrollRestoration` / `pageshow`）未做——3.4 的「bfcache 不可恢复兜底」= 显式入口本身（页面级、history 无关），不扩张到改 history 语义
+  evidence: Story 3.4 落地的 AC2 「bfcache 不可恢复兜底」= 一个页面级真实 `<a href="/search?q=…">`（不依赖 bfcache、不依赖 history state、刷新后仍在）。2.5 deferred-work 已把「浏览器 back 经 history 恢复 URL 但不恢复 scroll」列为通用机制 defer（适用 home/theme/daily/search 全部列表面，非搜索专属）。3.4 不扩张到改 history 语义（`history.scrollRestoration = "manual"` + `pageshow` eventpersisted 检测 + 手动 scroll 恢复），保持 ponytail + 不破坏 2.5 depth cap 与回归面。当前显式 BackLink 点击路径已恢复 scroll（2.5 marker），浏览器 back 仅恢复 URL 不恢复 scroll——后者是跨列表面通用 defer。
+  resolution: 已于 Story 3.4 登记为通用 history scroll 恢复 defer（沿用 2.5）——待真实用户反馈「浏览器 back 后 scroll 丢失」频次较高时，在 `<ListContextMemory/>` 加 `history.scrollRestoration` + `pageshow` 监听做跨列表面通用 scroll 恢复（非搜索专属）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: label 内回显裸 query 文本（如「返回搜索结果「芯片」」）未做——href 已带 query 满足「带回原查询词」，label 回显是 UX 噪音 + 长 query 撑坏布局
+  evidence: Story 3.4 AC2 「该入口带回原查询词而不是空白搜索页」由 href `/search?q=芯片` 满足（点进去就是该 query 的结果页）。在 label 文案里再回显「返回搜索结果「芯片」」是 UX 噪音，且长 query（近 128 字符，`parseSearchQuery` 的 `MAX_QUERY_LEN`）会撑坏返回链布局/截断。故 3.4 label 为静态「返回搜索结果」（不回显裸 query）。
+  resolution: 已于 Story 3.4 登记为 label query 回显 defer——待真实设计需求出现「想在 label 里看到自己搜了什么」时，考虑：(1) 截断回显（`q.slice(0, 8) + "…"`）或 (2) tooltip/title 属性携带完整 query（不撑布局，SR 可读），需设计评审布局影响。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: `isSearchReturn` 纯函数无 selfcheck / 未接入 CI——信任边界分类逻辑（origin 等值 + pathname 精确）仅由 e2e 间接覆盖，无纯单测快速回归
+  evidence: Story 3.4 的 `isSearchReturn` 是 `list-context-memory.tsx` 内导出的纯函数（6 行核心逻辑），与 `isValidListReturn` 同套路。`search-return.spec.ts` 的信任边界测试（`/search//evil.com`、`/search/../console`）间接验证了「拒」，但需 live PG + playwright + dev server 才能跑，反馈慢。repo 无纯单测层（core 的 `*.selfcheck.ts` 惯例仅 core 包，web 包无对应），故 `isSearchReturn` 无快速纯单测。与 spec-3-3 review 的「repo-wide verify 接入 defer」同根。
+  resolution: 已于 Story 3.4 登记为 selfcheck defer——待 web 包引入纯单测基建（或把 `list-context-memory.tsx` 的纯函数抽到 core 包享 selfcheck 惯例）时，给 `isSearchReturn` 加纯单测覆盖：精确 `/search` true、`/search?q=…` true、`/search/../console` false、`/search//evil.com` false、`https://evil.com` false、空/畸形 false。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: 多级返回栈 / 面包屑 / 前进恢复未做——沿用 UX-DR12 一层深度上限；详情→列表→详情→列表 的多层返回栈 defer
+  evidence: Story 3.4 BackLink 仍是 UX-DR12 一层深度（2.5 depth cap）：只记录最近一跳「列表→详情」的来源。读者若 详情→BackLink→列表A→详情→BackLink→列表B→详情，第三次 BackLink 只回到列表 B（最近一跳），不回到列表 A（多层栈）。面包屑（「首页 > 搜索 > 详情」）与前进恢复（「返回后再前进回详情」）亦 defer。AC1/AC2 仅要求单层稳定返回，多层栈超 3.4 scope。
+  resolution: 已于 Story 3.4 登记为多级返回栈 defer（沿用 2.5）——待真实用户反馈「想沿原路多层返回」时，引入 sessionStorage 栈（push 来源 URL + pop on BackLink click）或面包屑组件，需同步扩 UX-DR12 depth cap 约定。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: `@search-return` 与 `@search` 合并跑的串行时序未做——两 spec 共享 `seedSearchContext` 但各自 `beforeAll` 重新 seed，`pnpm e2e:search && pnpm e2e:search-return` 会跑两次 seed（确定性，但冗余）；合并跑需手动串行
+  evidence: Story 3.4 `e2e:search-return` 脚本先跑 `tsx e2e/seed-search.ts`（与 `e2e:search` 同 seed），再 `--grep @search-return`。若开发者想一次跑完 search + search-return，需 `pnpm --filter web e2e:search && pnpm --filter web e2e:search-return`——两次 seed（第二次清表重写，确定性无冲突，但冗余 DB round-trip）。两 spec 的 `beforeAll` 各自调 `seedSearchContext()` 也会在 playwright worker 内再 seed（serial mode 单 worker，故不并发竞争，但仍多次 seed）。合并跑（单 seed 喂两 spec）需自定义 playwright 脚本或 globalSetup，超 3.4 scope。
+  resolution: 已于 Story 3.4 登记为测试编排 defer——待 search + search-return 合并跑需求出现时，考虑：(1) 一个 `e2e:search-all` 脚本 `tsx e2e/seed-search.ts && playwright test --grep "@search|@search-return"`（单 seed 喂两 spec），或 (2) 提取 globalSetup 共享 seed（避免 beforeAll 重复），需评估两 spec serial mode worker 隔离。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
+  summary: 搜索来源的 scroll 位置恢复未在 3.4 e2e 直接断言——AC1「结果上下文保持不变」的 scroll 分量沿用 2.5 marker 机制（同一代码路径，loop.spec 已为 home/theme/daily 断言），但 search 来源的 scroll 恢复无直接测试
+  evidence: Story 3.4 AC1「回到原搜索结果列表，原关键词、排序与结果上下文保持不变」中的「上下文」含 scroll 位置。scroll 恢复是 2.5 的 `RESTORE_MARKER` + `ListContextMemory` 机制（search 已在 allowlist，故机制对 search 生效），loop.spec 对 home/theme/daily 三面有 `scrollY` 恢复断言（需 ≥10 条结果撑高页面）。但 search 来源的 scroll 恢复从未被直接断言：3.1 test 9 只断 query 恢复，3.4 search-return.spec 的 AC1 点回用例只断 `q=` + EventCard 复现。直接断言需要 search 结果页足够高，而 `seedSearchContext` 对测试 query（如「芯片」）只产出 1 个事件 + 2 个主题 pill（页面很短，`scrollY` 断言会脆），修改共享 seed 会波及 search.spec。故 3.4 未加 search 来源 scroll 断言。
+  resolution: 已于 Story 3.4 登记为 search scroll 验证 defer——待需要时：(1) 在 search-return.spec 加一个用多命中 query（如「稀土」命中 2 事件）+ 注入 spacer 撑高页面的 scroll 恢复断言，或 (2) 给 seedSearchContext 加专用高结果 query（评估对 search.spec 的影响），或 (3) 接受 scroll 恢复由 loop.spec 对同一 2.5 代码路径的覆盖间接保证（当前选择）。
+

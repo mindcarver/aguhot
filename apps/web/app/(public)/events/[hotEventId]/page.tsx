@@ -144,14 +144,24 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      {/* Detail return path — UX-DR12 reading-context restoration (Story 2.5);
-          BackLink restores the originating list URL + scroll via sessionStorage.
-          Direct load / external referrer / private mode → falls back to "/"
-          (byte-identical to the prior bare link), so existing href assertions
-          stay green. SSR renders href={fallback} (fromHref starts null); the
-          captured originating URL is read in an effect post-hydration. */}
+      {/* Detail return path — UX-DR12 reading-context restoration (Story 2.5)
+          + Story 3.4 source-aware explicit search-return entry (AC2).
+          BackLink restores the originating list URL + scroll via sessionStorage
+          (Story 2.5 infra, byte-identical). When the reader came from search
+          (`/search?q=…`), BackLink renders the explicit 「返回搜索结果」 entry
+          carrying the original query (AC2 — page-level, history-independent,
+          survives reload / direct-visit-from-search / bfcache miss). All other
+          origins (home `/?window=…` / theme `/topics/{slug}` / daily
+          `/daily?date=…`) keep the default 「返回首页」 label. Direct load /
+          external referrer / private mode → falls back to "/" (byte-identical
+          to the prior bare link), so existing href assertions stay green. SSR
+          renders href={fallback} + children label (fromHref starts null); the
+          captured originating URL is read post-hydration, and the label may
+          switch to searchLabel at the same render. href + scroll restore still
+          go through the 2.5 infrastructure (AC1). */}
       <BackLink
         fallback="/"
+        searchLabel={<><span aria-hidden>←</span> 返回搜索结果</>}
         className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
       >
         <span aria-hidden>←</span> 返回首页

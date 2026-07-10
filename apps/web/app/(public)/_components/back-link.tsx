@@ -5,19 +5,34 @@ import { useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 
 import {
+  isSearchReturn,
   isValidListReturn,
   readReturnContext,
   writeRestoreMarker,
 } from "./list-context-memory";
 
 /**
- * Detail-page "return to originating list" link — Story 2.5 (UX-DR12).
+ * Detail-page "return to originating list" link — Story 2.5 (UX-DR12) +
+ * Story 3.4 (source-aware label, AC2).
  *
  * Replaces the bare `<Link href="/">` return link on the detail page. This is
  * the single UX-DR12 landing point: when a reader enters a detail page from a
  * list (homepage feed `/?window=…` / theme `/topics/{slug}` / daily
- * `/daily?date=…`), the BackLink restores the originating list URL (with its
- * filter query intact) instead of always falling back to the homepage top.
+ * `/daily?date=…` / search `/search?q=…`), the BackLink restores the
+ * originating list URL (with its filter query intact) instead of always
+ * falling back to the homepage top.
+ *
+ * Story 3.4 — source-aware LABEL (AC2 explicit entry). The href behavior is
+ * byte-unchanged (still `fromHref ?? fallback`, 2.5 scroll-restore infra
+ * untouched). What changes is the LABEL: when the originating context is a
+ * valid search URL (`isSearchReturn(fromHref)` true), BackLink renders the
+ * optional `searchLabel` (e.g. 「← 返回搜索结果」) — a page-level, history-
+ * independent `<a href="/search?q=…">` that carries the original query and
+ * does not depend on bfcache / browser-back. Otherwise it renders `children`
+ * (the default label, e.g. 「← 返回首页」). This single return surface covers
+ * both AC1 (point of return restores query + scroll, via the unchanged href)
+ * and AC2 (the reader can SEE they came from search and that the entry carries
+ * the query, via the source-aware label).
  *
  * Pair with `<ListContextMemory/>` (mounted once in the public layout), which
  * captures the originating list URL + scroll position at click time and
@@ -36,17 +51,22 @@ import {
  *
  * SSR safety + existing-spec preservation: `fromHref` is read via
  * `useSyncExternalStore`, whose `getServerSnapshot` returns `null`. SSR + the
- * first hydration render therefore use `href={fallback}` — byte-identical to
- * the previous bare `<Link href="/">` — so any existing href assertion on the
- * detail page stays green, and there is no hydration mismatch. After hydration,
- * `getSnapshot` reads sessionStorage and may update the href to the originating
- * list URL. `useSyncExternalStore` is the React-blessed primitive for reading
- * from an external store (sessionStorage) without a setState-in-effect cascading
- * render.
+ * first hydration render therefore use `href={fallback}` AND `children` (label
+ * defaults to the non-search label since `isSearchReturn(null)` is false) —
+ * byte-identical to the previous bare `<Link href="/">` with static children,
+ * so existing label + href assertions stay green and there is no hydration
+ * mismatch. After hydration, `getSnapshot` reads sessionStorage and may update
+ * BOTH the href (to the originating list URL) and the label (to `searchLabel`
+ * when the origin is `/search?…`) — the two derive from the same `fromHref`
+ * at the same render, so they always switch in lockstep. `useSyncExternalStore`
+ * is the React-blessed primitive for reading from an external store
+ * (sessionStorage) without a setState-in-effect cascading render.
  *
  * a11y (UX-DR13): rendered as a real `<a href>` (not a JS button), so it is
- * keyboard-reachable, focusable, and middle-click-openable. Scroll restore uses
- * `behavior: "instant"` (no animation — UX-DR15 reduced-motion consistent).
+ * keyboard-reachable, focusable, and middle-click-openable. The search-return
+ * label 「← 返回搜索结果」 is SR-readable and focusable (same `<a>` token, no
+ * new visual). Scroll restore uses `behavior: "instant"` (no animation —
+ * UX-DR15 reduced-motion consistent).
  *
  * Depth cap (UX-DR12, one level): BackLink is used ONLY on the detail page.
  * The daily-page and theme-page "return" links stay as bare `<Link>` (they are
@@ -69,6 +89,23 @@ export interface BackLinkProps {
    * styling so there is no visual change (token-safe).
    */
   className?: string;
+  /**
+   * Story 3.4 — label rendered when the originating context is a SEARCH URL
+   * (`fromHref` is a valid `/search?…` per `isSearchReturn`). When provided
+   * and the reader came from search, this becomes the explicit AC2
+   * 「返回搜索结果」 entry (a page-level `<a href="/search?q=…">` carrying the
+   * original query). When omitted, or when the origin is NOT search, the
+   * `children` label is rendered (backward-compatible — other callers that do
+   * not pass `searchLabel` see no behavior change).
+   *
+   * Note: only the LABEL is selected by this prop; the HREF is still
+   * `fromHref ?? fallback` (byte-identical to 2.5). So a search-origin reader
+   * sees 「返回搜索结果」 AND is taken to `/search?q=…` (never search-label +
+   * `/` mismatch). SSR / first render reads `fromHref=null` → `isSearchReturn`
+   * is false → `children` renders (byte-identical to today, no hydration
+   * mismatch).
+   */
+  searchLabel?: ReactNode;
 }
 
 // --- useSyncExternalStore adapters -------------------------------------------
@@ -99,7 +136,7 @@ function getServerSnapshot(): null {
   return null;
 }
 
-export function BackLink({ fallback, children, className }: BackLinkProps) {
+export function BackLink({ fallback, children, className, searchLabel }: BackLinkProps) {
   // useSyncExternalStore: SSR returns null (→ href=fallback on first render);
   // client reads sessionStorage and may return the originating list URL. This
   // avoids the setState-in-effect cascading-render pattern.
@@ -110,6 +147,17 @@ export function BackLink({ fallback, children, className }: BackLinkProps) {
   );
 
   const href = fromHref ?? fallback;
+  // Story 3.4 — source-aware LABEL. When the reader came from search (and a
+  // searchLabel was provided), render that explicit 「返回搜索结果」 entry.
+  // Otherwise render the default `children` label. The href logic above is
+  // byte-identical to 2.5; only the label selection is new. SSR / first render
+  // (fromHref=null) → isSearchReturn false → children (byte-identical to today,
+  // no hydration mismatch). `searchLabel ?? children` guards an absent
+  // searchLabel: a caller that does not pass searchLabel always sees children.
+  const label =
+    fromHref !== null && isSearchReturn(fromHref)
+      ? (searchLabel ?? children)
+      : children;
 
   return (
     <Link
@@ -125,7 +173,7 @@ export function BackLink({ fallback, children, className }: BackLinkProps) {
         }
       }}
     >
-      {children}
+      {label}
     </Link>
   );
 }

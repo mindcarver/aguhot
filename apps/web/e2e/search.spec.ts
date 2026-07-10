@@ -497,10 +497,12 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
 
     // The detail page BackLink is present. After hydration it should resolve to
     // the originating /search?q=… URL (the 2.5 capture listener wrote it on the
-    // click, and /search is now in the allowlist).
+    // click, and /search is now in the allowlist). Story 3.4: because the origin
+    // is a search URL, the BackLink label is now 「返回搜索结果」 (not 「返回首页」),
+    // so the selector matches the search-return label.
     // Poll for the hydrated href (useSyncExternalStore reads sessionStorage
     // post-mount; allow a brief retry for the effect to settle).
-    const backLink = page.getByRole("link", { name: /返回首页/ }).first();
+    const backLink = page.getByRole("link", { name: /返回搜索结果/ }).first();
     await expect(backLink).toBeVisible();
     await expect
       .poll(async () => backLink.getAttribute("href"), {

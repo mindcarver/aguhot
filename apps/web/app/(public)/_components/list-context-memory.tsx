@@ -153,6 +153,54 @@ export function isValidListReturn(raw: string | null | undefined): boolean {
 }
 
 /**
+ * Story 3.4 — is this return-context candidate from `/search`?
+ *
+ * Sibling trust-boundary predicate to `isValidListReturn`, answering a
+ * DIFFERENT question. `isValidListReturn` decides whether `raw` is any valid
+ * list-origin (and so drives BackLink's HREF rendering — which URL to
+ * restore). `isSearchReturn` decides specifically whether `raw` is a SEARCH
+ * origin, and so drives BackLink's LABEL selection (Story 3.4's explicit
+ * 「返回搜索结果」 entry vs the default 「返回首页」).
+ *
+ * The two differ: `/topics/{slug}` is valid-list (restore href) but NOT
+ * search (label stays 「返回首页」). Search origins are a strict SUBSET of
+ * valid-list origins, so `isSearchReturn(raw) === true` implies
+ * `isValidListReturn(raw) === true` — whenever the label is 「返回搜索结果」
+ * the href is guaranteed to be a valid `/search?q=…` (never the mismatched
+ * state of search-label + `/` href).
+ *
+ * Same trust-boundary pattern (NOT simplifiable):
+ *   - `new URL(raw, "http://localhost")` parses relative, protocol-relative
+ *     (`//evil.com`), absolute (`https://evil.com`), and backslash-trick
+ *     (`/\evil.com`) candidates under a fixed sentinel origin.
+ *   - `origin !== "http://localhost"` rejects every cross-site form (blocks
+ *     open-redirect via a tampered `returnContext`).
+ *   - `pathname === "/search"` is an EXACT match. It REJECTS:
+ *       - `/search/../console` (new URL normalizes the pathname to `/console`)
+ *       - `/search//evil.com` (pathname stays `/search//evil.com`, not exact)
+ *       - `/search/X` (any nested segment under /search)
+ *     This matches the 3.1 /search open-redirect-guard test, which locks the
+ *     `LIST_PATH_EXACT` `/search` entry as exact, not prefix.
+ *   - Empty / malformed `raw` → false.
+ *
+ * Returns true ONLY when `raw` is a non-empty string that parses to
+ * `origin === "http://localhost"` AND `pathname === "/search"`. Any query
+ * string (`?q=…`) is preserved on the URL and carried by BackLink's href; the
+ * label decision does not inspect the query.
+ */
+export function isSearchReturn(raw: string | null | undefined): boolean {
+  if (typeof raw !== "string" || raw === "") return false;
+  let url: URL;
+  try {
+    url = new URL(raw, "http://localhost");
+  } catch {
+    return false;
+  }
+  if (url.origin !== "http://localhost") return false;
+  return url.pathname === "/search";
+}
+
+/**
  * Read the stored originating-list href, or null when absent / storage
  * disabled. Never throws.
  */

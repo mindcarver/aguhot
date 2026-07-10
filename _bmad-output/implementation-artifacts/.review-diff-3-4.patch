@@ -1,0 +1,587 @@
+=== STORY 3-4 REVIEW DIFF (baseline 7631bdd1) ===
+
+### Verbatim intent (Story 3.4, epics.md):
+As a 市场观察用户, I want 从搜索结果进入详情后还能稳定回到原结果列表, So that 我可以沿着同一查询上下文继续寻找相关热点。
+AC1: Given 用户输入关键词并获得搜索结果, When 从结果列表进入某个热点事件详情页后执行返回, Then 页面回到原搜索结果列表, And 原关键词、排序与结果上下文保持不变。
+AC2: Given 用户从搜索结果进入详情页, When 浏览器返回状态不可恢复, Then 页面提供明确的「返回搜索结果」入口, And 该入口带回原查询词而不是空白搜索页。
+
+### Tracked changes (git diff vs baseline):
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index 172d177..6378d22 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -783,3 +783,34 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   summary: `verify:*` selfcheck 未接入 CI/precommit defer——`verify:watchlist`/`verify:session-cookie`/`verify:follow-ref`/`verify:cluster-logic` 等纯 selfcheck 脚本仅手动运行，无 CI workflow / git hook / 根 `verify` 聚合脚本驱动
+   evidence: Story 3.3 review (verification-gap) 指出 `verify:watchlist`（钉 AC3 离线归类）与新增 `verify:session-cookie`（钉 mint/verify 回环、防 sign() twin 漂移）在全仓 grep 仅命中 package.json 脚本行 + 自身注释，repo 无 `.github/`、无 `.husky/`、根 `package.json` 仅 build/typecheck/lint/format——selfcheck 回归只能靠开发者记得手动跑。这是 repo-wide 既有约定（`verify:follow-ref` 等同为手动），非 3.3 引入。
+   resolution: 已于 Story 3.3 review 登记为 repo-wide verify 接入 defer——待 CI/hook 基建引入时，把所有 `verify:*` selfcheck 聚合进根 `verify`/`test` 脚本 + precommit/CI，使 AC3 离线归类与 session-cookie 回环等关键不变量自动运行。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
++  summary: 显式入口的来源感知仅覆盖 search origin——home/theme/daily 来源仍渲「返回首页」label（href 恢复该来源，仅 label 不区分）；未来可把来源感知 label 扩到这三类来源
++  evidence: Story 3.4 BackLink 的 `searchLabel` prop + `isSearchReturn` 仅区分「搜索来源」vs「其他」。从 `/?window=7d`/`/topics/{slug}`/`/daily?date=D` 进详情时，href 仍正确恢复该来源 URL（2.5 字节不变），但 label 仍是通用「返回首页」（未变成「返回首页（7 日窗口）」/「返回主题」/「返回日报」）。AC2 与 epic 仅点名 search 须有显式「返回搜索结果」入口；home/theme/daily 的显式 label 未被要求，且扩到这三类会动 2.5 loop.spec 对 home/theme/daily origin 的 label 断言（当前断言「返回首页」），扩大 3.4 回归面。故本 story 仅 search 来源做来源感知 label。
++  resolution: 已于 Story 3.4 登记为 label 扩展 defer——待真实用户反馈「想从 label 直接看出自己是从首页窗口/主题/日报进来的」时，给 BackLink 再增 `homeLabel`/`themeLabel`/`dailyLabel` 可选 prop + 对应 `isHomeReturn`/`isThemeReturn`/`isDailyReturn` 谓词（或泛化 `originLabel` + origin 分类），并同步更新 loop.spec 的 label 断言。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
++  summary: bfcache / browser-back 的通用 scroll 恢复（`history.scrollRestoration` / `pageshow`）未做——3.4 的「bfcache 不可恢复兜底」= 显式入口本身（页面级、history 无关），不扩张到改 history 语义
++  evidence: Story 3.4 落地的 AC2 「bfcache 不可恢复兜底」= 一个页面级真实 `<a href="/search?q=…">`（不依赖 bfcache、不依赖 history state、刷新后仍在）。2.5 deferred-work 已把「浏览器 back 经 history 恢复 URL 但不恢复 scroll」列为通用机制 defer（适用 home/theme/daily/search 全部列表面，非搜索专属）。3.4 不扩张到改 history 语义（`history.scrollRestoration = "manual"` + `pageshow` eventpersisted 检测 + 手动 scroll 恢复），保持 ponytail + 不破坏 2.5 depth cap 与回归面。当前显式 BackLink 点击路径已恢复 scroll（2.5 marker），浏览器 back 仅恢复 URL 不恢复 scroll——后者是跨列表面通用 defer。
++  resolution: 已于 Story 3.4 登记为通用 history scroll 恢复 defer（沿用 2.5）——待真实用户反馈「浏览器 back 后 scroll 丢失」频次较高时，在 `<ListContextMemory/>` 加 `history.scrollRestoration` + `pageshow` 监听做跨列表面通用 scroll 恢复（非搜索专属）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
++  summary: label 内回显裸 query 文本（如「返回搜索结果「芯片」」）未做——href 已带 query 满足「带回原查询词」，label 回显是 UX 噪音 + 长 query 撑坏布局
++  evidence: Story 3.4 AC2 「该入口带回原查询词而不是空白搜索页」由 href `/search?q=芯片` 满足（点进去就是该 query 的结果页）。在 label 文案里再回显「返回搜索结果「芯片」」是 UX 噪音，且长 query（近 128 字符，`parseSearchQuery` 的 `MAX_QUERY_LEN`）会撑坏返回链布局/截断。故 3.4 label 为静态「返回搜索结果」（不回显裸 query）。
++  resolution: 已于 Story 3.4 登记为 label query 回显 defer——待真实设计需求出现「想在 label 里看到自己搜了什么」时，考虑：(1) 截断回显（`q.slice(0, 8) + "…"`）或 (2) tooltip/title 属性携带完整 query（不撑布局，SR 可读），需设计评审布局影响。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
++  summary: `isSearchReturn` 纯函数无 selfcheck / 未接入 CI——信任边界分类逻辑（origin 等值 + pathname 精确）仅由 e2e 间接覆盖，无纯单测快速回归
++  evidence: Story 3.4 的 `isSearchReturn` 是 `list-context-memory.tsx` 内导出的纯函数（6 行核心逻辑），与 `isValidListReturn` 同套路。`search-return.spec.ts` 的信任边界测试（`/search//evil.com`、`/search/../console`）间接验证了「拒」，但需 live PG + playwright + dev server 才能跑，反馈慢。repo 无纯单测层（core 的 `*.selfcheck.ts` 惯例仅 core 包，web 包无对应），故 `isSearchReturn` 无快速纯单测。与 spec-3-3 review 的「repo-wide verify 接入 defer」同根。
++  resolution: 已于 Story 3.4 登记为 selfcheck defer——待 web 包引入纯单测基建（或把 `list-context-memory.tsx` 的纯函数抽到 core 包享 selfcheck 惯例）时，给 `isSearchReturn` 加纯单测覆盖：精确 `/search` true、`/search?q=…` true、`/search/../console` false、`/search//evil.com` false、`https://evil.com` false、空/畸形 false。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
++  summary: 多级返回栈 / 面包屑 / 前进恢复未做——沿用 UX-DR12 一层深度上限；详情→列表→详情→列表 的多层返回栈 defer
++  evidence: Story 3.4 BackLink 仍是 UX-DR12 一层深度（2.5 depth cap）：只记录最近一跳「列表→详情」的来源。读者若 详情→BackLink→列表A→详情→BackLink→列表B→详情，第三次 BackLink 只回到列表 B（最近一跳），不回到列表 A（多层栈）。面包屑（「首页 > 搜索 > 详情」）与前进恢复（「返回后再前进回详情」）亦 defer。AC1/AC2 仅要求单层稳定返回，多层栈超 3.4 scope。
++  resolution: 已于 Story 3.4 登记为多级返回栈 defer（沿用 2.5）——待真实用户反馈「想沿原路多层返回」时，引入 sessionStorage 栈（push 来源 URL + pop on BackLink click）或面包屑组件，需同步扩 UX-DR12 depth cap 约定。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-search-results-to-detail-return-loop.md`
++  summary: `@search-return` 与 `@search` 合并跑的串行时序未做——两 spec 共享 `seedSearchContext` 但各自 `beforeAll` 重新 seed，`pnpm e2e:search && pnpm e2e:search-return` 会跑两次 seed（确定性，但冗余）；合并跑需手动串行
++  evidence: Story 3.4 `e2e:search-return` 脚本先跑 `tsx e2e/seed-search.ts`（与 `e2e:search` 同 seed），再 `--grep @search-return`。若开发者想一次跑完 search + search-return，需 `pnpm --filter web e2e:search && pnpm --filter web e2e:search-return`——两次 seed（第二次清表重写，确定性无冲突，但冗余 DB round-trip）。两 spec 的 `beforeAll` 各自调 `seedSearchContext()` 也会在 playwright worker 内再 seed（serial mode 单 worker，故不并发竞争，但仍多次 seed）。合并跑（单 seed 喂两 spec）需自定义 playwright 脚本或 globalSetup，超 3.4 scope。
++  resolution: 已于 Story 3.4 登记为测试编排 defer——待 search + search-return 合并跑需求出现时，考虑：(1) 一个 `e2e:search-all` 脚本 `tsx e2e/seed-search.ts && playwright test --grep "@search|@search-return"`（单 seed 喂两 spec），或 (2) 提取 globalSetup 共享 seed（避免 beforeAll 重复），需评估两 spec serial mode worker 隔离。
++
+diff --git a/apps/web/app/(public)/_components/back-link.tsx b/apps/web/app/(public)/_components/back-link.tsx
+index 35f8ba8..677aca4 100644
+--- a/apps/web/app/(public)/_components/back-link.tsx
++++ b/apps/web/app/(public)/_components/back-link.tsx
+@@ -5,19 +5,34 @@ import { useSyncExternalStore } from "react";
+ import type { ReactNode } from "react";
+ 
+ import {
++  isSearchReturn,
+   isValidListReturn,
+   readReturnContext,
+   writeRestoreMarker,
+ } from "./list-context-memory";
+ 
+ /**
+- * Detail-page "return to originating list" link — Story 2.5 (UX-DR12).
++ * Detail-page "return to originating list" link — Story 2.5 (UX-DR12) +
++ * Story 3.4 (source-aware label, AC2).
+  *
+  * Replaces the bare `<Link href="/">` return link on the detail page. This is
+  * the single UX-DR12 landing point: when a reader enters a detail page from a
+  * list (homepage feed `/?window=…` / theme `/topics/{slug}` / daily
+- * `/daily?date=…`), the BackLink restores the originating list URL (with its
+- * filter query intact) instead of always falling back to the homepage top.
++ * `/daily?date=…` / search `/search?q=…`), the BackLink restores the
++ * originating list URL (with its filter query intact) instead of always
++ * falling back to the homepage top.
++ *
++ * Story 3.4 — source-aware LABEL (AC2 explicit entry). The href behavior is
++ * byte-unchanged (still `fromHref ?? fallback`, 2.5 scroll-restore infra
++ * untouched). What changes is the LABEL: when the originating context is a
++ * valid search URL (`isSearchReturn(fromHref)` true), BackLink renders the
++ * optional `searchLabel` (e.g. 「← 返回搜索结果」) — a page-level, history-
++ * independent `<a href="/search?q=…">` that carries the original query and
++ * does not depend on bfcache / browser-back. Otherwise it renders `children`
++ * (the default label, e.g. 「← 返回首页」). This single return surface covers
++ * both AC1 (point of return restores query + scroll, via the unchanged href)
++ * and AC2 (the reader can SEE they came from search and that the entry carries
++ * the query, via the source-aware label).
+  *
+  * Pair with `<ListContextMemory/>` (mounted once in the public layout), which
+  * captures the originating list URL + scroll position at click time and
+@@ -36,17 +51,22 @@ import {
+  *
+  * SSR safety + existing-spec preservation: `fromHref` is read via
+  * `useSyncExternalStore`, whose `getServerSnapshot` returns `null`. SSR + the
+- * first hydration render therefore use `href={fallback}` — byte-identical to
+- * the previous bare `<Link href="/">` — so any existing href assertion on the
+- * detail page stays green, and there is no hydration mismatch. After hydration,
+- * `getSnapshot` reads sessionStorage and may update the href to the originating
+- * list URL. `useSyncExternalStore` is the React-blessed primitive for reading
+- * from an external store (sessionStorage) without a setState-in-effect cascading
+- * render.
++ * first hydration render therefore use `href={fallback}` AND `children` (label
++ * defaults to the non-search label since `isSearchReturn(null)` is false) —
++ * byte-identical to the previous bare `<Link href="/">` with static children,
++ * so existing label + href assertions stay green and there is no hydration
++ * mismatch. After hydration, `getSnapshot` reads sessionStorage and may update
++ * BOTH the href (to the originating list URL) and the label (to `searchLabel`
++ * when the origin is `/search?…`) — the two derive from the same `fromHref`
++ * at the same render, so they always switch in lockstep. `useSyncExternalStore`
++ * is the React-blessed primitive for reading from an external store
++ * (sessionStorage) without a setState-in-effect cascading render.
+  *
+  * a11y (UX-DR13): rendered as a real `<a href>` (not a JS button), so it is
+- * keyboard-reachable, focusable, and middle-click-openable. Scroll restore uses
+- * `behavior: "instant"` (no animation — UX-DR15 reduced-motion consistent).
++ * keyboard-reachable, focusable, and middle-click-openable. The search-return
++ * label 「← 返回搜索结果」 is SR-readable and focusable (same `<a>` token, no
++ * new visual). Scroll restore uses `behavior: "instant"` (no animation —
++ * UX-DR15 reduced-motion consistent).
+  *
+  * Depth cap (UX-DR12, one level): BackLink is used ONLY on the detail page.
+  * The daily-page and theme-page "return" links stay as bare `<Link>` (they are
+@@ -69,6 +89,23 @@ export interface BackLinkProps {
+    * styling so there is no visual change (token-safe).
+    */
+   className?: string;
++  /**
++   * Story 3.4 — label rendered when the originating context is a SEARCH URL
++   * (`fromHref` is a valid `/search?…` per `isSearchReturn`). When provided
++   * and the reader came from search, this becomes the explicit AC2
++   * 「返回搜索结果」 entry (a page-level `<a href="/search?q=…">` carrying the
++   * original query). When omitted, or when the origin is NOT search, the
++   * `children` label is rendered (backward-compatible — other callers that do
++   * not pass `searchLabel` see no behavior change).
++   *
++   * Note: only the LABEL is selected by this prop; the HREF is still
++   * `fromHref ?? fallback` (byte-identical to 2.5). So a search-origin reader
++   * sees 「返回搜索结果」 AND is taken to `/search?q=…` (never search-label +
++   * `/` mismatch). SSR / first render reads `fromHref=null` → `isSearchReturn`
++   * is false → `children` renders (byte-identical to today, no hydration
++   * mismatch).
++   */
++  searchLabel?: ReactNode;
+ }
+ 
+ // --- useSyncExternalStore adapters -------------------------------------------
+@@ -99,7 +136,7 @@ function getServerSnapshot(): null {
+   return null;
+ }
+ 
+-export function BackLink({ fallback, children, className }: BackLinkProps) {
++export function BackLink({ fallback, children, className, searchLabel }: BackLinkProps) {
+   // useSyncExternalStore: SSR returns null (→ href=fallback on first render);
+   // client reads sessionStorage and may return the originating list URL. This
+   // avoids the setState-in-effect cascading-render pattern.
+@@ -110,6 +147,17 @@ export function BackLink({ fallback, children, className }: BackLinkProps) {
+   );
+ 
+   const href = fromHref ?? fallback;
++  // Story 3.4 — source-aware LABEL. When the reader came from search (and a
++  // searchLabel was provided), render that explicit 「返回搜索结果」 entry.
++  // Otherwise render the default `children` label. The href logic above is
++  // byte-identical to 2.5; only the label selection is new. SSR / first render
++  // (fromHref=null) → isSearchReturn false → children (byte-identical to today,
++  // no hydration mismatch). `searchLabel ?? children` guards an absent
++  // searchLabel: a caller that does not pass searchLabel always sees children.
++  const label =
++    fromHref !== null && isSearchReturn(fromHref)
++      ? (searchLabel ?? children)
++      : children;
+ 
+   return (
+     <Link
+@@ -125,7 +173,7 @@ export function BackLink({ fallback, children, className }: BackLinkProps) {
+         }
+       }}
+     >
+-      {children}
++      {label}
+     </Link>
+   );
+ }
+diff --git a/apps/web/app/(public)/_components/list-context-memory.tsx b/apps/web/app/(public)/_components/list-context-memory.tsx
+index 25a50e5..9420f5d 100644
+--- a/apps/web/app/(public)/_components/list-context-memory.tsx
++++ b/apps/web/app/(public)/_components/list-context-memory.tsx
+@@ -152,6 +152,54 @@ export function isValidListReturn(raw: string | null | undefined): boolean {
+   return false;
+ }
+ 
++/**
++ * Story 3.4 — is this return-context candidate from `/search`?
++ *
++ * Sibling trust-boundary predicate to `isValidListReturn`, answering a
++ * DIFFERENT question. `isValidListReturn` decides whether `raw` is any valid
++ * list-origin (and so drives BackLink's HREF rendering — which URL to
++ * restore). `isSearchReturn` decides specifically whether `raw` is a SEARCH
++ * origin, and so drives BackLink's LABEL selection (Story 3.4's explicit
++ * 「返回搜索结果」 entry vs the default 「返回首页」).
++ *
++ * The two differ: `/topics/{slug}` is valid-list (restore href) but NOT
++ * search (label stays 「返回首页」). Search origins are a strict SUBSET of
++ * valid-list origins, so `isSearchReturn(raw) === true` implies
++ * `isValidListReturn(raw) === true` — whenever the label is 「返回搜索结果」
++ * the href is guaranteed to be a valid `/search?q=…` (never the mismatched
++ * state of search-label + `/` href).
++ *
++ * Same trust-boundary pattern (NOT simplifiable):
++ *   - `new URL(raw, "http://localhost")` parses relative, protocol-relative
++ *     (`//evil.com`), absolute (`https://evil.com`), and backslash-trick
++ *     (`/\evil.com`) candidates under a fixed sentinel origin.
++ *   - `origin !== "http://localhost"` rejects every cross-site form (blocks
++ *     open-redirect via a tampered `returnContext`).
++ *   - `pathname === "/search"` is an EXACT match. It REJECTS:
++ *       - `/search/../console` (new URL normalizes the pathname to `/console`)
++ *       - `/search//evil.com` (pathname stays `/search//evil.com`, not exact)
++ *       - `/search/X` (any nested segment under /search)
++ *     This matches the 3.1 /search open-redirect-guard test, which locks the
++ *     `LIST_PATH_EXACT` `/search` entry as exact, not prefix.
++ *   - Empty / malformed `raw` → false.
++ *
++ * Returns true ONLY when `raw` is a non-empty string that parses to
++ * `origin === "http://localhost"` AND `pathname === "/search"`. Any query
++ * string (`?q=…`) is preserved on the URL and carried by BackLink's href; the
++ * label decision does not inspect the query.
++ */
++export function isSearchReturn(raw: string | null | undefined): boolean {
++  if (typeof raw !== "string" || raw === "") return false;
++  let url: URL;
++  try {
++    url = new URL(raw, "http://localhost");
++  } catch {
++    return false;
++  }
++  if (url.origin !== "http://localhost") return false;
++  return url.pathname === "/search";
++}
++
+ /**
+  * Read the stored originating-list href, or null when absent / storage
+  * disabled. Never throws.
+diff --git a/apps/web/app/(public)/events/[hotEventId]/page.tsx b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+index 24a09b5..63bf8e4 100644
+--- a/apps/web/app/(public)/events/[hotEventId]/page.tsx
++++ b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+@@ -144,14 +144,24 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+ 
+   return (
+     <div className="mx-auto max-w-3xl px-6 py-12">
+-      {/* Detail return path — UX-DR12 reading-context restoration (Story 2.5);
+-          BackLink restores the originating list URL + scroll via sessionStorage.
+-          Direct load / external referrer / private mode → falls back to "/"
+-          (byte-identical to the prior bare link), so existing href assertions
+-          stay green. SSR renders href={fallback} (fromHref starts null); the
+-          captured originating URL is read in an effect post-hydration. */}
++      {/* Detail return path — UX-DR12 reading-context restoration (Story 2.5)
++          + Story 3.4 source-aware explicit search-return entry (AC2).
++          BackLink restores the originating list URL + scroll via sessionStorage
++          (Story 2.5 infra, byte-identical). When the reader came from search
++          (`/search?q=…`), BackLink renders the explicit 「返回搜索结果」 entry
++          carrying the original query (AC2 — page-level, history-independent,
++          survives reload / direct-visit-from-search / bfcache miss). All other
++          origins (home `/?window=…` / theme `/topics/{slug}` / daily
++          `/daily?date=…`) keep the default 「返回首页」 label. Direct load /
++          external referrer / private mode → falls back to "/" (byte-identical
++          to the prior bare link), so existing href assertions stay green. SSR
++          renders href={fallback} + children label (fromHref starts null); the
++          captured originating URL is read post-hydration, and the label may
++          switch to searchLabel at the same render. href + scroll restore still
++          go through the 2.5 infrastructure (AC1). */}
+       <BackLink
+         fallback="/"
++        searchLabel={<><span aria-hidden>←</span> 返回搜索结果</>}
+         className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+       >
+         <span aria-hidden>←</span> 返回首页
+diff --git a/apps/web/e2e/search.spec.ts b/apps/web/e2e/search.spec.ts
+index 71115a1..ae52ebc 100644
+--- a/apps/web/e2e/search.spec.ts
++++ b/apps/web/e2e/search.spec.ts
+@@ -497,10 +497,12 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
+ 
+     // The detail page BackLink is present. After hydration it should resolve to
+     // the originating /search?q=… URL (the 2.5 capture listener wrote it on the
+-    // click, and /search is now in the allowlist).
++    // click, and /search is now in the allowlist). Story 3.4: because the origin
++    // is a search URL, the BackLink label is now 「返回搜索结果」 (not 「返回首页」),
++    // so the selector matches the search-return label.
+     // Poll for the hydrated href (useSyncExternalStore reads sessionStorage
+     // post-mount; allow a brief retry for the effect to settle).
+-    const backLink = page.getByRole("link", { name: /返回首页/ }).first();
++    const backLink = page.getByRole("link", { name: /返回搜索结果/ }).first();
+     await expect(backLink).toBeVisible();
+     await expect
+       .poll(async () => backLink.getAttribute("href"), {
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 11f2764..b538035 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -12,7 +12,7 @@
+     "verify:follow-ref": "tsx \"app/(public)/_actions/follow-ref-parser.selfcheck.ts\"",
+     "verify:session-cookie": "tsx lib/session-cookie-signer.selfcheck.ts",
+     "verify:watchlist": "tsx lib/watchlist.selfcheck.ts",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return\"",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+@@ -23,7 +23,8 @@
+     "e2e:themes": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @themes",
+     "e2e:daily": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @daily",
+     "e2e:loop": "tsx e2e/seed-loop.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @loop",
+-    "e2e:search": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search",
++    "e2e:search": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep \"@search[^-]\"",
++    "e2e:search-return": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search-return",
+     "e2e:follow": "tsx e2e/seed-follow.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-follow-e2e-secret-32chars playwright test --grep @follow",
+     "e2e:watchlist": "tsx e2e/seed-watchlist.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-watchlist-e2e-secret-32chars playwright test --grep @watchlist",
+     "seed:console": "tsx e2e/seed-console.ts",
+
+### NEW untracked file: apps/web/e2e/search-return.spec.ts
+import { expect, test } from "@playwright/test";
+
+import { seedSearchContext } from "./seed-search";
+
+/**
+ * Search → detail → search return-loop e2e — Story 3.4 (AC2 explicit entry +
+ * AC1 return + bfcache-miss fallback). Tagged @search-return so it runs only
+ * under `pnpm --filter web e2e:search-return` (DB-backed + seed) and does NOT
+ * run under the public `pnpm --filter web e2e` (whose --grep-invert excludes
+ * @console, @feed, @detail, @revision, @merge-split, @market-reaction,
+ * @associations, @themes, @daily, @loop, @search, @follow, @watchlist, AND
+ * @search-return).
+ *
+ * The beforeAll imports and runs seedSearchContext() (the SAME function
+ * `pnpm --filter web seed:search` runs, the same seed search.spec.ts uses) to
+ * capture the dynamic title-hit hotEventId + the deterministic query string.
+ * No new seed script is introduced (zero new test fixtures — Story 3.4 is a
+ * pure web-layer change).
+ *
+ * Requires request-time DATABASE_URL: /search + /events/[hotEventId] are both
+ * force-dynamic and read the published read models at request time.
+ *
+ * Covers:
+ *   - AC2 explicit entry: /search?q={titleQuery} → click EventCard →
+ *     /events/{titleHitId} → after hydration a real `<a>` labeled 「返回搜索结果」
+ *     is visible, its href contains `/search` AND the encoded original query
+ *     (NOT a bare `/search`, NOT `/`). The same page does NOT render a
+ *     「返回首页」 link (the source-aware label replaced it — no ambiguity).
+ *   - AC1 click-back: click 「返回搜索结果」 → the URL contains
+ *     `q={titleQuery}` (original query preserved) AND the result EventCard
+ *     re-renders (same query → same deterministic ranking).
+ *   - AC2 bfcache-miss / reload fallback: on the detail page, `page.reload()`
+ *     (simulates bfcache miss / history not restorable). The 「返回搜索结果」
+ *     entry is STILL visible and STILL carries the query (it is a page-level
+ *     real `<a>`, independent of bfcache / history state — sessionStorage
+ *     RETURN_CONTEXT survives the reload).
+ *   - Direct visit / no source (honest fallback): a FRESH context (no prior
+ *     click, no RETURN_CONTEXT) visits /events/{titleHitId} directly → label is
+ *     「返回首页」 + href `/` (no fabricated query); 「返回搜索结果」 does NOT
+ *     render (toHaveCount 0 — we do not forge a source we don't have).
+ *   - AC2 trust boundary: tampering sessionStorage[aguhot:returnContext] with
+ *     `/search//evil.com` and `/search/../console` → after reload, label falls
+ *     back to 「返回首页」 and href `/` (isSearchReturn rejects non-exact
+ *     pathnames; no off-site jump, no mislabel).
+ *   - No-regression: the detail page's six partitions + title still render
+ *     when the reader came from search (search origin does not break the detail
+ *     body). Anonymous 200 throughout.
+ */
+test.describe("搜索结果到详情页的回访闭环 (Story 3.4) @search-return", () => {
+  // Serial mode: beforeAll seeds the DB once and the tests share the captured
+  // id. The trust-boundary and reload tests mutate sessionStorage on the page
+  // but do NOT touch the DB, so order within the describe does not matter for
+  // seed state.
+  test.describe.configure({ mode: "serial" });
+
+  let titleHitId: string;
+  let titleHitTitle: string;
+  let titleQuery: string;
+
+  test.beforeAll(async () => {
+    const seeded = await seedSearchContext();
+    titleHitId = seeded.titleHitId;
+    titleHitTitle = seeded.titleHitTitle;
+    titleQuery = seeded.titleQuery;
+  });
+
+  test("AC2 显式入口：搜索来源详情页渲染「返回搜索结果」且 href 带原 query", async ({ page }) => {
+    // Enter search first so the ListContextMemory capture listener records the
+    // search URL as the originating context.
+    await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
+
+    // Click the title-hit EventCard to navigate into the detail page. The
+    // capture listener (document-level, capture phase) fires BEFORE the Next
+    // <Link> client routing and writes RETURN_CONTEXT="/search?q=…".
+    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
+
+    // After hydration, the BackLink label is 「返回搜索结果」 (source-aware:
+    // isSearchReturn(fromHref) true → searchLabel renders). Poll for the
+    // post-hydration state (useSyncExternalStore reads sessionStorage on mount).
+    const searchReturnLink = page.getByRole("link", { name: /返回搜索结果/ }).first();
+    await expect(searchReturnLink).toBeVisible();
+
+    // The href carries `/search` AND the encoded original query (NOT a bare
+    // `/search`, NOT `/`). This is the AC2 explicit entry: page-level,
+    // history-independent, carries the original query.
+    await expect
+      .poll(async () => searchReturnLink.getAttribute("href"), {
+        timeout: 5000,
+        message: "search-return link href should hydrate to /search?q=…",
+      })
+      .toContain("/search");
+    await expect
+      .poll(async () => searchReturnLink.getAttribute("href"), {
+        timeout: 5000,
+        message: "search-return link href should contain the encoded query",
+      })
+      .toContain(encodeURIComponent(titleQuery));
+
+    // AC2 — the page does NOT render a competing 「返回首页」 link (the
+    // source-aware label REPLACED the default label). This locks the
+    // single-return-surface property: from search, the reader sees exactly one
+    // return entry and it says 「返回搜索结果」 (no ambiguity between two links).
+    await expect(page.getByRole("link", { name: /返回首页/ })).toHaveCount(0);
+  });
+
+  test("AC1 点回：点「返回搜索结果」落回含 q= 的搜索结果页", async ({ page }) => {
+    await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
+    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
+
+    // Wait for the search-return label to render (post-hydration).
+    const searchReturnLink = page.getByRole("link", { name: /返回搜索结果/ }).first();
+    await expect(searchReturnLink).toBeVisible();
+
+    // Click it → the URL restored contains the original q= (search server-side
+    // re-renders the same deterministic ranking for the same q). AC1: original
+    // keyword / ranking / context preserved.
+    await searchReturnLink.click();
+    await expect(page).toHaveURL(new RegExp(`q=${encodeURIComponent(titleQuery)}`));
+
+    // The search result EventCard re-renders (same query ⇒ same ranking ⇒ the
+    // title-hit event is present again). This is the AC1 "results list
+    // re-produces" half.
+    await expect(page.locator(`a[href="/events/${titleHitId}"]`)).toBeVisible();
+    // Sanity: it's NOT the bare homepage.
+    expect(page.url(), "should not fall back to bare /").not.toMatch(/\/$/);
+  });
+
+  test("AC2 兜底：详情页 reload（bfcache 未命中/刷新）后「返回搜索结果」仍在、仍带 query", async ({ page }) => {
+    // Enter from search so RETURN_CONTEXT is set in sessionStorage.
+    await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
+    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
+
+    // Reload the detail page. This simulates bfcache-miss / a reader who
+    // refreshed or re-opened the tab. sessionStorage RETURN_CONTEXT PERSISTS
+    // across the reload (same origin, same tab) → the explicit entry is a
+    // page-level real `<a>` that does NOT depend on bfcache or history state.
+    await page.reload();
+
+    // The 「返回搜索结果」 entry is STILL visible after reload, and its href
+    // STILL carries the original query. This is the AC2 fallback: the entry
+    // survives histories that browser-back cannot restore.
+    const searchReturnLink = page.getByRole("link", { name: /返回搜索结果/ }).first();
+    await expect(searchReturnLink).toBeVisible();
+    await expect
+      .poll(async () => searchReturnLink.getAttribute("href"), {
+        timeout: 5000,
+        message: "post-reload search-return href should still contain /search",
+      })
+      .toContain("/search");
+    await expect
+      .poll(async () => searchReturnLink.getAttribute("href"), {
+        timeout: 5000,
+        message: "post-reload search-return href should still contain the query",
+      })
+      .toContain(encodeURIComponent(titleQuery));
+  });
+
+  test("直访无来源：新 context 直接 GET /events/{id} → 「返回首页」、href /、无「返回搜索结果」", async ({ browser }) => {
+    // A FRESH context (no prior navigation, no sessionStorage) simulates a
+    // direct visit / external referrer / copy-pasted link. There is NO
+    // RETURN_CONTEXT, so the honest fallback is 「返回首页」 + href `/`. We do
+    // NOT forge a query or a search-origin label we don't have.
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(`/events/${titleHitId}`);
+      await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
+
+      // The label is the default 「返回首页」 (fromHref null → isSearchReturn
+      // false → children render).
+      const homeLink = page.getByRole("link", { name: /返回首页/ }).first();
+      await expect(homeLink).toBeVisible();
+      expect(await homeLink.getAttribute("href")).toBe("/");
+
+      // The search-return label does NOT render (no source → no forge).
+      await expect(page.getByRole("link", { name: /返回搜索结果/ })).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("信任边界：/search 前缀篡改 → isSearchReturn 拒、label 回退「返回首页」、href /", async ({ page }) => {
+    // Tampered values start with "/search" but must be REJECTED by
+    // isSearchReturn (exact pathname match, not prefix):
+    //   - "/search//evil.com" → pathname stays "/search//evil.com" (not exact
+    //     "/search") → reject → label 「返回首页」 + href `/`.
+    //   - "/search/../console" → new URL normalizes the pathname to "/console"
+    //     (not "/search") → reject → label 「返回首页」 + href `/`.
+    // For each, write the tampered value to sessionStorage, reload the detail
+    // page (so BackLink re-mounts and useSyncExternalStore re-reads on mount),
+    // and assert the label falls back to 「返回首页」 and href `/`.
+    const tamperedValues = ["/search//evil.com", "/search/../console"];
+    for (const tampered of tamperedValues) {
+      await page.goto(`/events/${titleHitId}`);
+      await page.evaluate((v) => {
+        window.sessionStorage.setItem("aguhot:returnContext", v);
+      }, tampered);
+      // Reload so BackLink re-mounts and reads the tampered context on mount.
+      await page.reload();
+
+      // The label falls back to 「返回首页」 (isSearchReturn rejected the
+      // tampered value → searchLabel did not render → children rendered).
+      const homeLink = page.getByRole("link", { name: /返回首页/ }).first();
+      await expect(
+        homeLink,
+        `tampered returnContext "${tampered}" must render the 返回首页 label`,
+      ).toBeVisible();
+      // And href is `/` (isValidListReturn ALSO rejects these → fallback).
+      expect(await homeLink.getAttribute("href")).toBe("/");
+
+      // The search-return label must NOT render (we never mislabel a tampered
+      // origin as search).
+      await expect(
+        page.getByRole("link", { name: /返回搜索结果/ }),
+        `tampered returnContext "${tampered}" must NOT render the 返回搜索结果 label`,
+      ).toHaveCount(0);
+    }
+  });
+
+  test("不回归：搜索来源详情页六分区 + 标题仍渲、匿名 200", async ({ page }) => {
+    // Enter from search so the BackLink shows the search-return label, then
+    // assert the detail body is intact (search origin does not break the
+    // detail page).
+    await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
+    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
+
+    // Anonymous 200 throughout (AD-8: no /login redirect).
+    const response = page.url();
+    expect(response, "detail page URL should not redirect to login").not.toMatch(/\/login/);
+
+    // The title (a fact, not system-derived) renders.
+    await expect(page.getByText(titleHitTitle).first()).toBeVisible();
+
+    // The six partitions render (1.8 detail + 2.1 market reaction + 2.2
+    // associations + 2.3 themes). These are the structural partitions the
+    // detail page has always rendered — asserting their headings locks that
+    // the search-origin label change did not break the body.
+    await expect(
+      page.getByRole("heading", { level: 2, name: /发生了什么/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: /为什么重要/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: /当前仍不确定什么/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: /市场反应/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: /关联/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: /主题/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: /证据时间线/ }),
+    ).toBeVisible();
+
+    // The search-return label coexists with the intact body (AC2 entry does
+    // not displace any partition).
+    await expect(page.getByRole("link", { name: /返回搜索结果/ }).first()).toBeVisible();
+  });
+});
