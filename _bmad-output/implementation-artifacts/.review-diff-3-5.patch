@@ -1,0 +1,386 @@
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index ecc9662..1de1ff1 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -819,3 +819,32 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   evidence: Story 3.4 AC1「回到原搜索结果列表，原关键词、排序与结果上下文保持不变」中的「上下文」含 scroll 位置。scroll 恢复是 2.5 的 `RESTORE_MARKER` + `ListContextMemory` 机制（search 已在 allowlist，故机制对 search 生效），loop.spec 对 home/theme/daily 三面有 `scrollY` 恢复断言（需 ≥10 条结果撑高页面）。但 search 来源的 scroll 恢复从未被直接断言：3.1 test 9 只断 query 恢复，3.4 search-return.spec 的 AC1 点回用例只断 `q=` + EventCard 复现。直接断言需要 search 结果页足够高，而 `seedSearchContext` 对测试 query（如「芯片」）只产出 1 个事件 + 2 个主题 pill（页面很短，`scrollY` 断言会脆），修改共享 seed 会波及 search.spec。故 3.4 未加 search 来源 scroll 断言。
+   resolution: 已于 Story 3.4 登记为 search scroll 验证 defer——待需要时：(1) 在 search-return.spec 加一个用多命中 query（如「稀土」命中 2 事件）+ 注入 spacer 撑高页面的 scroll 恢复断言，或 (2) 给 seedSearchContext 加专用高结果 query（评估对 search.spec 的影响），或 (3) 接受 scroll 恢复由 loop.spec 对同一 2.5 代码路径的覆盖间接保证（当前选择）。
+ 
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
++  summary: 焦点指示器机制目前横跨两套——全局 `:where(a,button,input,textarea,select,summary):focus-visible` 规则（3.5）与 SearchBox/FollowButton 既有 `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring`（Tailwind utility）——两者 specificity 正交、视觉共存无双重指示器，但统一为单一机制 defer
++  evidence: Story 3.5 在 `globals.css` 落地一条全局 `:where(...):focus-visible { outline: 2px solid var(--color-focus-ring); ... }`，specificity 0；SearchBox（`search-box.tsx:88,94`）与 FollowButton（`follow-button.tsx:182,248,260`）仍带 Tailwind `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring`（编译后 specificity > 0，故其 ring 不被全局规则覆盖——全局规则的 outline 只在元素无自己的 focus 类时生效）。两套机制视觉等价（同 `--color-focus-ring` 色）、无双重指示器（ring 元素不被全局 outline 覆盖），但「单一焦点机制」更易维护（改一处即全改）。统一为单一机制 defer。
++  resolution: 已于 Story 3.5 登记为统一焦点机制 defer——后续移除 SearchBox/FollowButton 既有 `focus:outline-none focus-visible:ring-*` 改用全局规则（需验证 ring vs outline 视觉等价、tabindex 顺序、box-shadow 模拟 ring 的兼容性），或把全局规则升级为带 offset/ring 的等价形式（统一为单一机制）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
++  summary: 关联子标题 / 成员事件行 / 主题行标题目前为 `<p>`（视觉小标题），未提为 `<h3>`——标题层级 AC1 字面已满足（每页一 h1、无跳级），但子项 heading 是增强非基线，defer
++  evidence: Story 3.5 调查证实每页恰好一个 `<h1>`、无层级跳级（home/detail/themes×2/daily/search/favorites 均查证，AC1 标题层级今日已满足）。但详情页关联区块子标题、主题页成员事件行标题、日报成员行标题等用 `<p>` 而非 `<h3>`（视觉小标题样式）。这些子项 heading 可让屏幕阅读器跳级导航（h2 → h3 子项），是「增强非基线」——AC1 不要求。3.5 Never 明示不改 `<h1>`/`<h2>` 结构、不把 `<p>` 子标题提为 `<h3>`（defer），避免触发跨 home/feed/watchlist EventCard h2 模式的回归面。
++  resolution: 已于 Story 3.5 登记为 heading 提升 defer——后续统一把关联区块/成员事件/主题行的 `<p>` 子标题提为 `<h3>`（需跨 home/feed/watchlist/themes/daily 统一 EventCard h2 模式，避免 section h2 与 item h2 同级歧义，见 3.3 watchlist a11y defer 同根）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
++  summary: ReactionChip 未加 ▲▼↑↓ 符号层 / 未加 `aria-label`——AC2 由既有「涨/跌/平」CJK 文字 + 数值已满足（颜色非唯一维度），符号层/aria 层是增强，defer
++  evidence: Story 3.5 调查证实 `ReactionChip`（`components/chips.tsx:152-160`）= `bg/text-market-*` 颜色 +「涨/跌/平」CJK 文字 + 数值（font-mono），AC2「关键状态不只依赖红绿颜色」今日已满足。3.5 在 `/design`（DB-free）加断言每态含可见文字（锁定 color+文字不变量防静默回归），不改 ReactionChip 实现（Never 明示）。▲▼ 符号层（视觉冗余信号，帮助色弱/色盲读者快速识别方向）+ `aria-label`（SR 播报「涨 +3.42%」而非裸文字拼接）是增强非基线，defer。
++  resolution: 已于 Story 3.5 登记为符号层/aria 增强 defer——待 WCAG AA 对比度审计或色弱/色盲读者反馈时，给 `ReactionChip` 加 ▲/▼/─ 符号层（视觉冗余）+ `aria-label={`{涨/跌/平} ${value}`}`（SR 友好播报）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
++  summary: FollowButton 成功/处理中态未做 `aria-live` 公告——既有 `role="alert"` 仅覆盖错误态，成功/处理中态无 SR 公告
++  evidence: Story 3.5 Never 明示「不加 `aria-live` 公告 follow 成功/处理中态（FollowButton 既有 `role="alert"` 仅覆错误；成功公告 defer）」。`follow-button.tsx` 的 `role="alert"` 仅在 error state 非空时渲染（SR 播报错误），但收藏成功（following=true）/处理中（pending）态无 aria-live 公告，屏幕阅读器用户点了「收藏」后无确认反馈（除非他们再 Tab 回去看按钮文字变化）。defer 到后续 a11y 增强。
++  resolution: 已于 Story 3.5 登记为 aria-live defer——待 SR 用户体验审计时，给 FollowButton 成功态加 `aria-live="polite"` 公告「已收藏」/「已取消收藏」（处理中态可选 polite 公告「正在处理」），与既有 `role="alert"` 错误公告互补。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
++  summary: 日报页 `<ol>` 未加 `role="list"` 显式语义——Tailwind preflight 可能使部分 SR 丢失列表语义，daily 成员顺序的 list 语义增强 defer
++  evidence: Story 3.5 AC1/AC2 仅锁定基线（焦点 + 标题层级 + 非颜色 + 可达），不涉及 daily 成员 `<ol>` 的显式 `role="list"`。日报页成员用 `<ol>`（ordered，表达 evidenceCount DESC 顺序），Tailwind v4 preflight（list-style reset）可能使某些 SR（Safari + VoiceOver 历史问题）丢失 list 语义。日报成员顺序是阅读信号（证据多→少），但 list 语义增强非基线，defer。
++  resolution: 已于 Story 3.5 登记为 list 语义 defer——待 SR 审计反馈「日报成员丢失 list 语义」时，给 daily 成员 `<ol>` 加 `role="list"`（+ 每个 `<li>` `role="listitem"`，如必要），与 home feed `<ul>`/theme 成员 `<ol>` 一致性统一处理。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
++  summary: 全局 `:focus-visible` 规则无单元/视觉回归自动化测试——e2e a11y.spec 断言 outline-style 非 none + outline-color 格式，但无像素级视觉回归（焦点环粗细/offset/颜色漂移）守卫
++  evidence: Story 3.5 的 `e2e/a11y.spec.ts` 断言键盘聚焦的 nav 链接 outline-style 非 `none` + outline-color 匹配 rgb() 格式（surface-anchored 证明全局规则生效）。但 outline 粗细（2px）、offset（2px）、颜色值（`#335A91` → `rgb(51, 90, 145)`）的像素级漂移无自动化守卫（`--color-focus-ring` token 改值或 outline 属性微调不会触发 e2e 失败，只要 outline-style 非 none）。像素级视觉回归需 Playwright screenshot/visual comparison 或 Storybook + Chromatic，当前 repo 无此基建。defer。
++  resolution: 已于 Story 3.5 登记为焦点视觉回归自动化 defer——待平台视觉回归基建（Playwright screenshot diff 或 Storybook + Chromatic）引入时，给焦点环的 2px 实线 + offset + brand color 加像素级守卫（与 DESIGN token 单测一并接入）。
+diff --git a/apps/web/app/(public)/layout.tsx b/apps/web/app/(public)/layout.tsx
+index 70b4adf..dd57636 100644
+--- a/apps/web/app/(public)/layout.tsx
++++ b/apps/web/app/(public)/layout.tsx
+@@ -25,12 +25,39 @@ import { PublicNav } from "./_components/public-nav";
+  * `/events/{id}` link) + one-shot scroll restore (gated by a marker BackLink
+  * writes on click). It is a client component but does NOT import `@aguhot/core`
+  * — the public shell stays DATABASE_URL-free at build time.
++ *
++ * Story 3.5 — skip-to-content entry + `<main id>` keyboard a11y baseline
++ * primitives. The skip-link is the first focusable element in the `(public)`
++ * route tree: it is visually hidden (`sr-only`) until `:focus`, when it
++ * becomes visible (branded, absolutely-positioned). `tabIndex={-1}` on
++ * `<main>` makes the skip target programmatically focusable, so activating
++ * the skip-link moves focus INTO `<main>` instead of the browser jumping to
++ * the first link inside it — keyboard readers can bypass the entire nav.
++ * `<ListContextMemory/>` / children are unchanged: `id` / `tabIndex` are
++ * static attributes that do not affect subtree behavior or the 2.5 scroll
++ * restore. This layout is still a server component — the skip-link is a plain
++ * `<a>` and `id`/`tabIndex` are static props, so there is no `"use client"`
++ * and no hydration change.
+  */
+ export default function PublicLayout({ children }: Readonly<{ children: ReactNode }>) {
+   return (
+     <div className="min-h-screen md:flex">
++      {/*
++        Story 3.5 — skip-to-content link. First focusable element in the
++        (public) tree so a single Tab reaches it; `sr-only` until `:focus`,
++        then revealed as a branded, absolutely-positioned chip. `href="#main"`
++        + `<main id="main" tabIndex={-1}>` move focus INTO main on activation
++        (WCAG 2.4.1 Bypass Blocks). The global `:focus-visible` rule in
++        globals.css also applies to this link when keyboard-focused.
++      */}
++      <a
++        href="#main"
++        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-surface-raised focus:px-3 focus:py-2 focus:text-sm focus:text-ink-primary focus:ring-2 focus:ring-focus-ring"
++      >
++        跳至主要内容
++      </a>
+       <PublicNav />
+-      <main className="min-w-0 flex-1">
++      <main id="main" tabIndex={-1} className="min-w-0 flex-1">
+         <ListContextMemory />
+         {children}
+       </main>
+diff --git a/apps/web/app/globals.css b/apps/web/app/globals.css
+index 691eacd..c01ac27 100644
+--- a/apps/web/app/globals.css
++++ b/apps/web/app/globals.css
+@@ -80,3 +80,27 @@
+   --radius-lg: 14px;
+   --radius-xl: 20px;
+ }
++
++/* Story 3.5 — keyboard a11y baseline: one global `:focus-visible` rule.
++ *
++ * Before 3.5 only SearchBox and FollowButton had explicit focus rings
++ * (`focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring`);
++ * every nav link / FilterPill / card link / BackLink / detail external link
++ * relied on the browser default outline, which is not the brand focus color
++ * and therefore not a consistent visible-focus baseline. This single rule
++ * fills that gap for EVERY focusable element across all six public surfaces
++ * + every shared component, with zero per-component `focus:` classes.
++ *
++ * `:where()` keeps specificity at 0, so components that already carry
++ * `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring`
++ * (compiled by Tailwind to specificity > 0) keep their own ring and are NOT
++ * overridden — no double indicator, no regression. Elements without any
++ * focus class receive the brand-color outline via this rule. The token
++ * `--color-focus-ring` is the existing 1.3 DESIGN token (#335A91), so no
++ * new token is introduced.
++ */
++:where(a, button, input, textarea, select, summary):focus-visible {
++  outline: 2px solid var(--color-focus-ring);
++  outline-offset: 2px;
++  border-radius: var(--radius-sm);
++}
+diff --git a/apps/web/package.json b/apps/web/package.json
+index b538035..8d00283 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -12,7 +12,8 @@
+     "verify:follow-ref": "tsx \"app/(public)/_actions/follow-ref-parser.selfcheck.ts\"",
+     "verify:session-cookie": "tsx lib/session-cookie-signer.selfcheck.ts",
+     "verify:watchlist": "tsx lib/watchlist.selfcheck.ts",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return|@a11y\"",
++    "e2e:a11y": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @a11y",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+diff --git a/apps/web/e2e/a11y.spec.ts b/apps/web/e2e/a11y.spec.ts
+new file mode 100644
+index 0000000..e425ac4
+--- /dev/null
++++ b/apps/web/e2e/a11y.spec.ts
+@@ -0,0 +1,252 @@
++import { expect, test } from "@playwright/test";
++
++/**
++ * Public-surface a11y baseline e2e — Story 3.5.
++ *
++ * Surface-anchored coverage for the AC1 / AC2 baseline laid down in 3.5:
++ *
++ *   - AC1 reachability: Tab through `/` and assert the sequence hits real
++ *     `<a>`/`<button>`/`<input>` focusable elements (never a `<div>`), i.e.
++ *     no `div onClick` trap exists on any public surface.
++ *   - AC1 skip-to-content: the skip-link is the first focusable element,
++ *     and activating it (Enter) moves focus to `<main id="main">` so keyboard
++ *     readers can bypass the entire nav.
++ *   - AC1 visible focus: a keyboard-focused nav link shows a non-`none`
++ *     outline with the brand `--color-focus-ring` color (the global
++ *     `:where(...):focus-visible` rule in globals.css is in effect for
++ *     elements without a component-level `focus:ring-*` class).
++ *   - AC2 non-color guard: `/design` (DB-free) renders the three ReactionChip
++ *     tones with visible CJK text 「涨」「跌」「平」 — color is not the only
++ *     signal. This locks the color+text invariant against a silent color-only
++ *     regression.
++ *
++ * Infrastructure note: `/` is `force-dynamic` and reads `published_hot_events`
++ * at request time (AD-3 public read — same as home.spec.ts), so this file
++ * requires a reachable local PG `aguhot_dev`. `/design` is DB-free (a static
++ * server component rendering token samples), so the AC2 guard has no DB
++ * dependency.
++ *
++ * The skip-link is an unscoped `<a href="#main">` rendered before `<PublicNav>`
++ * inside `(public)/layout.tsx`. navigation.spec.ts scopes its link assertions
++ * to the `complementary` (desktop aside) / `dialog` (mobile drawer) /
++ * `banner` (mobile header) landmarks, so adding a pre-nav link here does NOT
++ * perturb those existing assertions (verified during 3.5 implementation).
++ */
++
++test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () => {
++  test("键盘 Tab 序列命中真实可聚焦元素，无 div-onclick 陷阱 (AC1 可达)", async ({
++    page,
++  }) => {
++    const response = await page.goto("/");
++    expect(response, "homepage should respond").not.toBeNull();
++    expect(response!.status(), "homepage status should be 200").toBe(200);
++
++    // Reset focus to the document body so the first Tab lands on the
++    // intended first-focusable (the skip-link). Playwright's default focus
++    // state can vary by browser; this makes the sequence deterministic.
++    await page.evaluate(() => document.body.focus());
++
++    // The first Tab MUST land on the skip-link — it is the first focusable
++    // element in the (public) route tree. Pin the identity (not just "an
++    // <a>") by comparing the focused element to the skip-link locator.
++    await page.keyboard.press("Tab");
++    const skipLink = page.getByRole("link", { name: /跳至主要内容/ });
++    await expect(skipLink).toBeFocused();
++
++    // Record the first stop's tag for the sequence-membership assertions
++    // below, then continue Tabbing through the rest of the page.
++    const seenTags: string[] = [
++      await page.evaluate(
++        () => (document.activeElement as HTMLElement | null)?.tagName ?? "",
++      ),
++    ];
++
++    // Tab through a bounded number of additional stops — enough to traverse
++    // the primary nav links and the global search input. We do NOT assert
++    // the whole page; we assert (a) at least one A and one INPUT are reached,
++    // and (b) no activeElement is ever a `<div>` (div-onclick trap).
++    for (let i = 0; i < 11; i++) {
++      await page.keyboard.press("Tab");
++      const tag = await page.evaluate(
++        () => (document.activeElement as HTMLElement | null)?.tagName ?? "",
++      );
++      if (tag) seenTags.push(tag);
++      // AC1: every keyboard focus stop MUST be a real focusable element type.
++      // A `<div>` here would indicate a `div onClick` trap (keyboard
++      // unreachable interaction) — the baseline this story guards against.
++      expect(tag, `Tab stop #${i + 2} must not be a <div> onclick trap`).not.toBe(
++        "DIV",
++      );
++    }
++
++    // The sequence must contain real focusable types beyond the skip-link:
++    // at least one <A> (nav links) and one <INPUT> (the global search box).
++    // This is the surface proof of AC1 "all core interactions reachable".
++    expect(seenTags, "Tab sequence must include at least one link").toContain(
++      "A",
++    );
++    expect(
++      seenTags,
++      "Tab sequence must include at least one input (global search)",
++    ).toContain("INPUT");
++  });
++
++  test("skip-link 按 Enter 后焦点移至 <main id=\"main\"> (AC1 可达基线原语)", async ({
++    page,
++  }) => {
++    await page.goto("/");
++    await page.evaluate(() => document.body.focus());
++
++    const skipLink = page.getByRole("link", { name: /跳至主要内容/ });
++
++    // First Tab reaches the skip-link.
++    await page.keyboard.press("Tab");
++    await expect(skipLink).toBeFocused();
++
++    // Activate it. Because `<main tabIndex={-1}>` is programmatically
++    // focusable, the browser moves focus to #main instead of jumping to the
++    // first link inside main.
++    await page.keyboard.press("Enter");
++
++    // `expect.poll` because focus assignment after hash navigation can be
++    // async in some browsers; poll until activeElement.id settles on "main".
++    await expect.poll(async () => {
++      const id = await page.evaluate(
++        () => (document.activeElement as HTMLElement | null)?.id ?? "",
++      );
++      return id;
++    }, "focus should move to <main id=\"main\"> after skip-link activation").toBe(
++      "main",
++    );
++  });
++
++  test("skip-link 未聚焦时视觉隐藏、不占布局 (sr-only)", async ({ page }) => {
++    await page.goto("/");
++
++    const skipLink = page.getByRole("link", { name: /跳至主要内容/ });
++
++    // `sr-only` clips the link to a 1px box and pulls it out of the normal
++    // flow, so a sighted mouse user never perceives it until keyboard focus
++    // reveals it (focus:not-sr-only). A skip-link that is always visible
++    // would be a layout/visual defect — this guards that contract.
++    const box = await skipLink.boundingBox();
++    expect(box, "skip-link must exist in the DOM").not.toBeNull();
++    expect(
++      box!.width,
++      "unfocused skip-link must be sr-only (clipped to ≤1px wide)",
++    ).toBeLessThanOrEqual(1);
++    expect(
++      box!.height,
++      "unfocused skip-link must be sr-only (clipped to ≤1px tall)",
++    ).toBeLessThanOrEqual(1);
++  });
++
++  test("既有 SearchBox ring 未被全局焦点规则覆盖 (AC1 不回归)", async ({
++    page,
++  }) => {
++    await page.goto("/");
++    await page.evaluate(() => document.body.focus());
++
++    // Tab until the global search input (in PublicNav) is focused.
++    let inputFocused = false;
++    for (let i = 0; i < 15; i++) {
++      await page.keyboard.press("Tab");
++      const tag = await page.evaluate(
++        () =>
++          (document.activeElement as HTMLElement | null)?.tagName ?? "",
++      );
++      if (tag === "INPUT") {
++        inputFocused = true;
++        break;
++      }
++    }
++    expect(inputFocused, "global search input must be keyboard-reachable").toBe(
++      true,
++    );
++
++    // SearchBox keeps its own `focus-visible:ring-2` (Tailwind ring compiles
++    // to box-shadow). The global `:where(...):focus-visible` rule has
++    // specificity 0, so it must NOT override the component ring — assert the
++    // ring (box-shadow) is still present. A regression where the global rule
++    // clobbers component rings would collapse this to "none".
++    await expect.poll(async () => {
++      return await page.evaluate(() => {
++        const el = document.activeElement as HTMLElement | null;
++        return el ? getComputedStyle(el).boxShadow : "none";
++      });
++    }, "SearchBox ring (box-shadow) must survive the global focus rule").not.toBe(
++      "none",
++    );
++  });
++
++  test("键盘聚焦的 nav 链接显示品牌色可见焦点 outline (AC1 可见焦点)", async ({
++    page,
++  }) => {
++    await page.goto("/");
++    await page.evaluate(() => document.body.focus());
++
++    // Tab past the skip-link (first stop) to reach the first nav link.
++    await page.keyboard.press("Tab"); // skip-link
++    await page.keyboard.press("Tab"); // → first focusable nav element
++
++    // The activeElement is a nav link without any component-level
++    // `focus:ring-*` class, so it should pick up the global
++    // `:where(a, button, ...):focus-visible` outline rule from globals.css.
++    // Asserting outline-style != "none" is the surface proof the rule is in
++    // effect (a regression that removes the rule collapses outline-style
++    // back to the browser default `none` for plain links).
++    await expect.poll(async () => {
++      return await page.evaluate(() => {
++        const el = document.activeElement as HTMLElement | null;
++        if (el === null) return "none";
++        return getComputedStyle(el).outlineStyle;
++      });
++    }, "focused nav link must have a non-none outline-style").not.toBe("none");
++
++    // outline-color must be a real (non-transparent rgba/rgb) value — the
++    // brand focus-ring color #335A91 serializes to "rgb(51, 90, 145)". A
++    // transparent/rgba(...,0) value would mean the rule isn't applied. We
++    // assert it's the literal brand color so token drift also fails loudly.
++    await expect.poll(async () => {
++      return await page.evaluate(() => {
++        const el = document.activeElement as HTMLElement | null;
++        if (el === null) return "";
++        return getComputedStyle(el).outlineColor;
++      });
++    }, "focused nav link outline-color must be brand --color-focus-ring").toBe(
++      "rgb(51, 90, 145)",
++    );
++  });
++
++  test("/design 三态 ReactionChip 各含可见文字「涨」「跌」「平」(AC2 非颜色守卫)", async ({
++    page,
++  }) => {
++    // `/design` is DB-free (static server component rendering token samples),
++    // so this AC2 guard has zero DB/seed dependency.
++    const response = await page.goto("/design");
++    expect(response, "/design should respond").not.toBeNull();
++    expect(response!.status(), "/design status should be 200").toBe(200);
++
++    // The three ReactionChip tones are rendered with the CJK text label
++    // (涨/跌/平) next to the numeric value — color is NEVER the only signal
++    // (a11y floor). Asserting each label is visible locks the color+text
++    // invariant: a future color-only variant would fail loudly here instead
++    // of silently regressing AC2.
++    await expect(page.getByText("涨", { exact: true })).toBeVisible();
++    await expect(page.getByText("跌", { exact: true })).toBeVisible();
++    await expect(page.getByText("平", { exact: true })).toBeVisible();
++  });
++
++  test("匿名访问 / 与 /design 均返回 200、无 /login 重定向 (AD-8)", async ({
++    page,
++  }) => {
++    for (const href of ["/", "/design"]) {
++      const response = await page.goto(href);
++      expect(response, `${href} should respond`).not.toBeNull();
++      expect(response!.status(), `${href} status should be 200`).toBe(200);
++      expect(response!.url(), `${href} should not redirect to login`).not.toMatch(
++        /\/login/,
++      );
++    }
++  });
++});

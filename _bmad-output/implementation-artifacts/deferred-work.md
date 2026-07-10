@@ -819,3 +819,52 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   evidence: Story 3.4 AC1「回到原搜索结果列表，原关键词、排序与结果上下文保持不变」中的「上下文」含 scroll 位置。scroll 恢复是 2.5 的 `RESTORE_MARKER` + `ListContextMemory` 机制（search 已在 allowlist，故机制对 search 生效），loop.spec 对 home/theme/daily 三面有 `scrollY` 恢复断言（需 ≥10 条结果撑高页面）。但 search 来源的 scroll 恢复从未被直接断言：3.1 test 9 只断 query 恢复，3.4 search-return.spec 的 AC1 点回用例只断 `q=` + EventCard 复现。直接断言需要 search 结果页足够高，而 `seedSearchContext` 对测试 query（如「芯片」）只产出 1 个事件 + 2 个主题 pill（页面很短，`scrollY` 断言会脆），修改共享 seed 会波及 search.spec。故 3.4 未加 search 来源 scroll 断言。
   resolution: 已于 Story 3.4 登记为 search scroll 验证 defer——待需要时：(1) 在 search-return.spec 加一个用多命中 query（如「稀土」命中 2 事件）+ 注入 spacer 撑高页面的 scroll 恢复断言，或 (2) 给 seedSearchContext 加专用高结果 query（评估对 search.spec 的影响），或 (3) 接受 scroll 恢复由 loop.spec 对同一 2.5 代码路径的覆盖间接保证（当前选择）。
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: 焦点指示器机制目前横跨两套——全局 `:where(a,button,input,textarea,select,summary):focus-visible` 规则（3.5）与 SearchBox/FollowButton 既有 `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring`（Tailwind utility）——两者 specificity 正交、视觉共存无双重指示器，但统一为单一机制 defer
+  evidence: Story 3.5 在 `globals.css` 落地一条全局 `:where(...):focus-visible { outline: 2px solid var(--color-focus-ring); ... }`，specificity 0；SearchBox（`search-box.tsx:88,94`）与 FollowButton（`follow-button.tsx:182,248,260`）仍带 Tailwind `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring`（编译后 specificity > 0，故其 ring 不被全局规则覆盖——全局规则的 outline 只在元素无自己的 focus 类时生效）。两套机制视觉等价（同 `--color-focus-ring` 色）、无双重指示器（ring 元素不被全局 outline 覆盖），但「单一焦点机制」更易维护（改一处即全改）。统一为单一机制 defer。
+  resolution: 已于 Story 3.5 登记为统一焦点机制 defer——后续移除 SearchBox/FollowButton 既有 `focus:outline-none focus-visible:ring-*` 改用全局规则（需验证 ring vs outline 视觉等价、tabindex 顺序、box-shadow 模拟 ring 的兼容性），或把全局规则升级为带 offset/ring 的等价形式（统一为单一机制）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: 关联子标题 / 成员事件行 / 主题行标题目前为 `<p>`（视觉小标题），未提为 `<h3>`——标题层级 AC1 字面已满足（每页一 h1、无跳级），但子项 heading 是增强非基线，defer
+  evidence: Story 3.5 调查证实每页恰好一个 `<h1>`、无层级跳级（home/detail/themes×2/daily/search/favorites 均查证，AC1 标题层级今日已满足）。但详情页关联区块子标题、主题页成员事件行标题、日报成员行标题等用 `<p>` 而非 `<h3>`（视觉小标题样式）。这些子项 heading 可让屏幕阅读器跳级导航（h2 → h3 子项），是「增强非基线」——AC1 不要求。3.5 Never 明示不改 `<h1>`/`<h2>` 结构、不把 `<p>` 子标题提为 `<h3>`（defer），避免触发跨 home/feed/watchlist EventCard h2 模式的回归面。
+  resolution: 已于 Story 3.5 登记为 heading 提升 defer——后续统一把关联区块/成员事件/主题行的 `<p>` 子标题提为 `<h3>`（需跨 home/feed/watchlist/themes/daily 统一 EventCard h2 模式，避免 section h2 与 item h2 同级歧义，见 3.3 watchlist a11y defer 同根）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: ReactionChip 未加 ▲▼↑↓ 符号层 / 未加 `aria-label`——AC2 由既有「涨/跌/平」CJK 文字 + 数值已满足（颜色非唯一维度），符号层/aria 层是增强，defer
+  evidence: Story 3.5 调查证实 `ReactionChip`（`components/chips.tsx:152-160`）= `bg/text-market-*` 颜色 +「涨/跌/平」CJK 文字 + 数值（font-mono），AC2「关键状态不只依赖红绿颜色」今日已满足。3.5 在 `/design`（DB-free）加断言每态含可见文字（锁定 color+文字不变量防静默回归），不改 ReactionChip 实现（Never 明示）。▲▼ 符号层（视觉冗余信号，帮助色弱/色盲读者快速识别方向）+ `aria-label`（SR 播报「涨 +3.42%」而非裸文字拼接）是增强非基线，defer。
+  resolution: 已于 Story 3.5 登记为符号层/aria 增强 defer——待 WCAG AA 对比度审计或色弱/色盲读者反馈时，给 `ReactionChip` 加 ▲/▼/─ 符号层（视觉冗余）+ `aria-label={`{涨/跌/平} ${value}`}`（SR 友好播报）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: FollowButton 成功/处理中态未做 `aria-live` 公告——既有 `role="alert"` 仅覆盖错误态，成功/处理中态无 SR 公告
+  evidence: Story 3.5 Never 明示「不加 `aria-live` 公告 follow 成功/处理中态（FollowButton 既有 `role="alert"` 仅覆错误；成功公告 defer）」。`follow-button.tsx` 的 `role="alert"` 仅在 error state 非空时渲染（SR 播报错误），但收藏成功（following=true）/处理中（pending）态无 aria-live 公告，屏幕阅读器用户点了「收藏」后无确认反馈（除非他们再 Tab 回去看按钮文字变化）。defer 到后续 a11y 增强。
+  resolution: 已于 Story 3.5 登记为 aria-live defer——待 SR 用户体验审计时，给 FollowButton 成功态加 `aria-live="polite"` 公告「已收藏」/「已取消收藏」（处理中态可选 polite 公告「正在处理」），与既有 `role="alert"` 错误公告互补。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: 日报页 `<ol>` 未加 `role="list"` 显式语义——Tailwind preflight 可能使部分 SR 丢失列表语义，daily 成员顺序的 list 语义增强 defer
+  evidence: Story 3.5 AC1/AC2 仅锁定基线（焦点 + 标题层级 + 非颜色 + 可达），不涉及 daily 成员 `<ol>` 的显式 `role="list"`。日报页成员用 `<ol>`（ordered，表达 evidenceCount DESC 顺序），Tailwind v4 preflight（list-style reset）可能使某些 SR（Safari + VoiceOver 历史问题）丢失 list 语义。日报成员顺序是阅读信号（证据多→少），但 list 语义增强非基线，defer。
+  resolution: 已于 Story 3.5 登记为 list 语义 defer——待 SR 审计反馈「日报成员丢失 list 语义」时，给 daily 成员 `<ol>` 加 `role="list"`（+ 每个 `<li>` `role="listitem"`，如必要），与 home feed `<ul>`/theme 成员 `<ol>` 一致性统一处理。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: 全局 `:focus-visible` 规则无单元/视觉回归自动化测试——e2e a11y.spec 断言 outline-style 非 none + outline-color 格式，但无像素级视觉回归（焦点环粗细/offset/颜色漂移）守卫
+  evidence: Story 3.5 的 `e2e/a11y.spec.ts` 断言键盘聚焦的 nav 链接 outline-style 非 `none` + outline-color 匹配 rgb() 格式（surface-anchored 证明全局规则生效）。但 outline 粗细（2px）、offset（2px）、颜色值（`#335A91` → `rgb(51, 90, 145)`）的像素级漂移无自动化守卫（`--color-focus-ring` token 改值或 outline 属性微调不会触发 e2e 失败，只要 outline-style 非 none）。像素级视觉回归需 Playwright screenshot/visual comparison 或 Storybook + Chromatic，当前 repo 无此基建。defer。
+  resolution: 已于 Story 3.5 登记为焦点视觉回归自动化 defer——待平台视觉回归基建（Playwright screenshot diff 或 Storybook + Chromatic）引入时，给焦点环的 2px 实线 + offset + brand color 加像素级守卫（与 DESIGN token 单测一并接入）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: 跨浏览器（WebKit/Firefox）a11y 验证缺失——项目 `playwright.config` 仅 chromium 单 project，3.5 a11y e2e（Tab 序列、`:focus-visible`、skip-link）仅在 Chromium 验证
+  evidence: Story 3.5 复核（adversarial）指出 `apps/web/playwright.config.ts` 仅定义 chromium 单 project。`:focus-visible` 的鼠标 vs 键盘匹配启发式、Tab 序列、`tabIndex={-1}` 行为在 WebKit（Safari/VoiceOver）与 Firefox 上历史上有差异。3.5 的 a11y 断言（Tab 序列、outline-style/color、skip-link 跳转）全部仅 Chromium 跑。这是项目级测试基建配置（所有 spec 同样 chromium-only），非 3.5 引入，复核顺带 surface。
+  resolution: 已于 Story 3.5 复核登记为跨浏览器 a11y 验证 defer（项目级）——待引入 WebKit/Firefox project 时，a11y.spec 自动跨浏览器跑（`:focus-visible` 与 Tab 序列跨浏览器一致性是 a11y 基线的关键），需评估 WebKit/Firefox 下 `:focus-visible` 匹配差异对断言的影响。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: 标题层级（一 h1 / 无跳级）无自动化守卫——AC1「清晰标题层级」今日由代码结构满足，但无测试锁定
+  evidence: Story 3.5 调查证实每公共页恰好一个 `<h1>`、无层级跳级（AC1 标题层级今日满足），3.5 未改任何 heading 结构。但复核（intent-alignment）指出无任何测试断言「每页一个 h1」「h1→h2 无跳级」——未来 heading 回归（如某页加第二个 h1、或 h1→h3 跳级）不会被自动抓。3.5 选择不为「未变化的结构」加测试（ponytail YAGNI），标题层级守卫 defer。
+  resolution: 已于 Story 3.5 复核登记为标题层级守卫 defer——待需要时，加一个轻量 axe-core 或自定义 heading-order 审计（每公共页断言「恰好一个 h1」「heading 序列无跳级」），可作 a11y.spec 的一部分或独立 heading-audit 套件。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: a11y e2e 仅覆盖 `/`（与 `/design`）——全局焦点规则跨面（6 面 + 全部共享组件），但 Tab 序列/outline 断言只在 `/` 跑；themes/daily/search/favorites/detail 无 a11y 断言
+  evidence: Story 3.5 全局 `:where(...):focus-visible` 规则是元素类型级（`<a>`/`<button>`/`<input>`），跨面生效——在 `/` 上证明对 nav `<a>` + SearchBox `<input>` 生效即证明对所有同类元素生效；且 `/`（含 PublicNav + 首屏 feed）渲染全部共享交互组件（nav/SearchBox/FilterPill/EventCard/FollowButton，均为真实 `<a>`/`<button>`/`<input>`，调查证实零 div-onclick）。复核（intent-alignment/verification-gap）指出 themes/daily/search/favorites/detail 五面无 a11y e2e。但按面扩 a11y 断言需各自 seed（themes/daily/search/favorites 需其 seed、detail 需 seed-detail），且是对同一 CSS 规则 + 同类元素的冗余覆盖——超基线 scope。
+  resolution: 已于 Story 3.5 复核登记为按面 a11y e2e 扩展 defer——待真实 a11y 回归出现在特定面（如某面 stylesheet 覆盖 outline）时，给该面加 a11y 断言；或引入 axe-core 全面自动审计（一次跑全 6 面，比逐面手写 Tab 断言更省）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-semantic-and-keyboard-accessibility-baseline.md`
+  summary: `package.json` base `e2e` 的 `--grep-invert` 现累计 14 个 `|@tag`——单字符串正则、无程序化校验，tag 拼写错误会静默含/排某套件
+  evidence: Story 3.5 复核（adversarial）指出 base `e2e` 脚本的 `--grep-invert` 累计 `@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return`（3.5 patch 已把 `@a11y` 从该列表移除并入默认闸门）。每个 story 加其 `@tag` 进 grep-invert 是既有模式，但单 pipe-分隔正则无校验：tag 拼写错会静默把该 tagged 套件纳入/排除 base e2e。这是项目级测试编排模式（非 3.5 引入），复核顺带 surface。
+  resolution: 已于 Story 3.5 复核登记为 grep-invert 可维护性 defer（项目级）——待 tag 数量继续增长时，考虑改为 playwright `testProjects` 或 `--grep` 白名单模式（base e2e 显式列含哪些 tag，而非 invert 排除），或加一个 lint 校验「grep-invert 里的每个 tag 都对应至少一个 spec 的 describe 标题」。
