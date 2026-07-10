@@ -91,3 +91,63 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: filter-pill「clear」态目前以「全部」pill 实现，未额外造可 dismiss chip——YAGNI；DESIGN 若需显式 clear 控件待真实多筛选维度落地时再评估
   evidence: `apps/web/app/(public)/_components/feed-filters.tsx` 的窗口 pill 组中，「全部」(window=all) 即清除控件（恒可见、当前窗口非 all 时点之恢复全部）。epic「活动筛选可视且可清除，不丢阅读上下文」由 URL 驱动原生满足。未造额外的「× 清除」chip（YAGNI：单维度筛选下「全部」pill 即是 clear 语义的最简形式）。DESIGN `filter-pill` 定义了 default/active/clear 三态，但 1.7 只用 default/active（clear 态以「全部」pill 实现）。多筛选维度（Epic 2.2 分类 + 日期同时活动）落地时，可能需要显式「清除全部」控件，届时再评估。
   resolution: 已于 Story 1.7 以「全部」pill 实现 clear 语义——多筛选维度落地时再评估是否需显式 dismiss chip。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 真实 LLM provider + `LLMAdapter` port 抽取未落地——V1 `generateExplanation` 为确定性派生（无第三方 SDK），预建 port 属「单一实现接口」反模式
+  evidence: `packages/core/src/modules/explanation/explain-service.ts` 的 `generateExplanation` 从真实证据记录确定性派生三分区（summary/whyItMatters/uncertainties），`source="template"`，无外部 API key/SDK/网络调用。AD-7 要求外部 LLM 经 `LLMAdapter` 端口进入，但当前唯一实现是确定性派生（无第三方 SDK），按 ponytail「单一实现的接口」反模式不预建 port。真实 LLM（含 prompt 工程、provider 选型、重算/重试、成本控制）是独立大块且 V1 未决（架构把「具体云/数据源采购」列为 defer）。port 抽取待真实 external LLM 引入时按 AD「外部适配器端口在 worker 层」落地——彼时 AD-4「外部调用走异步 job」与 AD-7 才被真正触发。
+  resolution: 已于 Story 1.8 登记为 defer——真实 LLM 引入时在 worker 层抽 `LLMAdapter` port，`ExplanationVersion.source` 翻 "ai"，公开 `<AiLabel>` 标识不变（epic「uniform, identical on public and operator」）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 原文链接 HTTP 存活探测 / 归档快照未做——link_status 仅由 url 缺失推导，不做主动 dead-link 探测
+  evidence: `packages/core/src/modules/publish-orchestrator/publish-service.ts` 的 `projectEvidenceTimeline` 把 `linkStatus` 从 evidence_records.url 推导：url 存在→"available"，url 缺失/空→"unavailable"（行保留不消失，AC2）。主动 HTTP 存活探测（HEAD/GET 探链接是否 200/404/超时）+ 归档快照（web archive 存储）是独立 concern——需异步 job + 归档存储 + 重试策略 + dead-link 写回 owner。当前 `evidence_records` 无 dead-link 列也无 owner 写，`published_hot_event_evidence.link_status` 仅由 publish-orchestrator 在投影时从 url 推导（不回写原始表）。ponytail：不在无探测 writer 时给 evidence_records 加 dead-link 列（无 owner 写即死列）。
+  resolution: 已于 Story 1.8 登记为 defer——主动链接探测 + 归档快照独立 story，需 writer（异步 job）+ 归档存储 + link_status 升级为三态（available/unavailable/dead）时落地。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: cluster→explain 自动编排 / cron 未落地——explain job 与 event-cluster job 一样独立、幂等、需手动/cron 触发
+  evidence: `apps/worker/src/index.ts` 注册 source-ingest + event-cluster + explain 三个 worker，三者无任何触发关系：ingest 完成不自动入队 cluster，cluster 完成不自动入队 explain。当前需手动 `enqueueExplain`（或 verify/seed 直调 `generateExplanation`）。这是有意为之的解耦（沿用 1-5「两 job 独立、幂等、chaining/cron 未落地」）：三 job 各自幂等、可独立重跑、失败互不阻塞。生产管道需要编排（ingest → 定时/事件触发 cluster → 触发 explain）。
+  resolution: 已于 Story 1.8 登记为 defer——真实运营负载与编排需求出现时引入 repeat job（BullMQ `Queue.upsertJobScheduler`）或 completed 事件链触发，属 epic defer。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 运营解释修订 / 版本差异 / 重发布 UI 归 1.9——本 story 只保证 ExplanationVersion 追加式 + 公开取最新
+  evidence: `packages/core/src/modules/explanation/explain-service.ts` 的 `generateExplanation` 每次 append 一行（AD-5，永不 update/delete），`getLatestExplanation` 取 createdAt desc 首条；publish-orchestrator 投影取最新。但运营台「版本链消费」「人工修订（source="human"）」「版本差异 diff」「修订后重发布刷新读模型」均归 Story 1.9（已发布热点的文案与标签修正）。本 story 的 `ExplanationVersion.source` union 已含 "human" 值（为 1.9 预留的 provenance 值），但无运营写入路径。
+  resolution: 已于 Story 1.8 登记为 1.9 范围——运营修订 UI + 版本链展示 + 修订触发读模型刷新在 Story 1.9 复用本闸门（review-workflow + publish-orchestrator）落地。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 详情页返回原语境（从日报/主题/搜索返回）归 2.5——本 story 仅提供回首页 `/` 的稳定返回链接
+  evidence: `apps/web/app/(public)/events/[hotEventId]/page.tsx` 的返回链接固定指向 `<Link href="/">`（回首页）。epic「任何详情页必须返回其 originating consumption context」要求从日报/主题/搜索进入详情时返回原语境，但日报/主题/搜索页归 Epic 2（2.3/2.4），来源语境保留（referrer 感知 / return-to query param）归 2.5。本 story 只保证稳定可回首页（不丢阅读上下文的最小形态），具体语境保留待 Epic 2.5。
+  resolution: 已于 Story 1.8 登记为 2.5 范围——Epic 2 日报/主题/搜索落地后，详情返回链按 originating context 动态化（referrer 或 return-to query param）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: `pnpm --filter web e2e`（home/navigation/design）现 request 期依赖 DATABASE_URL——首页 force-dynamic（1.7）+ 详情 force-dynamic（1.8）所致，属 1.7→1.8 有意演化
+  evidence: Story 1.7 首页声明 `force-dynamic` + import `@aguhot/core` 读读模型（AD-3 公开读首次落地）；Story 1.8 详情路由 `(public)/events/[hotEventId]/page.tsx` 同样 `force-dynamic` + `getPrisma()` + `getPublishedHotEventDetail`。两个动态公开路由（`/` 与 `/events/[hotEventId]`）在请求期求值，故 `goto("/")` 或 `goto("/events/{id}")` 触发 getPrisma → 需 request 期 DATABASE_URL。1.6 build 不变量（`next build` 无 DATABASE_URL）仍成立（force-dynamic 不在 build 期求值，`pnpm --filter web build` 确认 `/` 与 `/events/[hotEventId]` 标记为 ƒ Dynamic），但运行期 e2e 现需 DB。`(public)/layout.tsx` 及 /daily /topics /favorites /design 保持静态（○ Static）、不 import core，故仅两个路由动态。dev/CI 环境本就跑 PG。
+  resolution: 已于 Story 1.8 接受为有意演化（延续 1.7）——dev/CI 跑 PG 即可。若未来需公开 e2e 在无 DB 环境跑（如 PR 预览无 service container），需为 home/navigation/design 引入「DB 缺失时优雅降级」或拆分 masthead-only 冒烟路径，属平台 CI 门就绪时的决策。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 确定性 template 解释存在语义上限——无法生成需要领域知识/跨事件关联/市场含义推断的解释；真实 LLM 落地后语义质量跃升
+  evidence: `packages/core/src/modules/explanation/explain-service.ts` 的 `derivePartitions` 是纯字符串派生：summary=标题+最新摘要，whyItMatters=来源数/覆盖跨度的客观陈述，uncertainties=数据缺口（缺摘要/缺 url/missing_fields）。它能保证「不造假、不投资建议、结构诚实」，但无法做：领域专家式的「为什么这件事对市场重要」判断、跨事件因果关联、政策含义推断、情绪/反应综合——这些需真实 LLM + 领域 prompt 工程。V1 template 解释是「诚实的下限」而非「高质量的上限」：读者能看到事实与数据缺口，但得不到专家级解读。
+  resolution: 已于 Story 1.8 登记为 template 语义上限——真实 LLM 引入（见 LLM defer 项）后，`generateExplanation` 切换为 LLM 生成（source="ai"），template 作为 fallback/对照保留。LLM 生成的解释仍须挂 `<AiLabel>` + 经运营复核（AD-6 闸门不因 LLM 而旁路）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: AC3「公开页和后台复核页保持一致」目前仅组件级满足——运营复核页（1.6 console）不渲染任何解释/AiLabel，行为级一致性待 1.9
+  evidence: step-04 intent-alignment 审计：`apps/web/app/(operator)/console/[eventId]/page.tsx` 无 `AiLabel`/`explanation` 引用（grep 确认），只渲染证据行 + 决策审计链 + 复核表单。AC3「该标识在公开页和后台复核页保持一致」在 1.8 由「公开详情页与运营台共用同一 `<AiLabel>` 组件（components/chips.tsx）」满足（组件级一致）；运营台当前无 AI 生成内容可标注，行为级一致性 vacuously 成立、待 1.9 运营解释展示后可观测。非 intent gap（spec Never 已显式把运营解释 UI 归 1.9，shared AiLabel 是 uniformity 机制）。
+  resolution: 已于 Story 1.8 接受为 defer——AC3 行为级一致性随 Story 1.9 运营解释展示（复用 `<AiLabel>` + 读 ExplanationVersion）落地后可观测；组件级一致性已满足。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 详情页 `<AiLabel>` 对 `explanation.source` 盲目（仅 null 检查）——1.9 引入 source="human" 人工修订时需按 source 门控
+  evidence: step-04 edge-case 审计：`apps/web/app/(public)/events/[hotEventId]/page.tsx` 的 `hasExplanation ? <AiLabel/> : null` 只检查 explanation 非 null，不区分 `source`。当前 source 恒为 "template"（V1）故正确；但 union 已含 "human"（1.9 预留），届时人工修订分区会错误挂 AI 标识。属 1.9 前瞻缺口（当前不可达）。
+  resolution: 已于 Story 1.8 登记为 1.9 前瞻——Story 1.9 引入 source="human" 时把 `<AiLabel>` 门控改为 `source !== "human"`（或正向匹配 template|ai）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: `published_hot_event_evidence` 无 `UNIQUE(hot_event_id, position)` + `verify-publish` write-isolation 断言偏弱——两项 defense-in-depth/测试质量 defer
+  evidence: step-04 edge-case + verification-gap 审计：(1) migration 的 `published_hot_event_evidence` 有 `@@index([hot_event_id])` 但无 `UNIQUE(hot_event_id, position)`——投影事务内 deleteMany+loop-create 正常路径无重复，部分失败重试/并发 refresh 理论上可产生重复 position（当前 decideReview 运营门控、非并发，低风险）。(2) `verify-publish.ts` 的 write-isolation 断言用 `evidence_records >= before`（非 `==`），illegal-setup 中途 seed 掩盖潜在破坏性写；AD-2 write-isolation 实际由模块边界保证，此断言仅 belt-and-suspenders 且当前失效。
+  resolution: 已于 Story 1.8 登记为 defer——(1) 若引入 worker 触发并发 refresh 或观察到 position 冲突，加 `@@unique([hotEventId, position])`；(2) 重构 write-isolation 断言为「setup 后、操作前捕获 evidence_records id 集合，操作后断言集合不变」。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: 详情页 `<title>` 为静态「热点事件详情」——每个事件详情页文档标题相同，未含事件标题（SEO/标签页可读性退化）
+  evidence: step-04 adversarial 审计：`apps/web/app/(public)/events/[hotEventId]/page.tsx` 的 `metadata.title = "热点事件详情"`（静态），故每个详情页浏览器标签/历史显示同一通用标题。属 SEO/UX 退化（非正确性缺陷）。修复需 `generateMetadata` 读事件标题（额外一次读或 Next fetch 去重）。
+  resolution: 已于 Story 1.8 登记为 SEO polish defer——后续用 `generateMetadata` 动态 `title: detail.title`。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md`
+  summary: `derivePartitions` 不截断 title/summary + `generateExplanation` 未守卫 `link.evidenceRecord` null——两项健壮性/防御性 defer（当前数据/约束下不可达）
+  evidence: step-04 edge-case 审计：(1) `explain-service.ts` 的 `deriveSummary`/`deriveWhyItMatters` 直接拼接 title+summary 无长度上限（evidence summary 由采集归一化填入、实践有界，但无显式截断防护；超长输入→超大 ExplanationVersion 行 + 渲染膨胀）。(2) `event.evidence.map((link) => ({ id: link.evidenceRecord.id, ... }))` 假设 evidenceRecord 非 null——`HotEventEvidence.evidenceRecord` FK（onDelete 默认 Restrict）使 evidence_records 被引用时不可删→无孤儿→恒非 null，故当前不可达。
+  resolution: 已于 Story 1.8 登记为健壮性/防御性 defer——(1) 若观察到超大摘要，在 `derivePartitions` 入口对 title/summary `slice(0, ~2000)`；(2) 若未来放宽 evidence_records 删除策略，map 前过滤 `link.evidenceRecord !== null`。

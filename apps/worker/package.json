@@ -9,6 +9,7 @@
     "verify:ingest": "tsx src/verify-ingest.ts",
     "verify:cluster": "tsx src/verify-cluster.ts",
     "verify:publish": "tsx src/verify-publish.ts",
+    "verify:explain": "tsx src/verify-explain.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "build": "tsc --noEmit"

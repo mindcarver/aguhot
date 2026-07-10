@@ -9,13 +9,18 @@
  * of the published read model — consumed by the public homepage `(public)/page.tsx`
  * (the homepage declares `force-dynamic` so its core import / getPrisma() call is
  * not evaluated at build time, keeping the public build DATABASE_URL-free).
- * Later stories add theme-linking, market-reaction, etc. under this package, per
- * ARCHITECTURE-SPINE.md Structural Seed.
+ * Story 1.8 adds the `explanation` module (deterministic three-partition
+ * generation + append-only ExplanationVersion) and `getPublishedHotEventDetail`
+ * (the first public detail read of the published read model) consumed by the
+ * public detail route `(public)/events/[hotEventId]/page.tsx` (also force-
+ * dynamic). Later stories add theme-linking, market-reaction, etc. under this
+ * package, per ARCHITECTURE-SPINE.md Structural Seed.
  *
- * Public read note: as of 1.7 the public homepage imports this package (AD-3
- * public-read via the read model). DB-read routes declare `force-dynamic` so
- * `next build` stays DATABASE_URL-free; static public routes (layout, /daily,
- * /topics, /favorites, /design) still do NOT import core.
+ * Public read note: as of 1.7 the public homepage imports this package, and as
+ * of 1.8 the public detail page does too (AD-3 public-read via the read model).
+ * DB-read routes declare `force-dynamic` so `next build` stays DATABASE_URL-free;
+ * static public routes (layout, /daily, /topics, /favorites, /design) still do
+ * NOT import core.
  */
 
 // Shared kernel.
@@ -98,13 +103,39 @@ export type {
 } from "./modules/review-workflow/types.js";
 
 // publish-orchestrator module (Story 1.6 — the published_hot_events read-model owner;
-// Story 1.7 — listPublishedHotEvents public read query, first consumer of the read model).
+// Story 1.7 — listPublishedHotEvents public read query, first consumer of the read model;
+// Story 1.8 — getPublishedHotEventDetail public detail read + explanation/evidence projection).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
+  getPublishedHotEventDetail,
 } from "./modules/publish-orchestrator/publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
 export type {
   ListPublishedHotEventsOptions,
   PublishedHotEventSummary,
+  GetPublishedHotEventDetailOptions,
+  PublishedHotEventDetail,
+  PublishedEvidenceRow,
+  EvidenceLinkStatus,
+  EvidenceLinkStatusType,
 } from "./modules/publish-orchestrator/types.js";
+
+// explanation module (Story 1.8 — deterministic three-partition generation +
+// append-only ExplanationVersion, AD-5).
+export {
+  generateExplanation,
+  getLatestExplanation,
+  derivePartitions,
+} from "./modules/explanation/explain-service.js";
+export {
+  ExplanationSource,
+} from "./modules/explanation/types.js";
+export type {
+  ExplanationSource as ExplanationSourceType,
+  ExplanationPartitions,
+  GenerateExplanationOptions,
+  GenerateExplanationResult,
+  GetLatestExplanationOptions,
+  ExplanationVersionRecord,
+} from "./modules/explanation/types.js";

@@ -118,6 +118,17 @@ model HotEvent {
   reviewDecisions     ReviewDecision[]
   publicationDecisions PublicationDecision[]
   publishedReadModel  PublishedHotEvent?
+  // Read-only reverse relation to the explain job's append-only explanation
+  // versions (Story 1.8). The explanation module owns explanation_versions;
+  // this navigation metadata lets publish-orchestrator read the latest version
+  // when projecting the published read model. It does NOT change the
+  // explanation module's write-ownership (AD-5 append-only versions).
+  explanationVersions ExplanationVersion[]
+  // Read-only reverse relations to the two new published detail read models
+  // (Story 1.8: published_hot_event_explanations + published_hot_event_evidence).
+  // publish-orchestrator owns both; these are navigation metadata only.
+  publishedExplanation PublishedHotEventExplanation?
+  publishedEvidence    PublishedHotEventEvidence[]
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -218,4 +229,94 @@ model PublishedHotEvent {
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id])
 
   @@map("published_hot_events")
+}
+
+// An append-only explanation version for a HotEvent (AD-5). The explanation
+// module is the sole writer of this table (Story 1.8). Each row records the
+// three explanation partitions — summary (发生了什么), whyItMatters (为什么重要),
+// uncertainties (当前仍不确定什么) — derived deterministically from the member
+// evidence records (V1 source="template"; future source="ai"/"human"). Rows are
+// NEVER updated or deleted: every generation appends a new row, so the full
+// version chain (ordered by created_at) is the auditable history of which
+// version came from which source and when. The public read model projects the
+// latest version (created_at desc first) into published_hot_event_explanations;
+// operator-console version-chain consumption lands in 1.9.
+//
+// FK onDelete: Cascade so a HotEvent deletion cleans up its explanation history.
+// `source` distinguishes provenance ("template" V1 deterministic derivation;
+// "ai" when a real LLM lands; "human" for operator-authored revisions in 1.9).
+model ExplanationVersion {
+  id             String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId     String   @map("hot_event_id")
+  summary        String
+  whyItMatters   String   @map("why_it_matters")
+  uncertainties  String
+  source         String // ExplanationSource union value ("template"|"ai"|"human")
+  traceId        String?  @map("trace_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("explanation_versions")
+}
+
+// The public read model for a published hot-event explanation (AD-3, Story 1.8).
+// The publish-orchestrator module is the sole writer. Row existence = currently
+// published: publish upserts the row (projecting the latest ExplanationVersion),
+// takedown deletes it. There is intentionally NO status column — row existence
+// is the visibility contract (same pattern as published_hot_events). FK onDelete:
+// Cascade so a HotEvent deletion cleans up the projection. `explanation_source`
+// records the provenance of the projected version (operator audit), and
+// `generated_at` records when that version was generated (so the public surface
+// can show "解释生成于 <time>"). A row may be ABSENT while the event is
+// published if the explain job has not run yet — the detail page renders an
+// honest degraded state in that case (never fabricates an explanation).
+model PublishedHotEventExplanation {
+  hotEventId          String   @id @map("hot_event_id")
+  summary             String
+  whyItMatters        String   @map("why_it_matters")
+  uncertainties       String
+  explanationSource   String   @map("explanation_source") // ExplanationSource union value
+  generatedAt         DateTime @map("generated_at")
+  traceId             String?  @map("trace_id")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@map("published_hot_event_explanations")
+}
+
+// The public read model for a published hot-event evidence timeline (AD-3,
+// Story 1.8). The publish-orchestrator module is the sole writer. Each row is
+// ONE evidence record projected from hot_event_evidence → evidence_records →
+// evidence_sources at publish time (so the public detail page NEVER reads those
+// raw tables — AD-3). Rows are deleted on takedown. FK onDelete: Cascade so a
+// HotEvent deletion cleans up the projection.
+//
+// `link_status` is derived from the evidence record's url at projection time:
+// url present → "available", url missing/empty → "unavailable". A row is NEVER
+// silently dropped for a missing link — the detail page renders an "无原始链接"
+// badge so the reader sees the source name/time/summary even without a working
+// link (AC2: dead links keep the record with a clearly marked status). Active
+// HTTP liveness probing / archive snapshots are a separate concern (deferred).
+// `position` is the chronological render order (publishedAt ASC, nulls last),
+// assigned at projection time so the public read is a single orderBy position.
+model PublishedHotEventEvidence {
+  id           String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId   String   @map("hot_event_id")
+  sourceName   String   @map("source_name")
+  url          String?
+  summary      String?
+  publishedAt  DateTime? @map("published_at")
+  linkStatus   String   @map("link_status") // EvidenceLinkStatus union value ("available"|"unavailable")
+  position     Int
+  traceId      String?  @map("trace_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@map("published_hot_event_evidence")
 }

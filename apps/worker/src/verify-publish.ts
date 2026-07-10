@@ -25,8 +25,10 @@
 import {
   clusterEvents,
   decideReview,
+  generateExplanation,
   getCandidateDetail,
   getPrisma,
+  getPublishedHotEventDetail,
   listPendingCandidates,
   listPublishedHotEvents,
   newTraceId,
@@ -70,26 +72,40 @@ async function main(): Promise<void> {
       },
     });
 
-    // Two events so we can approve one and reject another.
+    // Two events so we can approve one and reject another. The 降准 cluster gets
+    // TWO records (a short title + its long superset, so overlap-coefficient =
+    // 1.0 merges them; one with a url, one WITHOUT) so the Story 1.8 detail-
+    // projection assertion can exercise both linkStatus paths (available +
+    // unavailable) and the evidence row count = member count.
+    await seedRecord(prisma, source.id, {
+      title: "央行降准",
+      summary: "央行宣布降准",
+      url: "https://verify.test/降准-1",
+      publishedAt: new Date(BASE_MS),
+    });
     await seedRecord(prisma, source.id, {
       title: "央行宣布降准0.5个百分点",
-      summary: "央行宣布降准",
-      publishedAt: new Date(BASE_MS),
+      summary: "本次降准为全面降准",
+      url: null, // missing url → linkStatus="unavailable" in the projection
+      publishedAt: new Date(BASE_MS + 1 * HOUR),
     });
     await seedRecord(prisma, source.id, {
       title: "美股大跌三大股指重挫",
       summary: "美股暴跌",
-      publishedAt: new Date(BASE_MS + 1 * HOUR),
+      url: "https://verify.test/美股",
+      publishedAt: new Date(BASE_MS + 2 * HOUR),
     });
 
     // Capture baseline row counts for write-isolation assertion.
     const tablesBefore = await ownedTableRowCounts(prisma);
 
-    // Cluster: produces 2 candidates (different-event titles, no overlap).
+    // Cluster: produces 2 candidates. The 降准 pair merges into one candidate
+    // (overlap coefficient >= threshold, within 72h window) with 2 links; the
+    // 美股 record forms its own with 1 link.
     const clusterTrace = newTraceId();
     const clusterResult = await clusterEvents({ prisma, traceId: clusterTrace });
     assertions.push({
-      name: "seed cluster: 2 candidates produced from 2 distinct-event records",
+      name: "seed cluster: 2 candidates produced (降准 merged 2 records, 美股 separate)",
       ok: clusterResult.newCandidates === 2,
       detail: `newCandidates=${clusterResult.newCandidates}`,
     });
@@ -102,14 +118,33 @@ async function main(): Promise<void> {
       detail: `${pending.length} candidates`,
     });
     assertions.push({
-      name: "AC1 each pending candidate has evidenceCount=1 and status candidate",
-      ok: pending.every((c) => c.evidenceCount === 1) &&
-          pending.every((c) => pending.find((p) => p.id === c.id) !== undefined),
+      name: "AC1 each pending candidate has its evidence count (降准=2, 美股=1)",
+      ok: pending.find((c) => c.title.includes("降准"))!.evidenceCount === 2 &&
+          pending.find((c) => c.title.includes("美股"))!.evidenceCount === 1,
       detail: pending.map((c) => `${c.title.slice(0, 8)}…(${c.evidenceCount})`).join(", "),
     });
 
     const approvedCandidate = pending.find((c) => c.title.includes("降准"))!;
     const rejectedCandidate = pending.find((c) => c.title.includes("美股"))!;
+
+    // --- Story 1.8: generate an explanation for the to-be-approved candidate --
+    // BEFORE approve. The publish projection reads the latest ExplanationVersion
+    // and surfaces it into published_hot_event_explanations. Generating pre-
+    // publish mirrors how a real pipeline would run (explain job → then approve).
+    const explainTrace = newTraceId();
+    const explainResult = await generateExplanation({
+      prisma,
+      traceId: explainTrace,
+      hotEventId: approvedCandidate.id,
+    });
+    assertions.push({
+      name: "1.8 pre-publish: generateExplanation produced a version (three partitions non-empty)",
+      ok: explainResult !== null &&
+          explainResult.summary.trim() !== "" &&
+          explainResult.whyItMatters.trim() !== "" &&
+          explainResult.uncertainties.trim() !== "",
+      detail: explainResult === null ? "(null)" : `source=${explainResult.source}`,
+    });
 
     // --- AC2: approve candidate → published + read model row ------------------
     const approveTrace = newTraceId();
@@ -168,9 +203,9 @@ async function main(): Promise<void> {
       where: { hotEventId: approvedCandidate.id },
     });
     assertions.push({
-      name: "AC2 approve: published_hot_events row exists (evidenceCount=1, title copied)",
+      name: "AC2 approve: published_hot_events row exists (evidenceCount=2, title copied)",
       ok: publishedRow !== null &&
-          publishedRow.evidenceCount === 1 &&
+          publishedRow.evidenceCount === 2 &&
           publishedRow.title === approvedCandidate.title,
       detail: publishedRow ? `evidenceCount=${publishedRow.evidenceCount}` : "no row",
     });
@@ -184,11 +219,102 @@ async function main(): Promise<void> {
       name: "1.7 public read: listPublishedHotEvents returns the approved row",
       ok: approvedInList !== undefined &&
           approvedInList.title === approvedCandidate.title &&
-          approvedInList.evidenceCount === 1 &&
+          approvedInList.evidenceCount === 2 &&
           approvedInList.latestEvidenceAt.getTime() === publishedRow!.latestEvidenceAt.getTime(),
       detail: approvedInList
         ? `evidenceCount=${approvedInList.evidenceCount}, latest=${approvedInList.latestEvidenceAt.toISOString()}`
         : "approved row missing from list",
+    });
+
+    // --- Story 1.8 public detail: getPublishedHotEventDetail projects the 3 read models ---
+    // The detail read query assembles summary + explanation + evidence from the
+    // three published_* tables (AD-3: never reads hot_events/evidence_records/
+    // explanation_versions). Must surface the explanation generated pre-publish
+    // (three partitions), the evidence timeline (2 rows = member count), and the
+    // correct link_status derivation (one available + one unavailable).
+    const detail = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: approvedCandidate.id,
+    });
+    assertions.push({
+      name: "1.8 detail: getPublishedHotEventDetail returns non-null for published event",
+      ok: detail !== null &&
+          detail!.hotEventId === approvedCandidate.id &&
+          detail!.title === approvedCandidate.title &&
+          detail!.evidenceCount === 2,
+      detail: detail === null ? "(null)" : `evidenceCount=${detail!.evidenceCount}`,
+    });
+    assertions.push({
+      name: "1.8 detail: explanation projected (three partitions non-empty, source=template)",
+      ok: detail !== null &&
+          detail!.explanation !== null &&
+          detail!.explanation!.summary.trim() !== "" &&
+          detail!.explanation!.whyItMatters.trim() !== "" &&
+          detail!.explanation!.uncertainties.trim() !== "" &&
+          detail!.explanation!.source === "template",
+      detail: detail?.explanation === null ? "(no explanation projected)" : `source=${detail!.explanation!.source}`,
+    });
+    assertions.push({
+      name: "1.8 detail: evidence timeline has 2 rows (member count), ordered by position",
+      ok: detail !== null &&
+          detail!.evidence.length === 2 &&
+          detail!.evidence[0]!.position === 0 &&
+          detail!.evidence[1]!.position === 1,
+      detail: detail ? `${detail.evidence.length} rows` : "(null detail)",
+    });
+    assertions.push({
+      name: "1.8 detail: link_status derived (1 available + 1 unavailable, rows not dropped)",
+      ok: detail !== null &&
+          detail!.evidence.some((e) => e.linkStatus === "available") &&
+          detail!.evidence.some((e) => e.linkStatus === "unavailable"),
+      detail: detail ? detail.evidence.map((e) => `${e.linkStatus}`).join(", ") : "(null detail)",
+    });
+    assertions.push({
+      name: "1.8 detail: each evidence row carries sourceName + summary (not silently empty)",
+      ok: detail !== null &&
+          detail!.evidence.every((e) => e.sourceName === "verify-publish-source") &&
+          detail!.evidence.every((e) => e.summary !== null && e.summary.trim() !== ""),
+      detail: detail ? `sourceName=${detail.evidence[0]!.sourceName}` : "(null detail)",
+    });
+
+    // --- Story 1.8 AD-5: re-projection surfaces the LATEST ExplanationVersion ---
+    // A second generateExplanation appends a new version (append-only, AD-5).
+    // The publish refresh must project the LATEST version (createdAt desc, id
+    // desc tiebreaker) into published_hot_event_explanations — never a stale
+    // earlier version. The derivation is deterministic, so gen1 and gen2 share
+    // the same partition text but differ in createdAt; we assert the projected
+    // generatedAt equals gen2.createdAt (the latest), proving the projection
+    // tracks the newest version. Without this assertion a regression that pinned
+    // the projection to the OLDEST version would ship green (no test read the
+    // projection back after a 2nd append).
+    const gen2 = await generateExplanation({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: approvedCandidate.id,
+    });
+    const { refreshPublishedReadModel } = await import("@aguhot/core");
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: approvedCandidate.id,
+      action: "publish",
+    });
+    const detailAfterGen2 = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: approvedCandidate.id,
+    });
+    assertions.push({
+      name: "1.8 AD-5 re-project: latest ExplanationVersion projected after append (not stale)",
+      ok: gen2 !== null &&
+          detailAfterGen2 !== null &&
+          detailAfterGen2!.explanation !== null &&
+          detailAfterGen2!.explanation!.generatedAt.getTime() === gen2.createdAt.getTime(),
+      detail:
+        gen2 === null || detailAfterGen2?.explanation === null
+          ? "(gen2 or projection null)"
+          : `projected generatedAt=${detailAfterGen2!.explanation!.generatedAt.toISOString()} vs gen2=${gen2.createdAt.toISOString()}`,
     });
 
     // --- AC2: reject candidate → rejected, no read model row -----------------
@@ -269,6 +395,36 @@ async function main(): Promise<void> {
       detail: `${publishedListAfterTakedown.length} rows after takedown`,
     });
 
+    // --- Story 1.8 detail read: takedown clears all 3 published_* tables ---
+    // After takedown, getPublishedHotEventDetail returns null (no summary row →
+    // 404 on the detail page, AD-8 unpublished id does not leak). All three
+    // published_* read models must be clean for the hotEventId (row-gone =
+    // public-invisible across summary + explanation + evidence uniformly).
+    const detailAfterTakedown = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: approvedCandidate.id,
+    });
+    assertions.push({
+      name: "1.8 detail: getPublishedHotEventDetail returns null after takedown (no leak)",
+      ok: detailAfterTakedown === null,
+    });
+    const explanationRowAfterTakedown = await prisma.publishedHotEventExplanation.findUnique({
+      where: { hotEventId: approvedCandidate.id },
+    });
+    const evidenceRowsAfterTakedown = await prisma.publishedHotEventEvidence.count({
+      where: { hotEventId: approvedCandidate.id },
+    });
+    assertions.push({
+      name: "1.8 detail: takedown cleared published_hot_event_explanations (no stale row)",
+      ok: explanationRowAfterTakedown === null,
+    });
+    assertions.push({
+      name: "1.8 detail: takedown cleared published_hot_event_evidence (0 rows)",
+      ok: evidenceRowsAfterTakedown === 0,
+      detail: `${evidenceRowsAfterTakedown} rows`,
+    });
+
     const takenDownEvent = await prisma.hotEvent.findUniqueOrThrow({
       where: { id: approvedCandidate.id },
       select: { publicationStatus: true },
@@ -333,6 +489,7 @@ async function main(): Promise<void> {
           const rFresh = await seedRecord(prisma, source.id, {
             title: "债券收益率上行",
             summary: "债券",
+            url: "https://verify.test/债券",
             publishedAt: new Date(BASE_MS + 5 * HOUR),
           });
           void rFresh;
@@ -437,30 +594,30 @@ async function main(): Promise<void> {
     });
 
     // --- Audit chain queryable via getCandidateDetail -------------------------
-    const detail = await getCandidateDetail({
+    const candidateDetail = await getCandidateDetail({
       prisma,
       traceId: newTraceId(),
       hotEventId: approvedCandidate.id,
     });
     assertions.push({
       name: "audit chain: getCandidateDetail returns decisions ascending (approve, takedown)",
-      ok: detail.decisions.length >= 2 &&
-          detail.decisions.some((d) => d.type === "review" && d.outcome === "approve") &&
-          detail.decisions.some((d) => d.type === "review" && d.outcome === "takedown") &&
-          detail.decisions.some((d) => d.type === "publication" && d.fromStatus === "candidate" && d.toStatus === "published") &&
-          detail.decisions.some((d) => d.type === "publication" && d.fromStatus === "published" && d.toStatus === "taken_down"),
-      detail: `${detail.decisions.length} decisions`,
+      ok: candidateDetail.decisions.length >= 2 &&
+          candidateDetail.decisions.some((d) => d.type === "review" && d.outcome === "approve") &&
+          candidateDetail.decisions.some((d) => d.type === "review" && d.outcome === "takedown") &&
+          candidateDetail.decisions.some((d) => d.type === "publication" && d.fromStatus === "candidate" && d.toStatus === "published") &&
+          candidateDetail.decisions.some((d) => d.type === "publication" && d.fromStatus === "published" && d.toStatus === "taken_down"),
+      detail: `${candidateDetail.decisions.length} decisions`,
     });
     assertions.push({
       name: "audit chain: decisions sorted ascending by createdAt",
-      ok: isSortedAsc(detail.decisions.map((d) => d.createdAt.getTime())),
+      ok: isSortedAsc(candidateDetail.decisions.map((d) => d.createdAt.getTime())),
     });
     assertions.push({
-      name: "detail: evidence list populated (sourceName, title, url)",
-      ok: detail.evidence.length >= 1 &&
-          detail.evidence.every((e) => e.sourceName === "verify-publish-source") &&
-          detail.evidence.every((e) => e.title !== null || e.summary !== null),
-      detail: `${detail.evidence.length} evidence items`,
+      name: "candidate detail: evidence list populated (sourceName, title, url)",
+      ok: candidateDetail.evidence.length >= 1 &&
+          candidateDetail.evidence.every((e) => e.sourceName === "verify-publish-source") &&
+          candidateDetail.evidence.every((e) => e.title !== null || e.summary !== null),
+      detail: `${candidateDetail.evidence.length} evidence items`,
     });
   } finally {
     await cleanup(prisma);
@@ -473,9 +630,13 @@ async function main(): Promise<void> {
 // --- seeding / cleanup helpers ----------------------------------------------
 
 async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
-  // Order matters for FK constraints. published_hot_events + review/publication
-  // decisions reference hot_events; hot_event_evidence references both.
+  // Order matters for FK constraints. The published_* read models +
+  // explanation_versions + review/publication decisions reference hot_events;
+  // hot_event_evidence references both hot_events and evidence_records.
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
   await prisma.publishedHotEvent.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
   await prisma.publicationDecision.deleteMany({});
   await prisma.reviewDecision.deleteMany({});
   await prisma.hotEventEvidence.deleteMany({});
@@ -487,7 +648,7 @@ async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
 async function seedRecord(
   prisma: ReturnType<typeof getPrisma>,
   sourceId: string,
-  data: { title: string; summary: string; publishedAt: Date },
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
 ): Promise<{ id: string; title: string }> {
   const { createHash, randomUUID } = await import("node:crypto");
   const salt = randomUUID();
@@ -497,7 +658,7 @@ async function seedRecord(
     data: {
       id: newTraceId(),
       sourceId,
-      url: `https://verify.test/${salt}`,
+      url: data.url,
       title: data.title,
       summary: data.summary,
       publishedAt: data.publishedAt,

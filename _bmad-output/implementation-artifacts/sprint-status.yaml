@@ -56,7 +56,7 @@ development_status:
   1-5-candidate-hot-event-clustering: done
   1-6-review-queue-and-publication-gate: backlog
   1-7-public-hot-event-feed: backlog
-  1-8-hot-event-detail-and-evidence-timeline: backlog
+  1-8-hot-event-detail-and-evidence-timeline: done
   1-9-published-event-copy-and-tag-corrections: backlog
   1-10-published-event-merge-split-and-unpublish: backlog
   epic-1-retrospective: optional

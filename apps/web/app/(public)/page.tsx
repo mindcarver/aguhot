@@ -81,6 +81,7 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
               {visible.map((e) => (
                 <EventCard
                   key={e.hotEventId}
+                  hotEventId={e.hotEventId}
                   title={e.title}
                   evidenceCount={e.evidenceCount}
                   latestEvidenceAt={e.latestEvidenceAt}

@@ -1,17 +1,25 @@
 /**
  * publish-orchestrator module barrel.
  *
- * AD-3 single write-owner of the published_hot_events read model. Exposes the
- * read-model refresh command consumed by review-workflow's decideReview. The
+ * AD-3 single write-owner of the published read models: published_hot_events
+ * (Story 1.6) + published_hot_event_explanations + published_hot_event_evidence
+ * (Story 1.8). Exposes the read-model refresh command consumed by review-
+ * workflow's decideReview, plus the public read queries (feed + detail). The
  * Prisma client lives one level up and is re-exported from the package barrel.
  *
  * This module never writes hot_events, review_decisions, publication_decisions,
- * or any other module's aggregate — only published_hot_events.
+ * explanation_versions, or any other module's aggregate — only the three
+ * published_* read models.
  */
 
-export { refreshPublishedReadModel, listPublishedHotEvents } from "./publish-service.js";
+export { refreshPublishedReadModel, listPublishedHotEvents, getPublishedHotEventDetail } from "./publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./publish-service.js";
 export type {
   ListPublishedHotEventsOptions,
   PublishedHotEventSummary,
+  GetPublishedHotEventDetailOptions,
+  PublishedHotEventDetail,
+  PublishedEvidenceRow,
+  EvidenceLinkStatus,
+  EvidenceLinkStatusType,
 } from "./types.js";
