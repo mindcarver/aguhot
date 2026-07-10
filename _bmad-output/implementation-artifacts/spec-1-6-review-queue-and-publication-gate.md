@@ -2,8 +2,9 @@
 title: '运营复核队列与发布闸门 (1.6)'
 type: 'feature'
 created: '2026-07-10'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '7f8abe123f75310f8c8db0512fecca44ea091236'
+final_revision: '8724e9a31c6831b7b55f49eadfdcb6a6503ca122'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

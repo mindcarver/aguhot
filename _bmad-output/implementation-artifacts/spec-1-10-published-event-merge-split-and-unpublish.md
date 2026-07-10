@@ -2,8 +2,9 @@
 title: '已发布热点的合并、拆分与下线重发布 (1.10)'
 type: 'feature'
 created: '2026-07-10'
-status: 'in-progress'
+status: 'done'
 baseline_revision: 'e130483c00e48f821cfe0adc56348a6b0793d096'
+final_revision: '7d85b656c8ee39dce4640c4f9e4b8c20644a775e'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

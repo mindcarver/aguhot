@@ -2,8 +2,9 @@
 title: '公开热点事件流 (1.7)'
 type: 'feature'
 created: '2026-07-10'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '8724e9a31c6831b7b55f49eadfdcb6a6503ca122'
+final_revision: 'a3afebc46e3c871261d3c3d4d01e867c1b7570b5'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

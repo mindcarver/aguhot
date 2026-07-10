@@ -2,8 +2,9 @@
 title: '已发布热点的文案与标签修正 (1.9)'
 type: 'feature'
 created: '2026-07-10'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '87cddf0c5e5becb566dd2006c032f671419bf9aa'
+final_revision: 'e130483c00e48f821cfe0adc56348a6b0793d096'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

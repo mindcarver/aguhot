@@ -2,8 +2,9 @@
 title: '市场反应信号生成与展示 (2.1)'
 type: 'feature'
 created: '2026-07-10'
-status: 'in-review'
+status: 'done'
 baseline_revision: '7d85b656c8ee39dce4640c4f9e4b8c20644a775e'
+final_revision: 'a2842ff60732b934702f6b3c0040cb2ab5a09883'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
