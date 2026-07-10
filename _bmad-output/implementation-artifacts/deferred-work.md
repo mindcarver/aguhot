@@ -335,4 +335,94 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
   summary: `EventAssociationSet` 无复合索引 `(hotEventId, createdAt DESC)`——投影取最新走 hotEventId 索引 + 排序，scale 后是 perf cliff
   evidence: Story 2-2 step-04 adversarial 审计：`EventAssociationSet` 有 `@@index([hotEventId])` + `@@index([createdAt])`（沿用 2-1 MarketReactionSnapshot 同形），但投影热路径 `findFirst({ where:{hotEventId}, orderBy:[{createdAt:"desc"},{id:"desc"}] })` 需 `(hotEventId, createdAt DESC, id DESC)` 才能索引服务；当前是 hotEventId 索引过滤 + 排序。每次 publish/republish 触发投影（最频繁的写路径操作）。V1 体量极小故无延迟；与 2-1 同款 scale ceiling。
-  resolution: 已于 Story 2.2 登记为 perf defer——待 EventAssociationSet 体量增长致投影有可测延迟时，加复合索引 `@@index([hotEventId, createdAt(sort: Desc), id(sort: Desc)])`（同步评估 2-1 MarketReactionSnapshot）。
+  resolution: 已于 Story 2.2 登记为 perf defer——待 EventAssociationSet 体量增长致投影有可测延迟时，加复合索引 `@@index([hotEventId, createdAt(sort: Desc), id(sort: Desc)])`（同步评估 2-1 MarketReactionSnapshot + 2-3 EventThemeSet）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 真实主题知识源 / 映射库 / NER / LLM provider + SDK 接入未落地——V1 `StubThemeAdapter` 仅 verify/e2e 用、不接 worker/prod
+  evidence: Story 2.3 的 `ThemeAdapter` 端口（`packages/core/src/modules/theme-linking/theme-adapter.ts`）已落地（AD-7），但 V1 无真实主题知识源（主题映射库、NER、LLM 抽取——采购 defer）。`StubThemeAdapter`（`packages/core/src/modules/theme-linking/stub-theme-adapter.ts`）返回确定性 fixture（slug=chip-supply-chain / label=芯片供应链，mappingBasis="knowledge_base:v1"），仅 verify/e2e 直调 `generateThemes` 走通 happy path；fixture 主题上公开页而无真实映射依据会误导读者（违反 AC2「禁止随意映射」+ NFR「absence as absence」），故 prod 不接线。theme-backfill worker 运行时 adapter 解析为 `undefined`（`// ponytail: real provider wired when procured`）→ `generateThemes` 返回 null → prod 诚实降级（AC3）。真实知识源落地时 worker 解析它、`EventThemeSet.source` 由 "template" 翻为 provider id。
+  resolution: 已于 Story 2.3 登记为 defer——真实主题知识源采购后，在 worker 装配层解析 concrete `ThemeAdapter`（`apps/worker/src/queues/theme-backfill-queue.ts` 的 `adapter` 变量改从 provider 构造），`source` 翻为 provider id，详情主题 section + /topics 页主题自动流入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: theme-backfill worker cron / 自动编排 / publish→theme 自动触发 / job 链式未落地——worker V1 仅占位（adapter 缺失→skip），触发/cron defer
+  evidence: Story 2.3 的 `registerThemeBackfillWorker`（`apps/worker/src/queues/theme-backfill-queue.ts`）查询 `publicationStatus:"published"` 且 `eventThemeSets:{none:{}}` 的事件，但 V1 运行时 adapter 解析为 `undefined` → 整批 skip → `{generated:0, skipped}`。worker 无 BullMQ repeat job / cron / job 链式触发（沿用 1-5/1-8/2-1「job 独立、幂等、chaining/cron 未落地」）。`enqueueThemeBackfill` 存在但无调用方（无 publish→theme 钩子、无定时 cron、无运营命令）。这意味着 prod 永远无主题生成（除非手动 enqueue 或 verify/seed 直调）——V1 诚实下限（无真实知识源时降级是正确行为），但触发缺口是功能 defer。
+  resolution: 已于 Story 2.3 登记为 defer——真实知识源 + 运营负载出现时，引入 publish→theme 钩子、BullMQ repeat job（`Queue.upsertJobScheduler`）或运营命令触发 `enqueueThemeBackfill`。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 主题成员移除 / 版本化 / 回滚未做——V1 主题成员只追加（append-only set 取最新），移除语义/成员版本化 defer
+  evidence: Story 2.3 `EventThemeSet` 是 append-only（AD-5，每次 `generateThemes` append 一行、永不 update/delete），公开投影取最新行。无「移除某事件的某主题成员」语义（运营修订主题成员身份归未来 taxonomy 治理）。成员版本化（记录哪个成员何时加入/移除主题）defer。V1 主题成员身份 = 最新 set 的 items。
+  resolution: 已于 Story 2.3 登记为 defer——待真实运营需要成员移除/版本化时，先定义 taxonomy + 成员生命周期语义，再扩 `EventThemeSet` 或引入成员变更记录。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 主题合并 / 拆分 / 重命名 / taxonomy 治理未做——V1 slug/label 存 per-event Json，无独立 Theme 目录表
+  evidence: Story 2.3 选 per-event append-only `items Json` set（镜像 2.2 关联）而非规范化 `Theme` 目录表 + 成员表（spec Design Notes 显式辩护）。`/topics` 目录由 memberships 反推 distinct（JS dedup by slug），无独立 Theme 目录可合并/拆分/重命名。两个同义 slug（如 "chip-supply" vs "chip-supply-chain"）无合并机制；slug 改名无重定向。taxonomy 治理（主题本体、同义词、层级）defer。
+  resolution: 已于 Story 2.3 登记为 taxonomy 治理 defer——待真实运营需要主题合并/拆分/重命名/同义词时，引入规范化 Theme 目录表 + 成员表（schema migration + 投影/读取扩展 + 运营 taxonomy UI）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 运营 curated 主题修订 UI + taxonomy 未做——AC2 禁止无映射依据的手填主题，运营主题需先有 taxonomy + 映射依据机制
+  evidence: Story 2.3 AC2「主题成员身份必须基于明确映射依据」。运营手填主题若无 taxonomy + 映射依据校验会违反 AC2。`ThemeRef.mappingBasis` 数据级强制（`generateThemes` 校验每项非空、缺则抛错）已落地，但运营 UI（选择/编辑主题成员、绑定映射依据、taxonomy 下拉）未建。需先定义 taxonomy（主题本体、同义词、层级），再引入运营 curated 主题写点。
+  resolution: 已于 Story 2.3 登记为 defer——待真实运营需要人工 curated 主题时，先定义 taxonomy + 映射依据机制，再建运营主题 UI（source="human:curated"，mappingBasis 强制）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 跨页返回路径上下文恢复（scroll 位 / filter 态 / 阅读上下文）归 2.5——本 story 仅做基本导航（详情→主题链、主题→详情链、主题页「← 返回」链 + 浏览器原生 back，深度一层）
+  evidence: Story 2.3 `/topics/[slug]` 提供「← 返回主题目录」链回 `/topics`，详情主题 section 链 `/topics/{slug}`，主题页成员链 `/events/{id}`。但从详情进入主题页再返回详情时，filter 态 + scroll 位不恢复（浏览器原生 back 回退到主题页顶部，非原 scroll 位）。完整 UX-DR12（返回恢复 filter 态 + scroll 位）是 2.5 闭环 capstone 职责，2.3 提供主题页/跳转 surface 但不独占返回契约。epic-2-context 明示「Story 2.3 depends on Story 2.5's return-path contract」。
+  resolution: 已于 Story 2.3 登记为 2.5 范围——Epic 2.5 跨首页/主题/日报/详情统一返回契约（referrer 或 return-to query param + scroll/filter 恢复）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 主题页排序 toggle / 分页未做——V1 固定 latestEvidenceAt 升序（连续性时间序列），无降序/分页
+  evidence: Story 2.3 `/topics/[slug]` 固定按 `latestEvidenceAt` 升序（earliest→latest，epic「continuity reads as a sequence」）。首页 feed 按 hotness（evidenceCount/latestEvidenceAt desc）——两者目的不同故排序策略分离。主题页无降序 toggle、无分页（V1 单主题成员数极小）。降序/排序 toggle / 分页 defer。
+  resolution: 已于 Story 2.3 登记为 defer——待真实主题成员数增长至单页过长时，加排序 toggle（升/降）+ 分页（或无限滚动）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 主题目录 `/topics` distinct 全表读 scale ceiling——`listPublishedThemeMemberships` 返回全部行 + web 层内存 dedup，已发布集增长后有瓶颈
+  evidence: Story 2.3 `listPublishedThemeMemberships`（`publish-service.ts`）做 `prisma.publishedHotEventTheme.findMany`（无 where），返回全部已发布主题成员行（仅 hotEventId + items），web 层 `/topics` 页 JS dedup by slug 推导 distinct 主题集（沿用 2.2 `listPublishedAssociations` + 1.7 `filterByWindow` 全表读模式）。V1 已发布集体量极小；增长后（数千+行）全表读 + 内存 dedup 会成瓶颈，需改 SQL distinct（Json items 展开 + DISTINCT slug）或规范化 Theme 目录表 + WHERE 下推。
+  resolution: 已于 Story 2.3 登记为 scale ceiling——待已发布集体量增长至 /topics 目录有可测延迟时，将 distinct 下推为 SQL（或引入 Theme 目录表 + 索引）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: `items` Json 列的查询性上限（同 2.2 关联）——当前整体读、永不按单项 SQL 查询；未来按 slug 聚合或索引需重构
+  evidence: Story 2.3 `EventThemeSet.items` / `PublishedHotEventTheme.items` 是 Prisma `Json` 列存 `ThemeRef[]`。整体读（详情主题 section 渲染、/topics 目录内存 dedup、/topics/[slug] 内存过滤），永不按单项做 SQL 查询。未来若需按 slug 做 SQL 聚合或单项更新，需重构为规范化子表。沿用 2.2 关联 items Json 决策。
+  resolution: 已于 Story 2.3 登记为查询性上限——待真实需要按 slug SQL 聚合或单项更新时，重构为子表（schema migration + 投影/读取扩展）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: `StubThemeAdapter` 仅测试、非 prod 的诚实下限——fixture 主题上公开页会误导读者，故 prod 降级、stub 仅 verify/e2e
+  evidence: Story 2.3 的 `StubThemeAdapter`（`packages/core/src/modules/theme-linking/stub-theme-adapter.ts`）返回确定性 fixture（chip-supply-chain / 芯片供应链 固定值）。fixture 主题上公开页而无真实映射依据会违反 AC2 + NFR。故 V1 theme-backfill worker 运行时 adapter 解析为 none、prod 诚实降级；stub 仅 verify/e2e 直调 `generateThemes` 走通 happy path。`apps/worker` 不 import stub。
+  resolution: 已于 Story 2.3 登记为诚实下限——真实知识源落地前，prod 永远降级（AC3）；stub 永远仅测试，不上公开面。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: theme-backfill worker 为未测运行时——镜像 market-reaction/explain 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
+  evidence: Story 2.3 的 `verify:themes`（`apps/worker/src/verify-themes.ts`）直调 `generateThemes` + `refreshPublishedReadModel`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerThemeBackfillWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、per-event try/catch 隔离、shutdown 关闭均无集成测试覆盖（镜像 market-reaction/explain/event-cluster 同款未测运行时 defer）。
+  resolution: 已于 Story 2.3 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB set/projection）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 历史相似事件相似度判断未做——主题成员关系是显式映射（adapter 产出），非相似度推理；相似度推理 defer
+  evidence: Story 2.3 主题成员身份由 `ThemeAdapter` 显式产出（映射库/NER/LLM），非从事件文本/证据做相似度推理。epic「absence as absence, never fabricated」+「Theme continuity must be honest: when evidence is insufficient to relate an event to a theme ... shows nothing rather than fabricating "similar history."」——「similar history」相似度推理是独立 concern（需相似度模型/embedding），非主题成员关系。相似度判断 defer。
+  resolution: 已于 Story 2.3 登记为相似度推理 defer——待真实需要「历史相似事件」推荐时，引入相似度模型（embedding/相似度计算）作为独立 concern，与主题成员关系分离。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 主题实时推送（WebSocket/SSE）未做——V1 靠读模型刷新 + 主动轮询，主题实时推送 epic defer
+  evidence: Story 2.3 `/topics` 目录与 `/topics/[slug]` 页是 force-dynamic 请求期读读模型，无 WebSocket/SSE 实时推送。主题成员更新（新事件加入主题）需用户刷新页面才可见。epic-2-context + 架构 spine 把 WebSocket/SSE 实时推送列为 defer（V1 靠读模型刷新 + 主动轮询）。
+  resolution: 已于 Story 2.3 登记为 epic defer——WebSocket/SSE 实时推送随 epic 整体 defer，待实时性需求出现时引入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: projectThemes（及所有 published_* 投影）read→write 非原子——seed/verify 用 root prisma（非事务）路径下，并发 append 可投影到非最新 set（同 2.2 关联同型 defer）
+  evidence: Story 2.3 `projectThemes`（`publish-service.ts`）先 `findFirst` 最新 `EventThemeSet` 再 `upsert`/`deleteMany`，两步非原子。经 `decideReview` 调用时在事务内（原子）；但 verify/seed（`refreshPublishedReadModel` 直传 root prisma）与未来 theme-backfill worker 触发路径是两条 auto-commit 语句，若两次 `generateThemes`+`refresh` 在读与写之间交错，可投影到非最新 set。此为所有 published_* 投影（projectExplanation/projectMarketReaction/projectEvidenceTimeline/projectAssociations/projectThemes）共有的设计性质（共享投影模式），非 2.3 引入。V1 无并发触发（theme-backfill worker adapter 缺失→skip、decideReview 运营门控非并发）故不可达。
+  resolution: 已于 Story 2.3 登记为并发 defer（同 2.2）——待引入并发 worker 触发投影时，把 read+write 包进 `prisma.$transaction`（或 `SELECT ... FOR UPDATE`），覆盖所有 published_* 投影。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: `EventThemeSet` 无复合索引 `(hotEventId, createdAt DESC)`——投影取最新走 hotEventId 索引 + 排序，scale 后是 perf cliff（同 2.1/2.2 同型 defer）
+  evidence: Story 2.3 `EventThemeSet` 有 `@@index([hotEventId])` + `@@index([createdAt])`（沿用 2.1 MarketReactionSnapshot + 2.2 EventAssociationSet 同形），但投影热路径 `findFirst({ where:{hotEventId}, orderBy:[{createdAt:"desc"},{id:"desc"}] })` 需 `(hotEventId, createdAt DESC, id DESC)` 才能索引服务。每次 publish/republish 触发投影。V1 体量极小故无延迟。
+  resolution: 已于 Story 2.3 登记为 perf defer——待 EventThemeSet 体量增长致投影有可测延迟时，加复合索引（同步评估 2.1 MarketReactionSnapshot + 2.2 EventAssociationSet）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: theme-backfill 的 eligible 查询 `eventThemeSets:{none:{}}` 使已有 set 的事件永不回填——adapter 升级（v2 映射库）后旧事件不会被重新派生；已有 set 但投影缺失的事件也无修复路径
+  evidence: Story 2.3 step-04 adversarial + edge-case 审计：`registerThemeBackfillWorker` 的 eligible 过滤为 `publicationStatus:"published"` 且 `eventThemeSets:{none:{}}`（镜像 2.1 market-reaction 的 `snapshots:{none:{}}`）。一旦某事件有任意 `EventThemeSet`（含降级空集），`none:{}` 永远排除它——即使未来 adapter 升级产出更好/更多主题成员，worker 也不重处理。另：投影缺失（refresh 失败）但 set 已存在的事件，同样因 `none:{}` 不被 worker 修复，永久停留降级态。V1 worker adapter 缺失→skip 故不可达；真实 adapter + 触发落地后这是真实回填缺口。
+  resolution: 已于 Story 2.3 登记为回填 defer——真实 adapter 落地并需要重派生时，引入「按 adapter 版本/source 判定 set 是否过期」的 eligible 查询，或独立的投影修复路径（set 存在但投影缺失→重投影），区别于「首次生成」的 `none:{}` 过滤。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: `normalizeThemeItems` 按 slug dedup 时静默丢弃同 slug 项的 label/mappingBasis——无 observability（同 2.2 关联 dedup observability defer）
+  evidence: Story 2.3 step-04 edge-case 审计：`normalizeThemeItems`（`theme-service.ts`）按 slug dedup、保序，第二个同 slug 项的 label/mappingBasis 差异被静默丢弃（无日志/计数）。沿用 2.2 关联 normalizeItems 的静默 dedup 行为。V1 stub 每事件返回单一 slug 故不可达；真实 adapter 若对一事件返回同 slug 的多项（含不一致 label/basis），丢弃无任何记录——AC2 provenance 可观测性缺口（运营不知有冲突被吞）。
+  resolution: 已于 Story 2.3 登记为 observability defer（同 2.2）——dedup 丢弃同 slug 冲突项时加结构化日志/计数（traceId + slug + 被丢弃项），与既有 generators 降级路径日志一并补。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
+  summary: 主题页 `/topics/[slug]` 成员行仅显 title + latestEvidenceAt + 来源数，未显 source name / 原始链接——完整 traceability 经成员链「一跳」到详情页才有
+  evidence: Story 2.3 step-04 intent-alignment 审计：epic-2-context「Public content surfaced via daily/theme paths must retain evidence source, source name, time, and original link; traceability propagates into every Epic 2 surface」。主题页成员行渲染 title + `latestEvidenceAt` + 来源数（evidenceCount），但不显 source name 与原始链接——完整证据 traceability 经成员链 `/events/{id}` 跳到详情页（证据时间线）才有。审计判定「navigational-index 读法下合规」（主题页是导航索引、traceability 一跳可达），但「每条主题路径自带 source name/link」的字面读法未满足。
+  resolution: 已于 Story 2.3 登记为 traceability 丰富化 defer——待真实主题页需要就地核验来源时，在成员行加 source name + 原始链接（读 `published_hot_event_evidence` 首条/代表性来源），避免读者必须跳详情才能溯源。

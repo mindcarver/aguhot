@@ -162,6 +162,13 @@ export interface PublishedHotEventDetail {
    * The detail page renders the honest degraded state in that case.
    */
   associations: PublishedHotEventAssociation | null;
+  /**
+   * The theme membership block (Story 2.3). Null when no theme set was
+   * projected (theme-backfill worker resolved no adapter in V1 prod / generation
+   * has not run / takedown cleared the projection). The detail page renders the
+   * honest degraded state ("暂无已确认的主题关联。") in that case.
+   */
+  themes: PublishedHotEventTheme | null;
   evidence: PublishedEvidenceRow[];
 }
 
@@ -246,6 +253,72 @@ export interface PublishedAssociationRow {
  * filter parameter.
  */
 export interface ListPublishedAssociationsOptions {
+  prisma: PrismaClient;
+  traceId: string;
+}
+
+// --- Story 2.3: public theme membership read types ----------------------------
+
+/**
+ * One theme membership reference projected for public read — mirrors the
+ * ThemeRef the theme-linking module stores in the Json `items` column. The
+ * detail page renders each theme as a FilterPill link to
+ * `/topics/{slug}` (FR9, the theme-continuity jump). The /topics directory and
+ * the /topics/[slug] page use the slug as the URL/addressing key and the label
+ * for display (editorial serif title).
+ *
+ *   - slug: NON-EMPTY URL-safe identity (e.g. "chip-supply-chain"). Drives the
+ *     /topics/{slug} route + the directory's distinct-theme set.
+ *   - label: the theme's display identity (e.g. "芯片供应链"). Descriptive,
+ *     never advisory.
+ *   - mappingBasis: NON-EMPTY provenance (e.g. "knowledge_base:v1"). AC2.
+ */
+export interface ThemeRef {
+  slug: string;
+  label: string;
+  mappingBasis: string;
+}
+
+/**
+ * The projected public theme membership block for one published hot event
+ * (Story 2.3). Mirrors published_hot_event_themes. `items` is the Json column
+ * value typed as ThemeRef[].
+ *
+ * Row existence = currently published theme membership (no status column).
+ * Absent when generateThemes has not produced a set (V1 prod: theme-backfill
+ * worker resolves no adapter → never produced) — the detail page shows the
+ * "暂无已确认的主题关联。" degraded state (AC3). Absent does NOT block the
+ * existing summary/explanation/evidence/reaction/associations rendering.
+ */
+export interface PublishedHotEventTheme {
+  items: ThemeRef[];
+  source: string;
+  generatedAt: Date;
+}
+
+/**
+ * One row of listPublishedThemeMemberships — the hotEventId→ThemeRef[] map the
+ * /topics directory and /topics/[slug] page use to derive the distinct-theme
+ * set and filter member events (Story 2.3). The web layer builds a
+ * hotEventId→items map from this and a slug→events reverse index in memory
+ * (mirroring the 2.2 listPublishedAssociations + 1.7 filterByWindow JS-join
+ * pattern; listPublishedHotEvents stays filter-free).
+ */
+export interface PublishedThemeMembershipRow {
+  hotEventId: string;
+  items: ThemeRef[];
+}
+
+/**
+ * Options for listPublishedThemeMemberships. `{ prisma, traceId }` mirrors the
+ * established query pattern. There is deliberately NO filter parameter: the
+ * query returns all published theme-membership rows and the web layer applies
+ * the slug filter + directory distinct-derivation in JS (same design as
+ * listPublishedHotEvents / listPublishedAssociations — V1 scale is tiny,
+ * filtering is a UI concern). ponytail: no pre-embedded consumerless filter
+ * parameter.
+ */
+export interface ListPublishedThemeMembershipsOptions {
   prisma: PrismaClient;
   traceId: string;
 }

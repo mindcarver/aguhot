@@ -127,12 +127,15 @@ export type {
 // Story 1.8 — getPublishedHotEventDetail public detail read + explanation/evidence projection;
 // Story 2.1 — published_hot_event_reactions projection + detail.reaction field;
 // Story 2.2 — published_hot_event_associations projection + detail.associations field +
-// listPublishedAssociations feed-filter query).
+// listPublishedAssociations feed-filter query;
+// Story 2.3 — published_hot_event_themes projection + detail.themes field +
+// listPublishedThemeMemberships theme-page query).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
   getPublishedHotEventDetail,
   listPublishedAssociations,
+  listPublishedThemeMemberships,
 } from "./modules/publish-orchestrator/publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
 export type {
@@ -148,6 +151,10 @@ export type {
   PublishedHotEventAssociation,
   PublishedAssociationRow,
   ListPublishedAssociationsOptions,
+  ThemeRef,
+  PublishedHotEventTheme,
+  PublishedThemeMembershipRow,
+  ListPublishedThemeMembershipsOptions,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
@@ -201,15 +208,24 @@ export type {
 // StubAssociationAdapter test-only + generateAssociations append-only AD-2 +
 // normalizeItems pure derivation with AC2 mappingBasis enforcement; V1 has NO
 // worker — epic lists no association-generation job category — so prod has no
-// trigger and degrades honestly, stub is verify/e2e-only).
+// trigger and degrades honestly, stub is verify/e2e-only.
+// Story 2.3 — ThemeAdapter port + StubThemeAdapter test-only + generateThemes
+// append-only AD-2 + normalizeThemeItems pure derivation with AC2 enforcement;
+// theme-backfill worker resolves no adapter → prod degrades honestly).
 export {
   generateAssociations,
   getLatestAssociationSet,
   normalizeItems,
   StubAssociationAdapter,
   STUB_CONCEPT_LABEL,
+  generateThemes,
+  getLatestThemeSet,
+  normalizeThemeItems,
+  StubThemeAdapter,
+  STUB_THEME_SLUG,
+  STUB_THEME_LABEL,
 } from "./modules/theme-linking/index.js";
-export { AssociationKind, AssociationSource } from "./modules/theme-linking/index.js";
+export { AssociationKind, AssociationSource, ThemeSource } from "./modules/theme-linking/index.js";
 export type {
   AssociationKind as AssociationKindType,
   AssociationSource as AssociationSourceType,
@@ -219,4 +235,11 @@ export type {
   GenerateAssociationsResult,
   GetLatestAssociationSetOptions,
   AssociationSetRecord,
+  ThemeSource as ThemeSourceType,
+  ThemeRef as ThemeLinkingThemeRef,
+  ThemeAdapter,
+  GenerateThemesOptions,
+  GenerateThemesResult,
+  GetLatestThemeSetOptions,
+  ThemeSetRecord,
 } from "./modules/theme-linking/index.js";

@@ -1,0 +1,2963 @@
+=== TRACKED CHANGES (git diff b9fe7f717803bb89434126716550966de2e92bd8) ===
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index cb90ee5..e4a9a10 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -335,4 +335,79 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+ - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+   summary: `EventAssociationSet` 无复合索引 `(hotEventId, createdAt DESC)`——投影取最新走 hotEventId 索引 + 排序，scale 后是 perf cliff
+   evidence: Story 2-2 step-04 adversarial 审计：`EventAssociationSet` 有 `@@index([hotEventId])` + `@@index([createdAt])`（沿用 2-1 MarketReactionSnapshot 同形），但投影热路径 `findFirst({ where:{hotEventId}, orderBy:[{createdAt:"desc"},{id:"desc"}] })` 需 `(hotEventId, createdAt DESC, id DESC)` 才能索引服务；当前是 hotEventId 索引过滤 + 排序。每次 publish/republish 触发投影（最频繁的写路径操作）。V1 体量极小故无延迟；与 2-1 同款 scale ceiling。
+-  resolution: 已于 Story 2.2 登记为 perf defer——待 EventAssociationSet 体量增长致投影有可测延迟时，加复合索引 `@@index([hotEventId, createdAt(sort: Desc), id(sort: Desc)])`（同步评估 2-1 MarketReactionSnapshot）。
++  resolution: 已于 Story 2.2 登记为 perf defer——待 EventAssociationSet 体量增长致投影有可测延迟时，加复合索引 `@@index([hotEventId, createdAt(sort: Desc), id(sort: Desc)])`（同步评估 2-1 MarketReactionSnapshot + 2-3 EventThemeSet）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 真实主题知识源 / 映射库 / NER / LLM provider + SDK 接入未落地——V1 `StubThemeAdapter` 仅 verify/e2e 用、不接 worker/prod
++  evidence: Story 2.3 的 `ThemeAdapter` 端口（`packages/core/src/modules/theme-linking/theme-adapter.ts`）已落地（AD-7），但 V1 无真实主题知识源（主题映射库、NER、LLM 抽取——采购 defer）。`StubThemeAdapter`（`packages/core/src/modules/theme-linking/stub-theme-adapter.ts`）返回确定性 fixture（slug=chip-supply-chain / label=芯片供应链，mappingBasis="knowledge_base:v1"），仅 verify/e2e 直调 `generateThemes` 走通 happy path；fixture 主题上公开页而无真实映射依据会误导读者（违反 AC2「禁止随意映射」+ NFR「absence as absence」），故 prod 不接线。theme-backfill worker 运行时 adapter 解析为 `undefined`（`// ponytail: real provider wired when procured`）→ `generateThemes` 返回 null → prod 诚实降级（AC3）。真实知识源落地时 worker 解析它、`EventThemeSet.source` 由 "template" 翻为 provider id。
++  resolution: 已于 Story 2.3 登记为 defer——真实主题知识源采购后，在 worker 装配层解析 concrete `ThemeAdapter`（`apps/worker/src/queues/theme-backfill-queue.ts` 的 `adapter` 变量改从 provider 构造），`source` 翻为 provider id，详情主题 section + /topics 页主题自动流入。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: theme-backfill worker cron / 自动编排 / publish→theme 自动触发 / job 链式未落地——worker V1 仅占位（adapter 缺失→skip），触发/cron defer
++  evidence: Story 2.3 的 `registerThemeBackfillWorker`（`apps/worker/src/queues/theme-backfill-queue.ts`）查询 `publicationStatus:"published"` 且 `eventThemeSets:{none:{}}` 的事件，但 V1 运行时 adapter 解析为 `undefined` → 整批 skip → `{generated:0, skipped}`。worker 无 BullMQ repeat job / cron / job 链式触发（沿用 1-5/1-8/2-1「job 独立、幂等、chaining/cron 未落地」）。`enqueueThemeBackfill` 存在但无调用方（无 publish→theme 钩子、无定时 cron、无运营命令）。这意味着 prod 永远无主题生成（除非手动 enqueue 或 verify/seed 直调）——V1 诚实下限（无真实知识源时降级是正确行为），但触发缺口是功能 defer。
++  resolution: 已于 Story 2.3 登记为 defer——真实知识源 + 运营负载出现时，引入 publish→theme 钩子、BullMQ repeat job（`Queue.upsertJobScheduler`）或运营命令触发 `enqueueThemeBackfill`。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 主题成员移除 / 版本化 / 回滚未做——V1 主题成员只追加（append-only set 取最新），移除语义/成员版本化 defer
++  evidence: Story 2.3 `EventThemeSet` 是 append-only（AD-5，每次 `generateThemes` append 一行、永不 update/delete），公开投影取最新行。无「移除某事件的某主题成员」语义（运营修订主题成员身份归未来 taxonomy 治理）。成员版本化（记录哪个成员何时加入/移除主题）defer。V1 主题成员身份 = 最新 set 的 items。
++  resolution: 已于 Story 2.3 登记为 defer——待真实运营需要成员移除/版本化时，先定义 taxonomy + 成员生命周期语义，再扩 `EventThemeSet` 或引入成员变更记录。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 主题合并 / 拆分 / 重命名 / taxonomy 治理未做——V1 slug/label 存 per-event Json，无独立 Theme 目录表
++  evidence: Story 2.3 选 per-event append-only `items Json` set（镜像 2.2 关联）而非规范化 `Theme` 目录表 + 成员表（spec Design Notes 显式辩护）。`/topics` 目录由 memberships 反推 distinct（JS dedup by slug），无独立 Theme 目录可合并/拆分/重命名。两个同义 slug（如 "chip-supply" vs "chip-supply-chain"）无合并机制；slug 改名无重定向。taxonomy 治理（主题本体、同义词、层级）defer。
++  resolution: 已于 Story 2.3 登记为 taxonomy 治理 defer——待真实运营需要主题合并/拆分/重命名/同义词时，引入规范化 Theme 目录表 + 成员表（schema migration + 投影/读取扩展 + 运营 taxonomy UI）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 运营 curated 主题修订 UI + taxonomy 未做——AC2 禁止无映射依据的手填主题，运营主题需先有 taxonomy + 映射依据机制
++  evidence: Story 2.3 AC2「主题成员身份必须基于明确映射依据」。运营手填主题若无 taxonomy + 映射依据校验会违反 AC2。`ThemeRef.mappingBasis` 数据级强制（`generateThemes` 校验每项非空、缺则抛错）已落地，但运营 UI（选择/编辑主题成员、绑定映射依据、taxonomy 下拉）未建。需先定义 taxonomy（主题本体、同义词、层级），再引入运营 curated 主题写点。
++  resolution: 已于 Story 2.3 登记为 defer——待真实运营需要人工 curated 主题时，先定义 taxonomy + 映射依据机制，再建运营主题 UI（source="human:curated"，mappingBasis 强制）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 跨页返回路径上下文恢复（scroll 位 / filter 态 / 阅读上下文）归 2.5——本 story 仅做基本导航（详情→主题链、主题→详情链、主题页「← 返回」链 + 浏览器原生 back，深度一层）
++  evidence: Story 2.3 `/topics/[slug]` 提供「← 返回主题目录」链回 `/topics`，详情主题 section 链 `/topics/{slug}`，主题页成员链 `/events/{id}`。但从详情进入主题页再返回详情时，filter 态 + scroll 位不恢复（浏览器原生 back 回退到主题页顶部，非原 scroll 位）。完整 UX-DR12（返回恢复 filter 态 + scroll 位）是 2.5 闭环 capstone 职责，2.3 提供主题页/跳转 surface 但不独占返回契约。epic-2-context 明示「Story 2.3 depends on Story 2.5's return-path contract」。
++  resolution: 已于 Story 2.3 登记为 2.5 范围——Epic 2.5 跨首页/主题/日报/详情统一返回契约（referrer 或 return-to query param + scroll/filter 恢复）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 主题页排序 toggle / 分页未做——V1 固定 latestEvidenceAt 升序（连续性时间序列），无降序/分页
++  evidence: Story 2.3 `/topics/[slug]` 固定按 `latestEvidenceAt` 升序（earliest→latest，epic「continuity reads as a sequence」）。首页 feed 按 hotness（evidenceCount/latestEvidenceAt desc）——两者目的不同故排序策略分离。主题页无降序 toggle、无分页（V1 单主题成员数极小）。降序/排序 toggle / 分页 defer。
++  resolution: 已于 Story 2.3 登记为 defer——待真实主题成员数增长至单页过长时，加排序 toggle（升/降）+ 分页（或无限滚动）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 主题目录 `/topics` distinct 全表读 scale ceiling——`listPublishedThemeMemberships` 返回全部行 + web 层内存 dedup，已发布集增长后有瓶颈
++  evidence: Story 2.3 `listPublishedThemeMemberships`（`publish-service.ts`）做 `prisma.publishedHotEventTheme.findMany`（无 where），返回全部已发布主题成员行（仅 hotEventId + items），web 层 `/topics` 页 JS dedup by slug 推导 distinct 主题集（沿用 2.2 `listPublishedAssociations` + 1.7 `filterByWindow` 全表读模式）。V1 已发布集体量极小；增长后（数千+行）全表读 + 内存 dedup 会成瓶颈，需改 SQL distinct（Json items 展开 + DISTINCT slug）或规范化 Theme 目录表 + WHERE 下推。
++  resolution: 已于 Story 2.3 登记为 scale ceiling——待已发布集体量增长至 /topics 目录有可测延迟时，将 distinct 下推为 SQL（或引入 Theme 目录表 + 索引）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: `items` Json 列的查询性上限（同 2.2 关联）——当前整体读、永不按单项 SQL 查询；未来按 slug 聚合或索引需重构
++  evidence: Story 2.3 `EventThemeSet.items` / `PublishedHotEventTheme.items` 是 Prisma `Json` 列存 `ThemeRef[]`。整体读（详情主题 section 渲染、/topics 目录内存 dedup、/topics/[slug] 内存过滤），永不按单项做 SQL 查询。未来若需按 slug 做 SQL 聚合或单项更新，需重构为规范化子表。沿用 2.2 关联 items Json 决策。
++  resolution: 已于 Story 2.3 登记为查询性上限——待真实需要按 slug SQL 聚合或单项更新时，重构为子表（schema migration + 投影/读取扩展）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: `StubThemeAdapter` 仅测试、非 prod 的诚实下限——fixture 主题上公开页会误导读者，故 prod 降级、stub 仅 verify/e2e
++  evidence: Story 2.3 的 `StubThemeAdapter`（`packages/core/src/modules/theme-linking/stub-theme-adapter.ts`）返回确定性 fixture（chip-supply-chain / 芯片供应链 固定值）。fixture 主题上公开页而无真实映射依据会违反 AC2 + NFR。故 V1 theme-backfill worker 运行时 adapter 解析为 none、prod 诚实降级；stub 仅 verify/e2e 直调 `generateThemes` 走通 happy path。`apps/worker` 不 import stub。
++  resolution: 已于 Story 2.3 登记为诚实下限——真实知识源落地前，prod 永远降级（AC3）；stub 永远仅测试，不上公开面。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: theme-backfill worker 为未测运行时——镜像 market-reaction/explain 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
++  evidence: Story 2.3 的 `verify:themes`（`apps/worker/src/verify-themes.ts`）直调 `generateThemes` + `refreshPublishedReadModel`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerThemeBackfillWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、per-event try/catch 隔离、shutdown 关闭均无集成测试覆盖（镜像 market-reaction/explain/event-cluster 同款未测运行时 defer）。
++  resolution: 已于 Story 2.3 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB set/projection）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 历史相似事件相似度判断未做——主题成员关系是显式映射（adapter 产出），非相似度推理；相似度推理 defer
++  evidence: Story 2.3 主题成员身份由 `ThemeAdapter` 显式产出（映射库/NER/LLM），非从事件文本/证据做相似度推理。epic「absence as absence, never fabricated」+「Theme continuity must be honest: when evidence is insufficient to relate an event to a theme ... shows nothing rather than fabricating "similar history."」——「similar history」相似度推理是独立 concern（需相似度模型/embedding），非主题成员关系。相似度判断 defer。
++  resolution: 已于 Story 2.3 登记为相似度推理 defer——待真实需要「历史相似事件」推荐时，引入相似度模型（embedding/相似度计算）作为独立 concern，与主题成员关系分离。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: 主题实时推送（WebSocket/SSE）未做——V1 靠读模型刷新 + 主动轮询，主题实时推送 epic defer
++  evidence: Story 2.3 `/topics` 目录与 `/topics/[slug]` 页是 force-dynamic 请求期读读模型，无 WebSocket/SSE 实时推送。主题成员更新（新事件加入主题）需用户刷新页面才可见。epic-2-context + 架构 spine 把 WebSocket/SSE 实时推送列为 defer（V1 靠读模型刷新 + 主动轮询）。
++  resolution: 已于 Story 2.3 登记为 epic defer——WebSocket/SSE 实时推送随 epic 整体 defer，待实时性需求出现时引入。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: projectThemes（及所有 published_* 投影）read→write 非原子——seed/verify 用 root prisma（非事务）路径下，并发 append 可投影到非最新 set（同 2.2 关联同型 defer）
++  evidence: Story 2.3 `projectThemes`（`publish-service.ts`）先 `findFirst` 最新 `EventThemeSet` 再 `upsert`/`deleteMany`，两步非原子。经 `decideReview` 调用时在事务内（原子）；但 verify/seed（`refreshPublishedReadModel` 直传 root prisma）与未来 theme-backfill worker 触发路径是两条 auto-commit 语句，若两次 `generateThemes`+`refresh` 在读与写之间交错，可投影到非最新 set。此为所有 published_* 投影（projectExplanation/projectMarketReaction/projectEvidenceTimeline/projectAssociations/projectThemes）共有的设计性质（共享投影模式），非 2.3 引入。V1 无并发触发（theme-backfill worker adapter 缺失→skip、decideReview 运营门控非并发）故不可达。
++  resolution: 已于 Story 2.3 登记为并发 defer（同 2.2）——待引入并发 worker 触发投影时，把 read+write 包进 `prisma.$transaction`（或 `SELECT ... FOR UPDATE`），覆盖所有 published_* 投影。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md`
++  summary: `EventThemeSet` 无复合索引 `(hotEventId, createdAt DESC)`——投影取最新走 hotEventId 索引 + 排序，scale 后是 perf cliff（同 2.1/2.2 同型 defer）
++  evidence: Story 2.3 `EventThemeSet` 有 `@@index([hotEventId])` + `@@index([createdAt])`（沿用 2.1 MarketReactionSnapshot + 2.2 EventAssociationSet 同形），但投影热路径 `findFirst({ where:{hotEventId}, orderBy:[{createdAt:"desc"},{id:"desc"}] })` 需 `(hotEventId, createdAt DESC, id DESC)` 才能索引服务。每次 publish/republish 触发投影。V1 体量极小故无延迟。
++  resolution: 已于 Story 2.3 登记为 perf defer——待 EventThemeSet 体量增长致投影有可测延迟时，加复合索引（同步评估 2.1 MarketReactionSnapshot + 2.2 EventAssociationSet）。
+diff --git a/apps/web/app/(public)/events/[hotEventId]/page.tsx b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+index 36f5289..dfcc2d4 100644
+--- a/apps/web/app/(public)/events/[hotEventId]/page.tsx
++++ b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+@@ -113,6 +113,14 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+   const stockItems = associationItems.filter((i) => i.kind === "stock");
+   const hasAssociations = associationItems.length > 0;
+ 
++  // Story 2.3: the theme membership block. Null/empty when generateThemes has
++  // not produced a set (V1 prod: theme-backfill worker resolves no adapter) →
++  // honest degraded state (AC3). When present, each theme is a clickable
++  // FilterPill link to /topics/{slug} (FR9, the theme-continuity jump).
++  const themes = detail.themes;
++  const themeItems = themes?.items ?? [];
++  const hasThemes = themeItems.length > 0;
++
+   return (
+     <div className="mx-auto max-w-3xl px-6 py-12">
+       {/* Return link to the feed (stable back path; originating-context retention is 2.5). */}
+@@ -265,6 +273,39 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+         )}
+       </section>
+ 
++      {/* Theme membership (Story 2.3, AC4/AC2/AC3). Each theme is a clickable
++          FilterPill link to /topics/{slug} (FR9, the theme-continuity jump —
++          the detail→theme half of the closed loop). Provenance line
++          "关联依据：系统映射" makes the explicit mapping basis observable (AC2).
++          Honest degraded line when no set was projected (V1 prod: theme-backfill
++          worker resolves no adapter → AC3, never fabricated themes). NFR: labels
++          are theme-concept identity only, never advisory. */}
++      <section className="mt-6 space-y-3 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
++        <div className="flex items-center gap-2">
++          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
++            主题
++          </h2>
++          {hasThemes ? <AiLabel /> : null}
++        </div>
++        {hasThemes ? (
++          <div className="space-y-3">
++            <div className="flex flex-wrap gap-2">
++              {themeItems.map((item) => (
++                <FilterPill
++                  key={item.slug}
++                  href={`/topics/${encodeURIComponent(item.slug)}`}
++                >
++                  {item.label}
++                </FilterPill>
++              ))}
++            </div>
++            <p className="text-xs text-ink-tertiary">关联依据：系统映射</p>
++          </div>
++        ) : (
++          <p className="text-base text-ink-tertiary">暂无已确认的主题关联。</p>
++        )}
++      </section>
++
+       {/* Evidence timeline (AC2). One row per source, chronological. */}
+       <section className="mt-10 space-y-4">
+         <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+diff --git a/apps/web/app/(public)/topics/page.tsx b/apps/web/app/(public)/topics/page.tsx
+index d325824..204ec56 100644
+--- a/apps/web/app/(public)/topics/page.tsx
++++ b/apps/web/app/(public)/topics/page.tsx
+@@ -1,31 +1,112 @@
+ import type { Metadata } from "next";
+ 
++import { AiLabel, FilterPill } from "@/components/chips";
++import {
++  getPrisma,
++  listPublishedThemeMemberships,
++  newTraceId,
++} from "@aguhot/core";
++import type { ThemeRef } from "@aguhot/core";
++
+ export const metadata: Metadata = {
+   title: "主题",
+ };
+ 
+ /**
+- * Topics placeholder — Story 1.2.
++ * Topics directory page — Story 2.3.
++ *
++ * Replaces the Story 1.2 static placeholder. This is the dynamic theme
++ * directory: it reads the published theme-membership read model
++ * (published_hot_event_themes via listPublishedThemeMemberships, AD-3 — never
++ * event_theme_sets / hot_events / evidence_*) and derives the distinct-theme
++ * set in JS (dedup by slug, preserve first-seen order). Each theme is a
++ * clickable FilterPill link to /topics/{slug} (the theme-continuity page). The
++ * directory is the entry point the primary nav "主题" target resolves to (the
++ * main image "主题" entry must not be a dead link — closed loop).
++ *
++ * Honest degradation (AC3 / epic continuity honesty): when NO published event
++ * has any theme membership (V1 prod: theme-backfill worker resolves no adapter
++ * → no themes generated → no projections), the page renders an explicit
++ * "暂无已确认的主题。" degraded line — never fabricated themes, never empty.
+  *
+- * Structural server-component placeholder (isomorphic to the 1.1 `/console`
+- * placeholder): exists only so the primary nav target `/topics` is
+- * anonymously reachable (HTTP 200, inside the public shell). The
+- * theme/topic browsing content lands in a later story; this page renders no
+- * business content and has no session dependency (AD-8). H1 uses `font-display`
+- * and colors use `@theme` ink tokens (Story 1.3).
++ * Why force-dynamic + @aguhot/core import is safe for the build:
++ *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
++ *     evaluates it at REQUEST time, not BUILD time. getPrisma() reads
++ *     DATABASE_URL at runtime; that call is never reached during `next build`,
++ *     so the public web build stays DATABASE_URL-free (same mechanism as the
++ *     homepage + detail route).
++ *
++ * System-derived themes carry the uniform <AiLabel/> (UX-DR8). NFR: theme
++ * labels are concept identity only, never advisory.
+  */
+-export default function TopicsPlaceholderPage() {
++export const dynamic = "force-dynamic";
++
++interface DistinctTheme {
++  slug: string;
++  label: string;
++}
++
++export default async function TopicsDirectoryPage() {
++  const prisma = getPrisma();
++  const memberships = await listPublishedThemeMemberships({
++    prisma,
++    traceId: newTraceId(),
++  });
++
++  // Derive the distinct-theme set from memberships (slug→label, preserve
++  // first-seen order). slug is the URL/addressing key; label is the display
++  // identity. Mirrors the 2.2 listPublishedAssociations + 1.7 filterByWindow
++  // JS-join pattern (no SQL distinct — V1 scale is tiny).
++  const seen = new Set<string>();
++  const themes: DistinctTheme[] = [];
++  for (const m of memberships) {
++    for (const item of m.items as ThemeRef[]) {
++      if (
++        typeof item.slug === "string" &&
++        item.slug.trim() !== "" &&
++        typeof item.label === "string" &&
++        item.label.trim() !== "" &&
++        !seen.has(item.slug)
++      ) {
++        seen.add(item.slug);
++        themes.push({ slug: item.slug, label: item.label });
++      }
++    }
++  }
++
+   return (
+-    <div className="mx-auto max-w-3xl px-6 py-20">
+-      <header className="space-y-4">
+-        <h1 className="text-4xl font-display font-semibold tracking-tight">主题</h1>
++    <div className="mx-auto max-w-3xl px-6 py-12">
++      <header className="space-y-3">
++        <div className="flex items-center gap-2">
++          <h1 className="font-display text-4xl font-semibold tracking-tight text-ink-primary">
++            主题
++          </h1>
++          {themes.length > 0 ? <AiLabel /> : null}
++        </div>
+         <p className="text-lg text-ink-secondary">AGUHOT · 按主题浏览热点</p>
+       </header>
+-      <section className="mt-12 space-y-3">
+-        <h2 className="text-xl font-semibold">当前状态</h2>
+-        <p className="text-ink-secondary">
+-          主题为结构性占位页，按主题浏览热点的能力将在后续迭代中陆续开放。
+-        </p>
++
++      <section className="mt-12 space-y-4">
++        {themes.length > 0 ? (
++          <>
++            <h2 className="text-xl font-semibold text-ink-primary">已确认主题</h2>
++            <p className="text-sm text-ink-tertiary">
++              点击主题查看其成员事件的时间序列。
++            </p>
++            <div className="flex flex-wrap gap-2">
++              {themes.map((theme) => (
++                <FilterPill
++                  key={theme.slug}
++                  href={`/topics/${encodeURIComponent(theme.slug)}`}
++                >
++                  {theme.label}
++                </FilterPill>
++              ))}
++            </div>
++          </>
++        ) : (
++          <p className="text-base text-ink-tertiary">暂无已确认的主题。</p>
++        )}
+       </section>
+     </div>
+   );
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 9d81603..44137bf 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -9,7 +9,7 @@
+     "start": "next start",
+     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+     "lint": "eslint .",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes\"",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+@@ -17,13 +17,15 @@
+     "e2e:merge-split": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @merge-split",
+     "e2e:market-reaction": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @market-reaction",
+     "e2e:associations": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @associations",
++    "e2e:themes": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @themes",
+     "seed:console": "tsx e2e/seed-console.ts",
+     "seed:feed": "tsx e2e/seed-feed.ts",
+     "seed:detail": "tsx e2e/seed-detail.ts",
+     "seed:revision": "tsx e2e/seed-revision.ts",
+     "seed:merge-split": "tsx e2e/seed-merge-split.ts",
+     "seed:market-reaction": "tsx e2e/seed-market-reaction.ts",
+-    "seed:associations": "tsx e2e/seed-associations.ts"
++    "seed:associations": "tsx e2e/seed-associations.ts",
++    "seed:themes": "tsx e2e/seed-themes.ts"
+   },
+   "dependencies": {
+     "@aguhot/config": "workspace:*",
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index 447c241..4fe60f7 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -12,6 +12,7 @@
+     "verify:explain": "tsx src/verify-explain.ts",
+     "verify:market-reaction": "tsx src/verify-market-reaction.ts",
+     "verify:associations": "tsx src/verify-associations.ts",
++    "verify:themes": "tsx src/verify-themes.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "typecheck": "tsc --noEmit",
+diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+index f785137..d318e01 100644
+--- a/apps/worker/src/index.ts
++++ b/apps/worker/src/index.ts
+@@ -1,18 +1,20 @@
+ /**
+- * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction runtime.
++ * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction /
++ * theme-backfill runtime.
+  *
+  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
+- * cluster worker. Story 1.8 added the explain worker. Story 2.1 adds the
+- * market-reaction worker alongside them: validate required env (DB + Redis),
+- * connect Redis, register all four workers, and wire graceful shutdown (close
+- * all four). The web request path never imports this module — heavy work is
+- * async (AD-4).
++ * cluster worker. Story 1.8 added the explain worker. Story 2.1 added the
++ * market-reaction worker. Story 2.3 adds the theme-backfill worker alongside
++ * them: validate required env (DB + Redis), connect Redis, register all five
++ * workers, and wire graceful shutdown (close all five). The web request path
++ * never imports this module — heavy work is async (AD-4).
+  *
+- * The four workers are independent and idempotent: ingest does not trigger a
+- * cluster job automatically, cluster does not trigger an explain job, and
+- * explain does not trigger a market-reaction job automatically (the jobs are
+- * decoupled; pipeline chaining/cron orchestration is deferred — see deferred-
+- * work.md). Each can run in isolation against the shared DB/Redis.
++ * The five workers are independent and idempotent: ingest does not trigger a
++ * cluster job automatically, cluster does not trigger an explain job, explain
++ * does not trigger a market-reaction job, and market-reaction does not trigger
++ * a theme-backfill job automatically (the jobs are decoupled; pipeline
++ * chaining/cron orchestration is deferred — see deferred-work.md). Each can run
++ * in isolation against the shared DB/Redis.
+  */
+ 
+ import { requireEnv } from "@aguhot/config";
+@@ -22,6 +24,7 @@ import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
+ import { registerExplainWorker } from "./queues/explain-queue.js";
+ import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
+ import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
++import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
+ 
+ async function main(): Promise<void> {
+   // Fail loud and early if infra is missing (Block-If): a worker without DB or
+@@ -36,8 +39,9 @@ async function main(): Promise<void> {
+   const eventClusterWorker = registerEventClusterWorker();
+   const explainWorker = registerExplainWorker();
+   const marketReactionWorker = registerMarketReactionWorker();
++  const themeBackfillWorker = registerThemeBackfillWorker();
+ 
+-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction workers registered and running");
++  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill workers registered and running");
+ 
+   const shutdown = async (signal: string): Promise<void> => {
+     console.log(`[worker] received ${signal}, shutting down`);
+@@ -46,6 +50,7 @@ async function main(): Promise<void> {
+       eventClusterWorker.close(),
+       explainWorker.close(),
+       marketReactionWorker.close(),
++      themeBackfillWorker.close(),
+     ]);
+     await closeRedis();
+     process.exit(0);
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index a120307..e2ba613 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -154,6 +154,16 @@ model HotEvent {
+   // write-ownership (AD-2).
+   eventAssociationSets EventAssociationSet[]
+   publishedAssociation PublishedHotEventAssociation?
++  // Read-only reverse relations to the theme read models (Story 2.3).
++  // The theme-linking module owns event_theme_sets (AD-2 append-only write table,
++  // one row per generation of ThemeRef[]); publish-orchestrator owns
++  // published_hot_event_themes (AD-3 public projection). These navigations let
++  // publish-orchestrator read the latest set at projection time and let the
++  // theme-backfill worker query published events without a theme set via
++  // `eventThemeSets: { none: {} }`. They do NOT change the respective modules'
++  // write-ownership (AD-2).
++  eventThemeSets   EventThemeSet[]
++  publishedTheme   PublishedHotEventTheme?
+ 
+   @@index([publicationStatus])
+   @@map("hot_events")
+@@ -519,3 +529,59 @@ model PublishedHotEventAssociation {
+ 
+   @@map("published_hot_event_associations")
+ }
++
++// The append-only write table for a hot event's theme membership (AD-2, Story
++// 2.3). The theme-linking module is the sole writer. One row per generation;
++// every successful generateThemes call APPENDS a new row (AD-5: never update or
++// delete prior rows — the full theme-set history is the version series).
++// publish-orchestrator projects the LATEST row (createdAt desc, id desc
++// tiebreaker) into published_hot_event_themes.
++//
++// `items` is a Json column holding ThemeRef[] ({slug,label,mappingBasis}). These
++// are display-only: the detail page renders each theme as a FilterPill link to
++// /topics/{slug}, the /topics directory derives distinct themes from memberships
++// via an in-memory join (listPublishedThemeMemberships → JS dedup by slug), and
++// the /topics/[slug] page filters members by slug in JS. A normalized Theme
++// directory table + member child table would be over-engineering for a
++// display-only, variable-cardinality set read whole (ponytail: no directory
++// table for a consumerless single-theme SQL query — slug is the URL, label comes
++// from Json). Mirrors the 2.2 EventAssociationSet items-Json decision.
++model EventThemeSet {
++  id         String   @id // UUIDv7, assigned in application code (newTraceId)
++  hotEventId String   @map("hot_event_id")
++  items      Json     // ThemeRef[] ({slug,label,mappingBasis}); display-only
++  source     String // ThemeSource union value ("template"; future knowledge-base/provider id)
++  traceId    String?  @map("trace_id")
++  createdAt  DateTime @default(now()) @map("created_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@index([hotEventId])
++  @@index([createdAt])
++  @@map("event_theme_sets")
++}
++
++// The public read model for a published hot-event's theme membership (AD-3,
++// Story 2.3). The publish-orchestrator module is the sole writer. Row existence
++// = currently published themes: publish/republish upserts the row (projecting
++// the latest EventThemeSet), takedown deletes it. There is intentionally NO
++// status column — row existence is the visibility contract (same pattern as the
++// other published_* read models). FK onDelete: Cascade so a HotEvent deletion
++// cleans up the projection. `theme_source` records the provenance of the
++// projected set (operator audit), and `generated_at` records when that set was
++// generated. A row may be ABSENT while the event is published if
++// generateThemes has not produced a set yet (V1 worker resolves no adapter →
++// skip → never produced) — the detail page renders an honest degraded state in
++// that case (AC3, never fabricates themes).
++model PublishedHotEventTheme {
++  hotEventId    String   @id @map("hot_event_id")
++  items         Json // ThemeRef[] ({slug,label,mappingBasis}); display-only
++  themeSource   String   @map("theme_source") // ThemeSource union value
++  generatedAt   DateTime @map("generated_at")
++  traceId       String?  @map("trace_id")
++  updatedAt     DateTime @updatedAt @map("updated_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@map("published_hot_event_themes")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 40838be..6da3981 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -127,12 +127,15 @@ export type {
+ // Story 1.8 — getPublishedHotEventDetail public detail read + explanation/evidence projection;
+ // Story 2.1 — published_hot_event_reactions projection + detail.reaction field;
+ // Story 2.2 — published_hot_event_associations projection + detail.associations field +
+-// listPublishedAssociations feed-filter query).
++// listPublishedAssociations feed-filter query;
++// Story 2.3 — published_hot_event_themes projection + detail.themes field +
++// listPublishedThemeMemberships theme-page query).
+ export {
+   refreshPublishedReadModel,
+   listPublishedHotEvents,
+   getPublishedHotEventDetail,
+   listPublishedAssociations,
++  listPublishedThemeMemberships,
+ } from "./modules/publish-orchestrator/publish-service.js";
+ export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
+ export type {
+@@ -148,6 +151,10 @@ export type {
+   PublishedHotEventAssociation,
+   PublishedAssociationRow,
+   ListPublishedAssociationsOptions,
++  ThemeRef,
++  PublishedHotEventTheme,
++  PublishedThemeMembershipRow,
++  ListPublishedThemeMembershipsOptions,
+ } from "./modules/publish-orchestrator/types.js";
+ 
+ // explanation module (Story 1.8 — deterministic three-partition generation +
+@@ -201,15 +208,24 @@ export type {
+ // StubAssociationAdapter test-only + generateAssociations append-only AD-2 +
+ // normalizeItems pure derivation with AC2 mappingBasis enforcement; V1 has NO
+ // worker — epic lists no association-generation job category — so prod has no
+-// trigger and degrades honestly, stub is verify/e2e-only).
++// trigger and degrades honestly, stub is verify/e2e-only.
++// Story 2.3 — ThemeAdapter port + StubThemeAdapter test-only + generateThemes
++// append-only AD-2 + normalizeThemeItems pure derivation with AC2 enforcement;
++// theme-backfill worker resolves no adapter → prod degrades honestly).
+ export {
+   generateAssociations,
+   getLatestAssociationSet,
+   normalizeItems,
+   StubAssociationAdapter,
+   STUB_CONCEPT_LABEL,
++  generateThemes,
++  getLatestThemeSet,
++  normalizeThemeItems,
++  StubThemeAdapter,
++  STUB_THEME_SLUG,
++  STUB_THEME_LABEL,
+ } from "./modules/theme-linking/index.js";
+-export { AssociationKind, AssociationSource } from "./modules/theme-linking/index.js";
++export { AssociationKind, AssociationSource, ThemeSource } from "./modules/theme-linking/index.js";
+ export type {
+   AssociationKind as AssociationKindType,
+   AssociationSource as AssociationSourceType,
+@@ -219,4 +235,11 @@ export type {
+   GenerateAssociationsResult,
+   GetLatestAssociationSetOptions,
+   AssociationSetRecord,
++  ThemeSource as ThemeSourceType,
++  ThemeRef as ThemeLinkingThemeRef,
++  ThemeAdapter,
++  GenerateThemesOptions,
++  GenerateThemesResult,
++  GetLatestThemeSetOptions,
++  ThemeSetRecord,
+ } from "./modules/theme-linking/index.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/index.ts b/packages/core/src/modules/publish-orchestrator/index.ts
+index 07533a2..21ed023 100644
+--- a/packages/core/src/modules/publish-orchestrator/index.ts
++++ b/packages/core/src/modules/publish-orchestrator/index.ts
+@@ -4,14 +4,16 @@
+  * AD-3 single write-owner of the published read models: published_hot_events
+  * (Story 1.6) + published_hot_event_explanations + published_hot_event_evidence
+  * (Story 1.8) + published_hot_event_reactions (Story 2.1) +
+- * published_hot_event_associations (Story 2.2). Exposes the read-model refresh
+- * command consumed by review-workflow's decideReview, plus the public read
+- * queries (feed + detail + association feed-filter). The Prisma client lives
++ * published_hot_event_associations (Story 2.2) + published_hot_event_themes
++ * (Story 2.3). Exposes the read-model refresh command consumed by
++ * review-workflow's decideReview, plus the public read queries (feed + detail +
++ * association feed-filter + theme-page membership map). The Prisma client lives
+  * one level up and is re-exported from the package barrel.
+  *
+  * This module never writes hot_events, review_decisions, publication_decisions,
+- * explanation_versions, market_reaction_snapshots, event_association_sets, or
+- * any other module's aggregate — only the five published_* read models.
++ * explanation_versions, market_reaction_snapshots, event_association_sets,
++ * event_theme_sets, or any other module's aggregate — only the six published_*
++ * read models.
+  */
+ 
+ export {
+@@ -19,6 +21,7 @@ export {
+   listPublishedHotEvents,
+   getPublishedHotEventDetail,
+   listPublishedAssociations,
++  listPublishedThemeMemberships,
+ } from "./publish-service.js";
+ export type { RefreshPublishedReadModelOptions } from "./publish-service.js";
+ export type {
+@@ -34,4 +37,8 @@ export type {
+   PublishedHotEventAssociation,
+   PublishedAssociationRow,
+   ListPublishedAssociationsOptions,
++  ThemeRef,
++  PublishedHotEventTheme,
++  PublishedThemeMembershipRow,
++  ListPublishedThemeMembershipsOptions,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index f9041ae..35897ac 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -51,10 +51,13 @@ import type {
+   GetPublishedHotEventDetailOptions,
+   ListPublishedAssociationsOptions,
+   ListPublishedHotEventsOptions,
++  ListPublishedThemeMembershipsOptions,
+   PublishedAssociationRow,
+   PublishedEvidenceRow,
+   PublishedHotEventDetail,
+   PublishedHotEventSummary,
++  PublishedThemeMembershipRow,
++  ThemeRef,
+ } from "./types.js";
+ 
+ export interface RefreshPublishedReadModelOptions {
+@@ -90,12 +93,13 @@ export async function refreshPublishedReadModel(
+   if (action === "none") return;
+ 
+   if (action === "takedown") {
+-    // Idempotent delete across all five published_* tables. Order does not
++    // Idempotent delete across all six published_* tables. Order does not
+     // matter (no inter-table FKs among the published_* models), but we delete
+-    // the evidence + explanation + reaction + association rows alongside the
+-    // summary row so "row exists = currently published" holds for all five read
+-    // models uniformly. Story 2.1 added published_hot_event_reactions; Story 2.2
+-    // added published_hot_event_associations to this batch.
++    // the evidence + explanation + reaction + association + theme rows
++    // alongside the summary row so "row exists = currently published" holds for
++    // all six read models uniformly. Story 2.1 added published_hot_event_reactions;
++    // Story 2.2 added published_hot_event_associations; Story 2.3 added
++    // published_hot_event_themes to this batch.
+     await prisma.publishedHotEventEvidence.deleteMany({
+       where: { hotEventId },
+     });
+@@ -108,6 +112,9 @@ export async function refreshPublishedReadModel(
+     await prisma.publishedHotEventAssociation.deleteMany({
+       where: { hotEventId },
+     });
++    await prisma.publishedHotEventTheme.deleteMany({
++      where: { hotEventId },
++    });
+     await prisma.publishedHotEvent.deleteMany({
+       where: { hotEventId },
+     });
+@@ -197,6 +204,9 @@ export async function refreshPublishedReadModel(
+ 
+   // 5. Association projection (published_hot_event_associations, Story 2.2).
+   await projectAssociations(prisma, traceId, hotEventId);
++
++  // 6. Theme membership projection (published_hot_event_themes, Story 2.3).
++  await projectThemes(prisma, traceId, hotEventId);
+ }
+ 
+ /**
+@@ -467,6 +477,65 @@ async function projectAssociations(
+   });
+ }
+ 
++/**
++ * Project the latest EventThemeSet into published_hot_event_themes (Story 2.3).
++ * If a set exists, upsert the row (1:1 per hotEventId, items as Json). If no set
++ * exists (V1 prod: theme-backfill worker resolves no adapter / generation has
++ * not run), deleteMany that hotEventId's theme row so the detail page renders
++ * the honest degraded state (themes: null) rather than a stale prior projection.
++ * Called inside the publish transaction and by the theme-backfill worker after
++ * it appends a set. Mirrors projectAssociations / projectMarketReaction /
++ * projectExplanation: read latest → upsert or deleteMany.
++ */
++async function projectThemes(
++  prisma: PrismaClient,
++  traceId: string,
++  hotEventId: string,
++): Promise<void> {
++  const latest = await prisma.eventThemeSet.findFirst({
++    where: { hotEventId },
++    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
++    // embed a monotonic timestamp) — same convention as projectExplanation /
++    // projectMarketReaction / projectAssociations.
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      items: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) {
++    // No set yet: clear any stale projection so the detail page shows the
++    // degraded state (no fabricated themes).
++    await prisma.publishedHotEventTheme.deleteMany({
++      where: { hotEventId },
++    });
++    return;
++  }
++
++  await prisma.publishedHotEventTheme.upsert({
++    where: { hotEventId },
++    create: {
++      hotEventId,
++      // The items Json column already holds the typed array (ThemeRef[]) from
++      // the source EventThemeSet row; re-project it verbatim. Cast through
++      // InputJsonValue (Prisma's Json envelope does not carry the element type
++      // across the read→write boundary).
++      items: latest.items as unknown as Prisma.InputJsonValue,
++      themeSource: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++    update: {
++      items: latest.items as unknown as Prisma.InputJsonValue,
++      themeSource: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++  });
++}
++
+ /**
+  * List all currently-published hot events for the public feed — Story 1.7.
+  *
+@@ -610,6 +679,18 @@ export async function getPublishedHotEventDetail(
+     },
+   });
+ 
++  // Theme membership block (nullable, Story 2.3). Absent when generateThemes has
++  // not produced a set yet (V1 prod: theme-backfill worker resolves no adapter) →
++  // the detail page renders the honest degraded state.
++  const themeRow = await prisma.publishedHotEventTheme.findUnique({
++    where: { hotEventId },
++    select: {
++      items: true,
++      themeSource: true,
++      generatedAt: true,
++    },
++  });
++
+   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
+     id: r.id,
+     hotEventId: r.hotEventId,
+@@ -663,6 +744,14 @@ export async function getPublishedHotEventDetail(
+             source: associationRow.associationSource,
+             generatedAt: associationRow.generatedAt,
+           },
++    themes:
++      themeRow === null
++        ? null
++        : {
++            items: themeRow.items as unknown as ThemeRef[],
++            source: themeRow.themeSource,
++            generatedAt: themeRow.generatedAt,
++          },
+     evidence,
+   };
+ }
+@@ -701,3 +790,38 @@ export async function listPublishedAssociations(
+     items: r.items as unknown as AssociationItem[],
+   }));
+ }
++
++/**
++ * List all currently-published theme memberships — the hotEventId→ThemeRef[] map
++ * the /topics directory and /topics/[slug] page use to derive the distinct-theme
++ * set and filter member events (Story 2.3).
++ *
++ * The /topics directory derives its distinct-theme list from this in JS (dedup
++ * by slug, preserve first-seen order). The /topics/[slug] page filters members
++ * by slug in JS (events whose items contain that slug). Both mirror the 2.2
++ * listPublishedAssociations + 1.7 filterByWindow JS-join pattern.
++ * `listPublishedHotEvents` stays filter-free. V1 published volume is tiny, so a
++ * full read + an in-memory join is the ponytail choice over a SQL join or
++ * per-slug index (deferred as a scale ceiling).
++ *
++ * Returns `{ hotEventId, items }` for every published_hot_event_themes row. It
++ * only SELECTs published_hot_event_themes — never event_theme_sets / hot_events
++ * / evidence_* (AD-3). Row existence = currently published theme membership.
++ */
++export async function listPublishedThemeMemberships(
++  options: ListPublishedThemeMembershipsOptions,
++): Promise<PublishedThemeMembershipRow[]> {
++  const { prisma } = options;
++
++  const rows = await prisma.publishedHotEventTheme.findMany({
++    select: {
++      hotEventId: true,
++      items: true,
++    },
++  });
++
++  return rows.map((r) => ({
++    hotEventId: r.hotEventId,
++    items: r.items as unknown as ThemeRef[],
++  }));
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index 7cf5f8f..55419a1 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -162,6 +162,13 @@ export interface PublishedHotEventDetail {
+    * The detail page renders the honest degraded state in that case.
+    */
+   associations: PublishedHotEventAssociation | null;
++  /**
++   * The theme membership block (Story 2.3). Null when no theme set was
++   * projected (theme-backfill worker resolved no adapter in V1 prod / generation
++   * has not run / takedown cleared the projection). The detail page renders the
++   * honest degraded state ("暂无已确认的主题关联。") in that case.
++   */
++  themes: PublishedHotEventTheme | null;
+   evidence: PublishedEvidenceRow[];
+ }
+ 
+@@ -249,3 +256,69 @@ export interface ListPublishedAssociationsOptions {
+   prisma: PrismaClient;
+   traceId: string;
+ }
++
++// --- Story 2.3: public theme membership read types ----------------------------
++
++/**
++ * One theme membership reference projected for public read — mirrors the
++ * ThemeRef the theme-linking module stores in the Json `items` column. The
++ * detail page renders each theme as a FilterPill link to
++ * `/topics/{slug}` (FR9, the theme-continuity jump). The /topics directory and
++ * the /topics/[slug] page use the slug as the URL/addressing key and the label
++ * for display (editorial serif title).
++ *
++ *   - slug: NON-EMPTY URL-safe identity (e.g. "chip-supply-chain"). Drives the
++ *     /topics/{slug} route + the directory's distinct-theme set.
++ *   - label: the theme's display identity (e.g. "芯片供应链"). Descriptive,
++ *     never advisory.
++ *   - mappingBasis: NON-EMPTY provenance (e.g. "knowledge_base:v1"). AC2.
++ */
++export interface ThemeRef {
++  slug: string;
++  label: string;
++  mappingBasis: string;
++}
++
++/**
++ * The projected public theme membership block for one published hot event
++ * (Story 2.3). Mirrors published_hot_event_themes. `items` is the Json column
++ * value typed as ThemeRef[].
++ *
++ * Row existence = currently published theme membership (no status column).
++ * Absent when generateThemes has not produced a set (V1 prod: theme-backfill
++ * worker resolves no adapter → never produced) — the detail page shows the
++ * "暂无已确认的主题关联。" degraded state (AC3). Absent does NOT block the
++ * existing summary/explanation/evidence/reaction/associations rendering.
++ */
++export interface PublishedHotEventTheme {
++  items: ThemeRef[];
++  source: string;
++  generatedAt: Date;
++}
++
++/**
++ * One row of listPublishedThemeMemberships — the hotEventId→ThemeRef[] map the
++ * /topics directory and /topics/[slug] page use to derive the distinct-theme
++ * set and filter member events (Story 2.3). The web layer builds a
++ * hotEventId→items map from this and a slug→events reverse index in memory
++ * (mirroring the 2.2 listPublishedAssociations + 1.7 filterByWindow JS-join
++ * pattern; listPublishedHotEvents stays filter-free).
++ */
++export interface PublishedThemeMembershipRow {
++  hotEventId: string;
++  items: ThemeRef[];
++}
++
++/**
++ * Options for listPublishedThemeMemberships. `{ prisma, traceId }` mirrors the
++ * established query pattern. There is deliberately NO filter parameter: the
++ * query returns all published theme-membership rows and the web layer applies
++ * the slug filter + directory distinct-derivation in JS (same design as
++ * listPublishedHotEvents / listPublishedAssociations — V1 scale is tiny,
++ * filtering is a UI concern). ponytail: no pre-embedded consumerless filter
++ * parameter.
++ */
++export interface ListPublishedThemeMembershipsOptions {
++  prisma: PrismaClient;
++  traceId: string;
++}
+diff --git a/packages/core/src/modules/theme-linking/index.ts b/packages/core/src/modules/theme-linking/index.ts
+index 4644a57..6fd9bd4 100644
+--- a/packages/core/src/modules/theme-linking/index.ts
++++ b/packages/core/src/modules/theme-linking/index.ts
+@@ -1,20 +1,26 @@
+ /**
+- * theme-linking module barrel — Story 2.2.
++ * theme-linking module barrel — Story 2.2 (associations) + Story 2.3 (themes).
+  *
+- * Owns the event_association_sets table (AD-2 append-only). Exposes the
+- * association generator + the latest-set read query + the AssociationAdapter
+- * port + the StubAssociationAdapter (test-only). The Prisma client lives one
++ * Owns the event_association_sets table (AD-2 append-only, Story 2.2) and the
++ * event_theme_sets table (AD-2 append-only, Story 2.3). Exposes the association
++ * + theme generators, the latest-set read queries, the AssociationAdapter +
++ * ThemeAdapter ports, and the test-only stubs. The Prisma client lives one
+  * level up and is re-exported from the package barrel.
+  *
+  * This module never writes published_* (publish-orchestrator owns the public
+- * projection) or hot_events (event-assembly owns those). It only appends
+- * event_association_sets; publish-orchestrator reads the latest at projection
+- * time and writes the public read model.
++ * projections) or hot_events (event-assembly owns those). It only appends
++ * event_association_sets + event_theme_sets; publish-orchestrator reads the
++ * latest at projection time and writes the public read models.
+  *
+  * V1 has NO worker for association generation (epic lists only market-signal /
+  * digest / theme-backfill BullMQ job categories — association generation is NOT
+  * among them). So generateAssociations is invoked by verify/seed only, never by
+  * an apps/worker queue. apps/worker does NOT import StubAssociationAdapter.
++ *
++ * Story 2.3 adds a theme-backfill worker (epic lists theme-backfill as a job
++ * category). The worker resolves adapter = undefined (procurement deferred) so
++ * generateThemes returns null and prod degrades honestly. The worker does NOT
++ * import StubThemeAdapter; verify/e2e pass it to generateThemes directly.
+  */
+ 
+ export {
+@@ -34,3 +40,23 @@ export type {
+   GetLatestAssociationSetOptions,
+   AssociationSetRecord,
+ } from "./types.js";
++
++// Story 2.3: theme membership sub-domain (continuity substrate). Same shape as
++// the association sub-domain: port + test-only stub + append-only generator +
++// latest-set read query + pure normalizer with AC2 enforcement.
++export {
++  generateThemes,
++  getLatestThemeSet,
++  normalizeThemeItems,
++} from "./theme-service.js";
++export { StubThemeAdapter, STUB_THEME_SLUG, STUB_THEME_LABEL } from "./stub-theme-adapter.js";
++export { ThemeSource } from "./types.js";
++export type {
++  ThemeSource as ThemeSourceType,
++  ThemeRef,
++  ThemeAdapter,
++  GenerateThemesOptions,
++  GenerateThemesResult,
++  GetLatestThemeSetOptions,
++  ThemeSetRecord,
++} from "./types.js";
+diff --git a/packages/core/src/modules/theme-linking/types.ts b/packages/core/src/modules/theme-linking/types.ts
+index 9532bd4..22f8d4d 100644
+--- a/packages/core/src/modules/theme-linking/types.ts
++++ b/packages/core/src/modules/theme-linking/types.ts
+@@ -164,3 +164,124 @@ export interface AssociationSetRecord {
+   source: AssociationSource;
+   createdAt: Date;
+ }
++
++// --- Story 2.3: theme membership (continuity substrate) ----------------------
++
++/**
++ * The provenance of a theme set. Stored on every EventThemeSet row. The public
++ * read model carries this through as `themeSource`.
++ *
++ *   - template: V1 deterministic fixture-backed derivation
++ *     (StubThemeAdapter, test-only). When a real theme knowledge source lands,
++ *     source becomes the provider id (e.g. "tushare:theme").
++ *
++ * V1 worker resolves NO adapter (real theme knowledge source procurement is
++ * deferred), so no set with source="template" is ever written in prod by the
++ * worker — only by verify/e2e direct calls. The worker exists (epic lists
++ * theme-backfill as a job category) but its adapter resolves to undefined →
++ * generateThemes returns null → honest degradation.
++ */
++export const ThemeSource = {
++  Template: "template",
++} as const;
++
++export type ThemeSource = (typeof ThemeSource)[keyof typeof ThemeSource];
++
++/**
++ * One theme membership reference — a theme identity + its explicit mapping
++ * basis (AC2). The detail page renders each theme as a FilterPill link to
++ * `/topics/{slug}` (FR9, the theme-continuity jump). The /topics directory and
++ * the /topics/[slug] page use the slug as the URL/addressing key and the label
++ * for display.
++ *
++ *   - slug: NON-EMPTY URL-safe identity (e.g. "chip-supply-chain"). Drives the
++ *     /topics/{slug} route and the /topics directory's distinct-theme set.
++ *   - label: the theme's display identity (e.g. "芯片供应链"). Descriptive,
++ *     never advisory.
++ *   - mappingBasis: NON-EMPTY provenance (e.g. "knowledge_base:v1"). AC2
++ *     mandates an explicit mapping basis; an adapter item with an empty/missing
++ *     mappingBasis is rejected by generateThemes (fail-fast, never silently
++ *     filled with a default).
++ */
++export interface ThemeRef {
++  slug: string;
++  label: string;
++  mappingBasis: string;
++}
++
++/**
++ * The ThemeAdapter port (AD-7). All theme knowledge sources (theme mapping
++ * libraries, NER, LLM-based theme extraction) enter exclusively through this
++ * interface; domain modules never import a third-party SDK. V1 has no concrete
++ * implementation wired in prod (procurement deferred) — the theme-backfill
++ * worker resolves `adapter = undefined` so generateThemes returns null and prod
++ * degrades honestly (AC3). verify/e2e pass StubThemeAdapter directly to
++ * generateThemes. The only concrete implementation today is StubThemeAdapter
++ * (test-only).
++ *
++ * Defined in theme-adapter.ts and re-exported here for the package barrel.
++ */
++export interface ThemeAdapter {
++  /**
++   * Fetch the theme memberships for the given hot event. Implementations
++   * resolve the event's relevant themes and return them with a NON-EMPTY
++   * mappingBasis + non-empty slug + non-empty label on each item (AC2). Return
++   * null or an empty array when no themes are available (the caller writes
++   * nothing and degrades honestly). Each returned item MUST have all three
++   * fields non-empty — items missing any field are rejected by generateThemes
++   * (it throws, never silently fills a default).
++   */
++  fetchThemes(args: { hotEventId: string }): Promise<ThemeRef[] | null>;
++}
++
++/**
++ * Options for generateThemes. `{ prisma, traceId, hotEventId, adapter? }`
++ * mirrors generateAssociations plus an optional adapter. When adapter is
++ * omitted, returns null, or returns null/[], the function returns null and
++ * writes nothing (honest degradation — never fabricates a set from no data).
++ * Otherwise it validates each item's mappingBasis/slug/label is non-empty (AC2),
++ * normalizes the items (dedup by slug, preserve order), and APPENDS one
++ * EventThemeSet row (source="template").
++ */
++export interface GenerateThemesOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  hotEventId: string;
++  adapter?: ThemeAdapter;
++}
++
++/**
++ * The result of a successful theme generation: the newly-appended set's id +
++ * the normalized items + provenance + createdAt.
++ */
++export interface GenerateThemesResult {
++  eventThemeSetId: string;
++  hotEventId: string;
++  items: ThemeRef[];
++  source: ThemeSource;
++  createdAt: Date;
++  traceId: string;
++}
++
++/**
++ * Options for getLatestThemeSet — returns the most recent EventThemeSet for an
++ * event (createdAt desc, id desc tiebreaker) or null if none exist.
++ * publish-orchestrator uses this at projection time.
++ */
++export interface GetLatestThemeSetOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  hotEventId: string;
++}
++
++/**
++ * One theme-set row projected for read. Mirrors the EventThemeSet columns the
++ * public projection + operator audit need (no write paths here).
++ */
++export interface ThemeSetRecord {
++  id: string;
++  hotEventId: string;
++  items: ThemeRef[];
++  source: ThemeSource;
++  createdAt: Date;
++}
+
+=== UNTRACKED NEW FILES ===
+
+--- NEW FILE: apps/web/app/(public)/topics/[slug]/page.tsx ---
+import type { Metadata } from "next";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+
+import { AiLabel } from "@/components/chips";
+import {
+  getPrisma,
+  listPublishedHotEvents,
+  listPublishedThemeMemberships,
+  newTraceId,
+} from "@aguhot/core";
+import type { PublishedHotEventSummary, ThemeRef } from "@aguhot/core";
+
+export const metadata: Metadata = {
+  title: "主题追踪",
+};
+
+/**
+ * Theme continuity page — Story 2.3.
+ *
+ * Aggregates the published member events of one theme (slug) and presents them
+ * as a CHRONOLOGICAL sequence (latestEvidenceAt ASC, earliest→latest) so
+ * continuity reads as a narrative arc (epic: "a theme page aggregates multiple
+ * events across time and presents them chronologically so continuity reads as a
+ * sequence"). Each member event is a clickable link to its detail page (FR11,
+ * the theme→detail half of the closed loop).
+ *
+ * Reads ONLY published_* read models (AD-3): listPublishedThemeMemberships
+ * (published_hot_event_themes) to find which events belong to the slug, and
+ * listPublishedHotEvents (published_hot_events) for the member summaries.
+ * Never reads event_theme_sets / hot_events / evidence_*.
+ *
+ * Honest continuity (AC3 / epic: "absence as absence, never fabricated"): a slug
+ * with NO published members → notFound() (404). Rendering an empty theme page
+ * for a slug the system has not confirmed would fabricate a theme — a violation.
+ * Real themes (>=1 published member) render the page; a theme whose members are
+ * all taken down naturally re-404s (projection cleared → no members).
+ *
+ * Why force-dynamic + @aguhot/core import is safe for the build:
+ *   - force-dynamic marks the route dynamic so Next evaluates it at REQUEST
+ *     time, not BUILD time. getPrisma() reads DATABASE_URL at runtime; that
+ *     call is never reached during `next build`, so the build stays
+ *     DATABASE_URL-free.
+ *
+ * System-derived theme content carries the uniform <AiLabel/> (UX-DR8). The
+ * title uses the editorial serif (font-display) reserved for theme/section/daily
+ * titles. NFR: theme labels + member titles are concept-identity / factual,
+ * never advisory. Return path: "← 返回" link to /topics + browser-native back
+ * (full UX-DR12 scroll/filter context restoration is 2.5).
+ */
+export const dynamic = "force-dynamic";
+
+interface PageProps {
+  params: Promise<{ slug: string }>;
+}
+
+export default async function ThemeContinuityPage({ params }: PageProps) {
+  const { slug } = await params;
+
+  const prisma = getPrisma();
+  const traceId = newTraceId();
+
+  // Read the membership map + the published event summaries (AD-3: only
+  // published_* read models). Build the member set for this slug in JS.
+  const [memberships, events] = await Promise.all([
+    listPublishedThemeMemberships({ prisma, traceId }),
+    listPublishedHotEvents({ prisma, traceId }),
+  ]);
+
+  // Find the hotEventIds whose membership items include this slug.
+  const memberEventIds = new Set<string>();
+  for (const m of memberships) {
+    for (const item of m.items as ThemeRef[]) {
+      if (item.slug === slug) {
+        memberEventIds.add(m.hotEventId);
+      }
+    }
+  }
+
+  // AC3 honest continuity: a slug with no published members → 404 (never render
+  // an empty theme page that would fabricate a theme the system has not
+  // confirmed).
+  if (memberEventIds.size === 0) {
+    notFound();
+  }
+
+  // The member event summaries. Filter the published list to members of this
+  // slug, then sort by latestEvidenceAt ASC (chronological sequence — epic:
+  // continuity reads as a sequence from earliest to latest).
+  const memberEvents = events
+    .filter((e) => memberEventIds.has(e.hotEventId))
+    .sort(
+      (a, b) =>
+        a.latestEvidenceAt.getTime() - b.latestEvidenceAt.getTime(),
+    );
+
+  // Derive the display label for this slug from the membership items (shared
+  // slug → take the first matching ThemeRef.label, which is consistent across
+  // members under the deterministic stub; in general the first-seen label wins).
+  let themeLabel = slug;
+  for (const m of memberships) {
+    for (const item of m.items as ThemeRef[]) {
+      if (item.slug === slug && typeof item.label === "string" && item.label.trim() !== "") {
+        themeLabel = item.label;
+        break;
+      }
+    }
+    if (themeLabel !== slug) break;
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      {/* Return link to the /topics directory (basic navigation; full
+          UX-DR12 scroll/filter context restoration is 2.5). */}
+      <Link
+        href="/topics"
+        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+      >
+        <span aria-hidden>←</span> 返回主题目录
+      </Link>
+
+      <header className="mt-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <h1 className="font-display text-3xl font-bold leading-tight text-ink-primary">
+            {themeLabel}
+          </h1>
+          <AiLabel />
+        </div>
+        <p className="text-sm text-ink-tertiary">
+          按时间序列追踪该主题下的成员事件（从早到晚）。
+        </p>
+      </header>
+
+      {/* Member events as a chronological sequence (latestEvidenceAt ASC). Each
+          member links to its detail page (FR11). */}
+      <section className="mt-10 space-y-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+          成员事件
+        </h2>
+        {memberEvents.length > 0 ? (
+          <ol role="list" className="space-y-3">
+            {memberEvents.map((event) => (
+              <li
+                key={event.hotEventId}
+                className="rounded-lg border border-border-hairline bg-surface-raised px-5 py-4"
+              >
+                <Link
+                  href={`/events/${event.hotEventId}`}
+                  className="group block space-y-1"
+                >
+                  <p className="font-semibold text-ink-primary group-hover:text-brand">
+                    {event.title}
+                  </p>
+                  <p className="font-mono text-xs text-ink-tertiary">
+                    {formatDateTime(event.latestEvidenceAt)} · 来源数 {event.evidenceCount}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          // Defensive: memberEventIds was non-empty (we passed the notFound gate)
+          // but the published event list may have zero matching rows if all
+          // members were taken down between the two reads. Honest: render
+          // nothing fabricated.
+          <p className="text-sm text-ink-tertiary">暂无成员事件。</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/**
+ * Locale-stable UTC format (avoid locale-dependent toLocaleString). YYYY-MM-DD
+ * HH:mm UTC is consistent across build-time TZ and runtime TZ. Shared shape with
+ * the detail page formatter.
+ */
+function formatDateTime(d: Date): string {
+  const iso = d.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+// Keep the type import referenced (PublishedHotEventSummary shapes the sort
+// input; the cast-free path uses the inferred return type of
+// listPublishedHotEvents). This anchor keeps the import non-elided for future
+// explicit typing.
+export type { PublishedHotEventSummary };
+
+--- NEW FILE: apps/web/e2e/seed-themes.ts ---
+/**
+ * Seed script for the @themes e2e — Story 2.3.
+ *
+ * Run with: pnpm --filter web seed:themes
+ *           (tsx e2e/seed-themes.ts)
+ *
+ * Self-contained: produces THREE published events to cover the I/O matrix rows
+ * for theme continuity:
+ *   - 芯片短缺A (2 evidence rows, earlier) → PUBLISHED WITH generated theme
+ *     membership (StubThemeAdapter, test-only) → exercises AC1 (theme page
+ *     chronological sequence + member links) + AC4 (detail→theme link).
+ *   - 芯片短缺B (1 evidence row, later) → PUBLISHED WITH the SAME stub theme
+ *     membership → the /topics/[slug] page aggregates BOTH as a chronological
+ *     sequence (>=2 members sharing the stub slug).
+ *   - 锂矿 (1 evidence row) → PUBLISHED WITHOUT any theme set → exercises AC3
+ *     (honest degraded state "暂无已确认的主题关联。", no theme items).
+ * Returns the themed hotEventIds + titles + the no-theme id + the stub slug +
+ * label so themes.spec.ts can drive /topics/{slug} + /events/{id} + the
+ * detail→theme + theme→detail closed-loop assertions.
+ *
+ * Requires DATABASE_URL pointing at local PG. Does NOT touch seed-console.ts,
+ * seed-feed.ts, seed-detail.ts, seed-market-reaction.ts, seed-associations.ts,
+ * or any other seed (zero-change contract). Clears the full table set (including
+ * the new 2.3 theme tables) so re-runs are deterministic.
+ */
+
+import {
+  clusterEvents,
+  decideReview,
+  generateExplanation,
+  generateThemes,
+  getPrisma,
+  listPendingCandidates,
+  newTraceId,
+  resetPrisma,
+  STUB_THEME_LABEL,
+  STUB_THEME_SLUG,
+  StubThemeAdapter,
+} from "@aguhot/core";
+import { resetEnvCache, requireEnv } from "@aguhot/config";
+
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+export async function seedThemeEvents(): Promise<{
+  themeSlug: string;
+  themeLabel: string;
+  themedHotEventIds: string[];
+  themedTitles: string[];
+  noThemeHotEventId: string;
+  noThemeTitle: string;
+}> {
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  // Clean the full table set (same superset as verify-* scripts + the new 2.3
+  // theme tables, order respects FK constraints). hot_event_revisions (Story
+  // 1.9) has a Restrict FK on hot_events, so it must be cleared before
+  // hot_events. The new 2.3 tables (themes/sets) have Cascade FKs but we clear
+  // them explicitly before hot_events to keep reset ordering uniform.
+  // Deterministic re-runs; does NOT touch other seeds.
+  await prisma.publishedHotEventTheme.deleteMany({});
+  await prisma.eventThemeSet.deleteMany({});
+  await prisma.publishedHotEventAssociation.deleteMany({});
+  await prisma.eventAssociationSet.deleteMany({});
+  await prisma.publishedHotEventReaction.deleteMany({});
+  await prisma.marketReactionSnapshot.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+
+  const source = await prisma.evidenceSource.create({
+    data: {
+      id: newTraceId(),
+      name: "themes-e2e-source",
+      kind: "rss",
+      feedUrl: "file:///unused",
+      enabled: true,
+    },
+  });
+
+  // Three distinct-event record groups → 3 candidates. The 芯片短缺A group is a
+  // short-title + long-superset pair (overlap-coefficient = 1.0 → merge) with 2
+  // records (earlier evidence). The 芯片短缺B group is a single record (later
+  // evidence). Both 芯片短缺 groups get published + themed (sharing the stub
+  // slug). The 锂矿 group stays a single record, published but NOT themed.
+  const twoDaysAgo = new Date(Date.now() - 2 * DAY);
+  const oneDayAgo = new Date(Date.now() - 1 * DAY);
+  const recentAgo = new Date(Date.now() - 2 * HOUR);
+
+  // Group A: 芯片短缺 (earlier evidence — 2 records that merge into 1 event)
+  await seedRecord(prisma, source.id, {
+    title: "芯片短缺加剧",
+    summary: "全球芯片供应链短缺影响多个行业",
+    url: `https://verify.test/芯片短缺-1`,
+    publishedAt: twoDaysAgo,
+  });
+  await seedRecord(prisma, source.id, {
+    title: "芯片短缺加剧持续蔓延",
+    summary: "芯片供应链紧张覆盖汽车手机等行业",
+    url: `https://verify.test/芯片短缺-2`,
+    publishedAt: oneDayAgo,
+  });
+
+  // Group B: 芯片短缺B (later evidence — single record, distinct event)
+  await seedRecord(prisma, source.id, {
+    title: "芯片代工产能紧张",
+    summary: "晶圆代工产能持续紧张",
+    url: `https://verify.test/芯片代工`,
+    publishedAt: recentAgo,
+  });
+
+  // Group C: 锂矿 (no theme — distinct event)
+  await seedRecord(prisma, source.id, {
+    title: "锂矿资源储量公布",
+    summary: "锂矿储量数据公布",
+    url: `https://verify.test/锂矿`,
+    publishedAt: oneDayAgo,
+  });
+
+  await clusterEvents({ prisma, traceId: newTraceId() });
+
+  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+  if (pending.length < 3) {
+    throw new Error(
+      `[seed-themes] expected >= 3 candidates after cluster, got ${pending.length}`,
+    );
+  }
+
+  const toPublishThemedA = pending.find((c) => c.title.includes("芯片短缺"))!;
+  const toPublishThemedB = pending.find((c) => c.title.includes("芯片代工"))!;
+  const toPublishNoTheme = pending.find((c) => c.title.includes("锂矿"))!;
+
+  // PUBLISHED WITH themes: generate explanation, approve (flips to published),
+  // then generateThemes with the StubThemeAdapter (test-only), then
+  // refresh(publish) so the set flows into published_hot_event_themes.
+  for (const candidate of [toPublishThemedA, toPublishThemedB]) {
+    await generateExplanation({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "approve",
+      reviewer: "themes-e2e-seeder",
+      note: "seed published with themes for themes e2e",
+    });
+    await generateThemes({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      adapter: new StubThemeAdapter(),
+    });
+    // Re-refresh to project the appended set into the public read model.
+    // (decideReview's internal refresh ran before the set existed; this second
+    // refresh projects it — same pattern the associations/market-reaction
+    // seeds use.)
+    const { refreshPublishedReadModel } = await import("@aguhot/core");
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+  }
+
+  // PUBLISHED WITHOUT themes: generate explanation + approve directly (no
+  // generateThemes) → the detail read model has a summary row but NO theme
+  // projection row, so the detail page renders the degraded state (AC3).
+  await generateExplanation({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishNoTheme.id,
+  });
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishNoTheme.id,
+    outcome: "approve",
+    reviewer: "themes-e2e-seeder",
+    note: "seed published without themes for degraded-state e2e",
+  });
+
+  resetPrisma();
+
+  return {
+    themeSlug: STUB_THEME_SLUG,
+    themeLabel: STUB_THEME_LABEL,
+    themedHotEventIds: [toPublishThemedA.id, toPublishThemedB.id],
+    themedTitles: [toPublishThemedA.title, toPublishThemedB.title],
+    noThemeHotEventId: toPublishNoTheme.id,
+    noThemeTitle: toPublishNoTheme.title,
+  };
+}
+
+/**
+ * Seed for the I/O-matrix row "无任何主题→目录降级": reset the DB and create ONE
+ * published hot event with NO theme memberships (the only state). Mirrors the
+ * no-theme path of seedThemeEvents() but as the SOLE published event, so the
+ * /topics directory has zero themes and must render the degraded text
+ * 「暂无已确认的主题。」. Returns the published hotEventId for visibility (not
+ * asserted by the caller, but useful for debugging).
+ *
+ * Same pipeline as seedThemeEvents minus generateThemes: resetEnvCache →
+ * requireEnv DATABASE_URL → getPrisma → clear tables in FK order → source +
+ * one record → clusterEvents → generateExplanation → decideReview(approve),
+ * WITHOUT generateThemes → resetPrisma. Table-clear ordering is identical so
+ * re-runs stay deterministic.
+ */
+export async function seedTopicsEmpty(): Promise<{
+  publishedHotEventId: string;
+  publishedTitle: string;
+}> {
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  // Same clean-the-full-table-set ordering as seedThemeEvents() (order respects
+  // FK constraints; hot_event_revisions has a Restrict FK on hot_events, so it
+  // must be cleared before hot_events). See seedThemeEvents() for the rationale.
+  await prisma.publishedHotEventTheme.deleteMany({});
+  await prisma.eventThemeSet.deleteMany({});
+  await prisma.publishedHotEventAssociation.deleteMany({});
+  await prisma.eventAssociationSet.deleteMany({});
+  await prisma.publishedHotEventReaction.deleteMany({});
+  await prisma.marketReactionSnapshot.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+
+  const source = await prisma.evidenceSource.create({
+    data: {
+      id: newTraceId(),
+      name: "themes-empty-e2e-source",
+      kind: "rss",
+      feedUrl: "file:///unused",
+      enabled: true,
+    },
+  });
+
+  // A single record → a single candidate → published WITHOUT themes. The
+  // /topics directory read model will then have zero theme rows, so the
+  // directory must render the degraded text.
+  const oneDayAgo = new Date(Date.now() - DAY);
+  await seedRecord(prisma, source.id, {
+    title: "稀土出口配额调整",
+    summary: "稀土出口配额数据公布",
+    url: `https://verify.test/稀土`,
+    publishedAt: oneDayAgo,
+  });
+
+  await clusterEvents({ prisma, traceId: newTraceId() });
+
+  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+  if (pending.length < 1) {
+    throw new Error(
+      `[seed-themes-empty] expected >= 1 candidate after cluster, got ${pending.length}`,
+    );
+  }
+  const toPublish = pending[0];
+
+  // PUBLISHED WITHOUT themes: generate explanation + approve directly (no
+  // generateThemes) → no theme projection, so the /topics directory has no
+  // themes to list and must degrade. Same path as the noTheme branch of
+  // seedThemeEvents().
+  await generateExplanation({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublish.id,
+  });
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublish.id,
+    outcome: "approve",
+    reviewer: "themes-empty-e2e-seeder",
+    note: "seed published without themes for empty-topics-directory e2e",
+  });
+
+  resetPrisma();
+
+  return {
+    publishedHotEventId: toPublish.id,
+    publishedTitle: toPublish.title,
+  };
+}
+
+async function seedRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  sourceId: string,
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
+): Promise<void> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const salt = randomUUID();
+  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
+  const contentHash = createHash("sha256").update(material).digest("hex");
+  await prisma.evidenceRecord.create({
+    data: {
+      id: newTraceId(),
+      sourceId,
+      url: data.url,
+      title: data.title,
+      summary: data.summary,
+      publishedAt: data.publishedAt,
+      ingestedAt: new Date(),
+      contentHash,
+      status: "archived",
+      failureReason: null,
+      rawPayload: { seeded: true, salt },
+      traceId: newTraceId(),
+    },
+  });
+}
+
+// Run directly (tsx e2e/seed-themes.ts) — but NOT when imported by the e2e spec
+// (which calls seedThemeEvents() itself in a beforeAll to capture the ids). ESM
+// direct-run detection: only auto-run + exit when this module is the entry.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const result = await seedThemeEvents();
+  console.log(
+    `[seed-themes] themeSlug: ${result.themeSlug} (${result.themeLabel}) | themed: ${result.themedHotEventIds.join(",")} | noTheme: ${result.noThemeHotEventId} (${result.noThemeTitle})`,
+  );
+  process.exit(0);
+}
+
+--- NEW FILE: apps/web/e2e/themes.spec.ts ---
+import { expect, test } from "@playwright/test";
+
+import { seedThemeEvents, seedTopicsEmpty } from "./seed-themes";
+
+/**
+ * Public theme continuity e2e — Story 2.3. Tagged @themes so it runs only
+ * under `pnpm --filter web e2e:themes` (DB-backed + seed) and does NOT run under
+ * the public `pnpm --filter web e2e` (whose --grep-invert excludes @console,
+ * @feed, @detail, @revision, @merge-split, @market-reaction, @associations, AND
+ * @themes).
+ *
+ * The beforeAll imports and runs seedThemeEvents() (the same function
+ * `pnpm --filter web seed:themes` runs) to capture the dynamic themed + noTheme
+ * hotEventIds + the stub slug/label.
+ *
+ * Requires request-time DATABASE_URL: the /topics, /topics/[slug], and detail
+ * routes are force-dynamic and read the published read models via getPrisma at
+ * request time.
+ *
+ * Covers:
+ *   - AC1: /topics/{slug} is 200, the editorial-serif title renders the theme
+ *     label, >=2 member events render in chronological order (latestEvidenceAt
+ *     ASC), each member is a clickable link to /events/{id} (FR11).
+ *   - AC1 closed loop (theme→detail): clicking a member link lands on the detail
+ *     page (200).
+ *   - AC2/AC4: /events/{themedId} is 200, the "主题" section renders, each theme
+ *     is a clickable FilterPill link to /topics/{slug} (FR9), the provenance
+ *     line "关联依据：系统映射" renders.
+ *   - AC4 closed loop (detail→theme): clicking the theme link lands on the theme
+ *     page (200, non-dead-link).
+ *   - AC1 /topics directory: /topics lists the theme as a link to
+ *     /topics/{slug}.
+ *   - AC3: /topics/{unknown-slug} 404s (never fabricates a theme page).
+ *   - AC3: /events/{noThemeId} renders the "暂无已确认的主题关联。" degraded line
+ *     and NO theme pills.
+ *   - NFR5 no-regression: the existing partitions (发生了什么 / 为什么重要 /
+ *     当前仍不确定什么) + market-reaction + associations + evidence timeline
+ *     still render for themed events.
+ *   - AC1 /topics directory degraded row "无任何主题→目录降级": when NO
+ *     published hot event has any theme membership, /topics renders the
+ *     degraded text「暂无已确认的主题。」 and NO /topics/{slug} links. Seeded by
+ *     seedTopicsEmpty() (resets the DB → one published hot event with NO theme
+ *     memberships as the sole state). Placed LAST in the serial suite: the
+ *     earlier tests have already run against the populated seed, and serial
+ *     mode guarantees in-file ordering. The DB is intentionally left in the
+ *     empty-topics state after this test (no restore needed).
+ */
+
+test.describe("主题页连续追踪 (Story 2.3) @themes", () => {
+  // Serial mode: beforeAll seeds the DB exactly once and the tests share the
+  // captured ids. Without this, fullyParallel would run beforeAll per worker
+  // and the concurrent seeds would race on the same DB.
+  test.describe.configure({ mode: "serial" });
+
+  let themeSlug: string;
+  let themeLabel: string;
+  let themedIds: string[];
+  let themedTitles: string[];
+  let noThemeId: string;
+
+  test.beforeAll(async () => {
+    const seeded = await seedThemeEvents();
+    themeSlug = seeded.themeSlug;
+    themeLabel = seeded.themeLabel;
+    themedIds = seeded.themedHotEventIds;
+    themedTitles = seeded.themedTitles;
+    noThemeId = seeded.noThemeHotEventId;
+  });
+
+  test("AC1 主题页：标题可见、≥2 成员按时间序可见、每成员为可点击链 /events/{id}", async ({ page }) => {
+    const response = await page.goto(`/topics/${themeSlug}`);
+    expect(response, "theme page should respond").not.toBeNull();
+    expect(response!.status(), "theme page status should be 200").toBe(200);
+
+    // AC1: the editorial-serif title renders the theme label.
+    await expect(
+      page.getByRole("heading", { level: 1, name: themeLabel }),
+    ).toBeVisible();
+
+    // AC1: the member-events heading renders.
+    await expect(
+      page.getByRole("heading", { level: 2, name: "成员事件" }),
+    ).toBeVisible();
+
+    // AC1: each themed member title is visible (>=2 members).
+    for (const title of themedTitles) {
+      await expect(page.getByText(title).first()).toBeVisible();
+    }
+
+    // AC1 (FR11): each member is a clickable link to /events/{id}.
+    for (const id of themedIds) {
+      const memberLink = page.locator(`a[href="/events/${id}"]`);
+      await expect(memberLink).toBeVisible();
+    }
+  });
+
+  test("AC1 主题→详情闭环：点成员链到达 /events/{id} 200", async ({ page }) => {
+    await page.goto(`/topics/${themeSlug}`);
+    // Click the first member link.
+    const firstMember = page.locator(`a[href="/events/${themedIds[0]}"]`);
+    await firstMember.click();
+    await expect(page).toHaveURL(new RegExp(`/events/${themedIds[0]}$`));
+    // The detail page loads (200 — not a dead link).
+    await expect(
+      page.getByRole("heading", { level: 1 }).first(),
+    ).toBeVisible();
+  });
+
+  test("AC2/AC4 详情主题 section：链 /topics/{slug} 可见、provenance 可见", async ({ page }) => {
+    const response = await page.goto(`/events/${themedIds[0]}`);
+    expect(response, "themed detail should respond").not.toBeNull();
+    expect(response!.status(), "themed detail status should be 200").toBe(200);
+
+    // The "主题" heading renders.
+    const themeSection = page.locator("section", { hasText: "主题" }).first();
+    await expect(themeSection).toBeVisible();
+
+    // AC4 (FR9): the theme is a clickable FilterPill link to /topics/{slug}.
+    const themeLink = themeSection.getByRole("link", { name: themeLabel });
+    await expect(themeLink).toBeVisible();
+    await expect(themeLink).toHaveAttribute(
+      "href",
+      `/topics/${encodeURIComponent(themeSlug)}`,
+    );
+
+    // AC2: the provenance line renders.
+    await expect(themeSection.getByText("关联依据：系统映射")).toBeVisible();
+
+    // The degraded line must NOT appear (themes were projected).
+    await expect(
+      themeSection.getByText("暂无已确认的主题关联。"),
+    ).toHaveCount(0);
+  });
+
+  test("AC4 详情→主题闭环：点主题链到达 /topics/{slug} 200（非死链）", async ({ page }) => {
+    await page.goto(`/events/${themedIds[0]}`);
+    const themeSection = page.locator("section", { hasText: "主题" }).first();
+    const themeLink = themeSection.getByRole("link", { name: themeLabel });
+    await themeLink.click();
+
+    await expect(page).toHaveURL(new RegExp(`/topics/${encodeURIComponent(themeSlug)}$`));
+    // The theme page loads (200 — non-dead-link).
+    await expect(
+      page.getByRole("heading", { level: 1, name: themeLabel }),
+    ).toBeVisible();
+  });
+
+  test("AC1 /topics 目录：列该主题链 /topics/{slug}", async ({ page }) => {
+    const response = await page.goto("/topics");
+    expect(response, "/topics should respond").not.toBeNull();
+    expect(response!.status(), "/topics status should be 200").toBe(200);
+
+    // The directory lists the theme as a link to /topics/{slug}.
+    const themeLink = page.locator(
+      `a[href="/topics/${encodeURIComponent(themeSlug)}"]`,
+    );
+    await expect(themeLink).toBeVisible();
+    await expect(themeLink).toHaveText(themeLabel);
+
+    // The degraded line must NOT appear (themes exist).
+    await expect(page.getByText("暂无已确认的主题。")).toHaveCount(0);
+  });
+
+  test("AC3 未知主题 slug → 404（不造假主题页）", async ({ page }) => {
+    const response = await page.goto("/topics/this-slug-does-not-exist-xyz");
+    expect(response!.status(), "unknown slug should be 404").toBe(404);
+  });
+
+  test("AC3 已发布无主题：主题 section 显降级文案、无主题项", async ({ page }) => {
+    const response = await page.goto(`/events/${noThemeId}`);
+    expect(response, "no-theme detail should respond").not.toBeNull();
+    expect(response!.status(), "no-theme detail status should be 200").toBe(200);
+
+    // The "主题" heading still renders (the block is present, just degraded).
+    const themeSection = page.locator("section", { hasText: "主题" }).first();
+    await expect(themeSection).toBeVisible();
+
+    // AC3: the honest degraded line renders.
+    await expect(
+      themeSection.getByText("暂无已确认的主题关联。"),
+    ).toBeVisible();
+
+    // AC3: the provenance line must NOT appear (no themes were projected).
+    await expect(themeSection.getByText("关联依据：系统映射")).toHaveCount(0);
+
+    // AC3: NO theme link to /topics/{slug} should appear.
+    await expect(
+      themeSection.locator(`a[href^="/topics/"]`),
+    ).toHaveCount(0);
+  });
+
+  test("NFR5 不回归：既有六分区 + 证据时间线在主题事件上照常渲染", async ({ page }) => {
+    await page.goto(`/events/${themedIds[0]}`);
+    await expect(
+      page.getByRole("heading", { level: 2, name: "发生了什么" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "为什么重要" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "当前仍不确定什么" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "市场反应" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "关联" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "证据时间线" }),
+    ).toBeVisible();
+  });
+
+  test("AC1 /topics 目录降级行：无任何主题时显降级文案、无主题链（无任何主题→目录降级）", async ({ page }) => {
+    // Reseed the DB to the empty-topics state: ONE published hot event with NO
+    // theme memberships. Runs LAST in the serial suite so the populated-state
+    // tests above have already executed. Serial mode guarantees ordering.
+    await seedTopicsEmpty();
+
+    const response = await page.goto("/topics");
+    expect(response, "/topics (empty) should respond").not.toBeNull();
+    expect(response!.status(), "/topics (empty) status should be 200").toBe(200);
+
+    // The degraded directory text must render (no published themes exist).
+    await expect(page.getByText("暂无已确认的主题。")).toBeVisible();
+
+    // NO theme link to /topics/{slug} should appear anywhere on the page.
+    await expect(page.locator(`a[href^="/topics/"]`)).toHaveCount(0);
+  });
+});
+
+--- NEW FILE: apps/worker/src/queues/theme-backfill-queue.ts ---
+/**
+ * BullMQ theme-backfill queue + worker (worker runtime) — Story 2.3.
+ *
+ * AD-4: theme membership backfill runs as a BullMQ job, off the web request
+ * path. The worker dynamically imports @aguhot/core's generateThemes (the single
+ * writer of event_theme_sets, AD-2) and runs one pass over PUBLISHED hot events
+ * that have no theme set yet (themes are attached to published events — the
+ * continuity substrate relates public events to themes).
+ *
+ * This mirrors market-reaction-queue.ts in structure (Story 2.1): lazy Queue
+ * singleton, enqueue helper with job-retention caps, and a worker that resolves
+ * the Prisma client via a dynamic import so the worker bundle stays the only
+ * place that pulls in the domain+DB layer. epic-2-context lists theme-backfill
+ * as one of three Epic-2 BullMQ job categories (market-signal aggregation 2-1 /
+ * daily digest 2-4 / theme backfill 2-3) — unlike 2.2 associations (no worker),
+ * theme-backfill is an epic-listed job category, so the worker is built here.
+ *
+ * Queue name + job name are kebab-case per ARCHITECTURE-SPINE conventions
+ * ("theme-backfill"). Like the other workers, this job is independent and
+ * idempotent: it does NOT chain from explain/market/publish automatically
+ * (cluster→explain→market→theme auto orchestration / cron is deferred). The
+ * worker processes published hot events that have no event_theme_set; running it
+ * again is safe (a re-run over an already-set event appends a fresh row, AD-5 —
+ * the intended idempotent append behavior; V1 only processes the "no set" set).
+ *
+ * V1 HONESTY RULE (load-bearing, mirrors market-reaction-queue.ts): the worker
+ * runtime resolves NO adapter (real theme knowledge source procurement is
+ * deferred). With no adapter, generateThemes returns null and writes nothing, so
+ * prod degrades honestly — the detail page shows "暂无已确认的主题关联。" (AC3)
+ * and /topics shows "暂无已确认的主题。" / unknown slugs 404. StubThemeAdapter
+ * is TEST-ONLY (verify/e2e import it from core and pass it to generateThemes
+ * directly); apps/worker MUST NOT import it.
+ *
+ *   // ponytail: real provider wired when procured — V1 no adapter, prod degrades
+ *   // honestly.
+ *
+ * When a real provider lands, the worker will resolve that adapter here (one
+ * line), generateThemes will flow themes through, and source will flip from
+ * "template" to the provider id. The port + append-only write table + read model
+ * + /topics pages are all already in place.
+ */
+
+import { Queue, Worker, type Job } from "bullmq";
+
+import { getRedis } from "./connection.js";
+
+export const THEME_BACKFILL_QUEUE_NAME = "theme-backfill";
+export const THEME_BACKFILL_JOB_NAME = "theme-backfill";
+
+export interface ThemeBackfillJobData {
+  traceId: string;
+}
+
+/**
+ * Lazily-constructed Queue for enqueuing theme-backfill jobs. Reused across
+ * enqueue calls in the same process.
+ */
+let queue: Queue | null = null;
+
+export function getThemeBackfillQueue(): Queue {
+  if (queue !== null) return queue;
+  queue = new Queue(THEME_BACKFILL_QUEUE_NAME, {
+    connection: getRedis(),
+  });
+  return queue;
+}
+
+/**
+ * Enqueue one theme-backfill job. Returns the job so callers (e.g. the verify
+ * script) can await its completion.
+ */
+export async function enqueueThemeBackfill(traceId: string): Promise<Job> {
+  const q = getThemeBackfillQueue();
+  // Prune completed/failed jobs so Redis does not grow unbounded as theme-
+  // backfill runs accumulate (keep a short tail for operator inspection).
+  return q.add(THEME_BACKFILL_JOB_NAME, { traceId }, {
+    removeOnComplete: 100,
+    removeOnFail: 500,
+  });
+}
+
+/**
+ * Register the theme-backfill Worker in this process. The worker resolves the
+ * prisma client, then finds PUBLISHED hot events (publication_status=
+ * "published") that have no event_theme_set yet. The status filter is
+ * load-bearing (mirrors market-reaction-queue.ts): themes relate public events,
+ * so only published events are eligible — not candidate/rejected/taken_down.
+ *
+ * V1 worker runtime resolves NO adapter (procurement deferred) → the whole pass
+ * skips (no generateThemes call possible) → returns {generated:0, skipped} and
+ * prod degrades honestly. This is the intended V1 behavior: the pipeline is
+ * correct (verify/e2e prove the happy path with StubThemeAdapter), but the
+ * worker cannot produce real themes without a real provider, so it writes
+ * nothing rather than fabricating fixture data.
+ *
+ * When an adapter IS available, the worker calls generateThemes for each
+ * eligible event, then refreshPublishedReadModel(publish) so the new set flows
+ * into published_hot_event_themes immediately. Per-event try/catch isolates
+ * failures (one bad event does not abort the rest).
+ */
+export function registerThemeBackfillWorker(): Worker {
+  const worker = new Worker(
+    THEME_BACKFILL_QUEUE_NAME,
+    async (job: Job) => {
+      const {
+        getPrisma,
+        generateThemes,
+        refreshPublishedReadModel,
+      } = await import("@aguhot/core");
+      const prisma = getPrisma();
+      const data = job.data as ThemeBackfillJobData;
+
+      // Find PUBLISHED hot events with no theme set yet. The status filter is
+      // load-bearing (themes relate public events). A left join via the reverse
+      // relation selects events whose eventThemeSets is empty.
+      const eligible = await prisma.hotEvent.findMany({
+        where: {
+          publicationStatus: "published",
+          eventThemeSets: { none: {} },
+        },
+        select: { id: true },
+      });
+
+      // V1 HONESTY RULE: no real theme knowledge source is wired (procurement
+      // deferred). With no adapter, generateThemes cannot run — it would return
+      // null and write nothing. We skip the whole batch and report it as
+      // skipped so the caller knows the pipeline ran but produced no themes
+      // (honest degradation, AC3). StubThemeAdapter is test-only and is NOT
+      // imported here.
+      //
+      // ponytail: real provider wired when procured — V1 no adapter, prod
+      // degrades honestly.
+      const adapter = undefined;
+      if (adapter === undefined) {
+        return { generated: 0, skipped: eligible.length };
+      }
+
+      let generated = 0;
+      for (const ev of eligible) {
+        try {
+          const result = await generateThemes({
+            prisma,
+            traceId: data.traceId,
+            hotEventId: ev.id,
+            adapter,
+          });
+          if (result !== null) {
+            generated += 1;
+            // Refresh the public projection so the new set flows into
+            // published_hot_event_themes immediately (mirrors how decideReview
+            // calls refresh after a status change — the trigger layer refreshes,
+            // the generator only appends).
+            await refreshPublishedReadModel({
+              prisma,
+              traceId: data.traceId,
+              hotEventId: ev.id,
+              action: "publish",
+            });
+          }
+        } catch (error) {
+          // Isolate per-event failures: log and continue so one bad event does
+          // not abort the whole pass.
+          console.error(
+            `[theme-backfill-worker] failed for hotEvent ${ev.id}`,
+            error,
+          );
+        }
+      }
+      return { generated, considered: eligible.length };
+    },
+    { connection: getRedis() },
+  );
+  return worker;
+}
+
+--- NEW FILE: apps/worker/src/verify-themes.ts ---
+/**
+ * Deterministic integration verification for the theme membership generation
+ * pipeline + continuity projection — Story 2.3.
+ *
+ * Run with: pnpm --filter worker verify:themes (tsx src/verify-themes.ts).
+ *
+ * It exercises generateThemes with the StubThemeAdapter (test-only, imported
+ * from core — NOT wired in the worker/prod runtime: the theme-backfill worker
+ * resolves adapter = undefined so prod degrades honestly) against real local
+ * PostgreSQL (NO Redis needed — generateThemes is pure logic + a DB append, no
+ * BullMQ queue at the generator level, same convention as
+ * verify-associations/verify-market-reaction calling generateAssociations/
+ * generateMarketReaction directly), then asserts the DB state — surface-
+ * anchored, not mock-based. It prints PASS/FAIL and exits non-zero iff any
+ * assertion fails.
+ *
+ * Flow:
+ *   resetState → seed one source + archived records → clusterEvents (candidate)
+ *   → generateExplanation → decideReview(approve) → published →
+ *   generateThemes({adapter: StubThemeAdapter}) → refresh(publish)
+ *   → assert:
+ *
+ * Assertions:
+ *   1. generateThemes appends one set row (source="template", traceId), items
+ *      has >=1 item, every item has non-empty slug/label/mappingBasis.
+ *   2. After refresh(publish), published_hot_event_themes projects the set;
+ *      getPublishedHotEventDetail returns non-null `themes` (items).
+ *   3. AD-5 append-only: a second generateThemes appends a SECOND row (the
+ *      first untouched); refresh projects the latest (generatedAt = gen2,
+ *      items = gen2 items).
+ *   4. adapter missing → generateThemes returns null, writes nothing.
+ *   5. adapter returns [] → generateThemes returns null, writes nothing.
+ *   6. AC2: an adapter item missing mappingBasis / slug / label → generateThemes
+ *      THROWS (fail-fast, never silently fills a default).
+ *   7. NFR: no investment-advice wording (buy/sell/target-price/position) in any
+ *      item label.
+ *   8. takedown clears published_hot_event_themes (6th table) and
+ *      getPublishedHotEventDetail returns null (404, no leak).
+ *   9. listPublishedThemeMemberships returns the projected row (theme-page
+ *      source).
+ */
+
+import {
+  clusterEvents,
+  decideReview,
+  generateExplanation,
+  generateThemes,
+  getPrisma,
+  getPublishedHotEventDetail,
+  listPendingCandidates,
+  listPublishedThemeMemberships,
+  newTraceId,
+  refreshPublishedReadModel,
+  resetPrisma,
+  StubThemeAdapter,
+} from "@aguhot/core";
+import { resetEnvCache, requireEnv } from "@aguhot/config";
+
+interface Assertion {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+// Fixed base time so all seeded records have deterministic publishedAt offsets.
+const BASE_MS = Date.UTC(2024, 0, 1);
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+async function main(): Promise<void> {
+  // Resolve infra (Block-If: PG must be reachable). No Redis needed — the
+  // derivation is pure logic + a DB append. The theme-backfill worker exists
+  // (epic-listed job category) but this verify calls generateThemes directly.
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  const assertions: Assertion[] = [];
+
+  try {
+    await resetState(prisma);
+
+    // --- Seed: one source + 2 archived records → clusterEvents → 1 candidate --
+    // Two records whose titles are strict subsets of one another so they merge
+    // into ONE candidate via overlap-coefficient (each scores 1.0 against the
+    // accumulated signature).
+    const source = await prisma.evidenceSource.create({
+      data: {
+        id: newTraceId(),
+        name: "verify-themes-source",
+        kind: "rss",
+        feedUrl: "file:///unused",
+        enabled: true,
+      },
+    });
+
+    await seedRecord(prisma, source.id, {
+      title: "芯片短缺",
+      summary: "全球芯片供应链短缺",
+      url: "https://verify.test/芯片-1",
+      publishedAt: new Date(BASE_MS),
+    });
+    await seedRecord(prisma, source.id, {
+      title: "芯片短缺持续蔓延",
+      summary: "芯片供应链紧张覆盖多个行业",
+      url: "https://verify.test/芯片-2",
+      publishedAt: new Date(BASE_MS + 1 * DAY),
+    });
+
+    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
+    assertions.push({
+      name: "seed: cluster produced 1 candidate from 2 overlapping records",
+      ok: clusterResult.newCandidates === 1,
+      detail: `newCandidates=${clusterResult.newCandidates}`,
+    });
+
+    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+    if (pending.length !== 1) {
+      throw new Error(
+        `[verify-themes] expected 1 candidate, got ${pending.length}`,
+      );
+    }
+    const candidate = pending[0]!;
+
+    // --- Publish the candidate (themes are projected at publish time) ---
+    // generateExplanation before approve (so the detail read model is complete),
+    // then decideReview(approve) to flip to published.
+    await generateExplanation({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "approve",
+      reviewer: "verify-themes",
+      note: "publish for themes verify",
+    });
+
+    // --- 1 + 2: generateThemes appends one set, projects, detail --
+    // The StubThemeAdapter returns a fixed non-null ThemeRef[]
+    // (slug=chip-supply-chain, label=芯片供应链, mappingBasis="knowledge_base:v1").
+    // generateThemes normalizes and appends one row.
+    const adapter = new StubThemeAdapter();
+    const genTrace = newTraceId();
+    const gen1 = await generateThemes({
+      prisma,
+      traceId: genTrace,
+      hotEventId: candidate.id,
+      adapter,
+    });
+    assertions.push({
+      name: "generateThemes returns non-null",
+      ok: gen1 !== null,
+      detail: gen1 === null ? "(null result)" : "(non-null)",
+    });
+
+    if (gen1 !== null) {
+      assertions.push({
+        name: "items has >=1 item with non-empty slug/label/mappingBasis",
+        ok:
+          gen1.items.length >= 1 &&
+          gen1.items.every(
+            (it) =>
+              it.slug.trim() !== "" &&
+              it.label.trim() !== "" &&
+              it.mappingBasis.trim() !== "",
+          ),
+        detail: `items=${gen1.items.map((i) => `${i.slug}:${i.label}`).join(",")}`,
+      });
+      assertions.push({
+        name: "generateThemes result carries source=template + traceId",
+        ok: gen1.source === "template" && gen1.traceId === genTrace,
+        detail: `source=${gen1.source}`,
+      });
+      // NFR: no investment-advice wording in any label.
+      assertions.push({
+        name: "NFR: no buy/sell/target-price/position wording in any item label",
+        ok: gen1.items.every((it) => noInvestAdvice(it.label)),
+        detail: "(checked 买卖/目标价/持仓/买入/卖出/增持/减持 keywords)",
+      });
+    }
+
+    const setsAfter1 = await prisma.eventThemeSet.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "event_theme_sets row appended (count=1, source=template)",
+      ok: setsAfter1 === 1,
+      detail: `count=${setsAfter1}`,
+    });
+
+    const row1 = await prisma.eventThemeSet.findFirst({
+      where: { hotEventId: candidate.id },
+      orderBy: { createdAt: "asc" },
+    });
+    assertions.push({
+      name: "appended row: source=template, traceId carried",
+      ok: row1 !== null && row1!.source === "template" && row1!.traceId === genTrace,
+    });
+
+    // Refresh the public projection so the set flows into
+    // published_hot_event_themes.
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+
+    const themeRow = await prisma.publishedHotEventTheme.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "published_hot_event_themes row projected after refresh",
+      ok: themeRow !== null && themeRow!.themeSource === "template",
+      detail:
+        themeRow === null ? "(no row)" : `source=${themeRow!.themeSource}`,
+    });
+
+    const detail = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "detail.themes non-null after projection (items carry through)",
+      ok:
+        detail !== null &&
+        detail!.themes !== null &&
+        detail!.themes!.items.length >= 1 &&
+        detail!.themes!.items.every(
+          (it) => it.slug.trim() !== "" && it.label.trim() !== "" && it.mappingBasis.trim() !== "",
+        ),
+      detail:
+        detail === null || detail!.themes === null
+          ? "(null detail/themes)"
+          : `items=${detail!.themes!.items.map((i) => `${i.slug}:${i.label}`).join(",")}`,
+    });
+
+    // --- 3: AD-5 append-only — calling AGAIN appends a SECOND row --
+    await sleep(20);
+    const gen2 = await generateThemes({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      adapter,
+    });
+    const setsAfter2 = await prisma.eventThemeSet.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "AD-5 append-only: second call appends a second row (first untouched)",
+      ok: setsAfter2 === 2 && gen2 !== null,
+      detail: `count=${setsAfter2}`,
+    });
+
+    // Refresh projects the LATEST set (generatedAt = gen2.createdAt, items = gen2).
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+    const detailAfterGen2 = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "refresh projects the LATEST set (generatedAt = gen2.createdAt)",
+      ok:
+        gen2 !== null &&
+        detailAfterGen2 !== null &&
+        detailAfterGen2!.themes !== null &&
+        detailAfterGen2!.themes!.generatedAt.getTime() ===
+          gen2.createdAt.getTime(),
+      detail:
+        gen2 === null || detailAfterGen2?.themes === null
+          ? "(gen2 or projection null)"
+          : `projected generatedAt=${detailAfterGen2!.themes!.generatedAt.toISOString()} vs gen2=${gen2.createdAt.toISOString()}`,
+    });
+
+    // --- 4: adapter missing → returns null, writes nothing --
+    // Create a second published event to test the no-adapter path on a clean
+    // event (so the set count baseline is 0).
+    await seedRecord(prisma, source.id, {
+      title: "新能源补贴退坡",
+      summary: "新能源补贴政策退坡",
+      url: "https://verify.test/新能源",
+      publishedAt: new Date(BASE_MS + 2 * DAY),
+    });
+    await clusterEvents({ prisma, traceId: newTraceId() });
+    const pending2 = await listPendingCandidates({ prisma, traceId: newTraceId() });
+    const newEnergy = pending2.find((c) => c.title.includes("新能源"))!;
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: newEnergy.id,
+      outcome: "approve",
+      reviewer: "verify-themes",
+      note: "publish for no-adapter verify",
+    });
+
+    const noAdapter = await generateThemes({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: newEnergy.id,
+      // adapter omitted → V1 prod path (theme-backfill worker resolves none) →
+      // returns null.
+    });
+    const noAdapterSets = await prisma.eventThemeSet.count({
+      where: { hotEventId: newEnergy.id },
+    });
+    assertions.push({
+      name: "adapter missing: generateThemes returns null",
+      ok: noAdapter === null,
+    });
+    assertions.push({
+      name: "adapter missing: no event_theme_sets row written",
+      ok: noAdapterSets === 0,
+      detail: `count=${noAdapterSets}`,
+    });
+
+    // --- 5: adapter returns [] → returns null, writes nothing --
+    const emptyAdapter: { fetchThemes: () => Promise<never[]> } = {
+      fetchThemes: async () => [],
+    };
+    const emptyResult = await generateThemes({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: newEnergy.id,
+      adapter: emptyAdapter as never,
+    });
+    const emptySets = await prisma.eventThemeSet.count({
+      where: { hotEventId: newEnergy.id },
+    });
+    assertions.push({
+      name: "adapter returns []: generateThemes returns null",
+      ok: emptyResult === null,
+    });
+    assertions.push({
+      name: "adapter returns []: no event_theme_sets row written",
+      ok: emptySets === 0,
+      detail: `count=${emptySets}`,
+    });
+
+    // --- 6: AC2 — adapter returns an item missing mappingBasis / slug / label → THROWS --
+    const basisLessAdapter: {
+      fetchThemes: () => Promise<
+        { slug: string; label: string; mappingBasis: string }[]
+      >;
+    } = {
+      fetchThemes: async () => [
+        { slug: "no-basis", label: "无依据主题", mappingBasis: "" },
+      ],
+    };
+    let threwBasis = false;
+    try {
+      await generateThemes({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: newEnergy.id,
+        adapter: basisLessAdapter as never,
+      });
+    } catch {
+      threwBasis = true;
+    }
+    const basisLessSets = await prisma.eventThemeSet.count({
+      where: { hotEventId: newEnergy.id },
+    });
+    assertions.push({
+      name: "AC2: missing mappingBasis → generateThemes throws (fail-fast)",
+      ok: threwBasis,
+    });
+    assertions.push({
+      name: "AC2: missing mappingBasis → no row written",
+      ok: basisLessSets === 0,
+      detail: `count=${basisLessSets}`,
+    });
+
+    // AC2: missing slug → throws
+    const noSlugAdapter: {
+      fetchThemes: () => Promise<
+        { slug: string; label: string; mappingBasis: string }[]
+      >;
+    } = {
+      fetchThemes: async () => [
+        { slug: "", label: "无标识主题", mappingBasis: "knowledge_base:v1" },
+      ],
+    };
+    let threwSlug = false;
+    try {
+      await generateThemes({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: newEnergy.id,
+        adapter: noSlugAdapter as never,
+      });
+    } catch {
+      threwSlug = true;
+    }
+    assertions.push({
+      name: "AC2: missing slug → generateThemes throws (fail-fast)",
+      ok: threwSlug,
+    });
+
+    // AC2: missing label → throws
+    const noLabelAdapter: {
+      fetchThemes: () => Promise<
+        { slug: string; label: string; mappingBasis: string }[]
+      >;
+    } = {
+      fetchThemes: async () => [
+        { slug: "no-label", label: "", mappingBasis: "knowledge_base:v1" },
+      ],
+    };
+    let threwLabel = false;
+    try {
+      await generateThemes({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: newEnergy.id,
+        adapter: noLabelAdapter as never,
+      });
+    } catch {
+      threwLabel = true;
+    }
+    assertions.push({
+      name: "AC2: missing label → generateThemes throws (fail-fast)",
+      ok: threwLabel,
+    });
+
+    // --- 7: NFR already asserted inline above per-item; re-check the projected row --
+    const projectedRow = await prisma.publishedHotEventTheme.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "NFR: projected theme items have no investment-advice keywords",
+      ok:
+        projectedRow !== null &&
+        (projectedRow!.items as Array<{ label: string }>).every((it) =>
+          noInvestAdvice(it.label),
+        ),
+    });
+
+    // --- 8: takedown clears published_hot_event_themes (6th table) + detail null --
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "takedown",
+      reviewer: "verify-themes",
+      note: "takedown for theme-clear verify",
+    });
+    const themeRowAfterTakedown = await prisma.publishedHotEventTheme.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "takedown cleared published_hot_event_themes (no stale row)",
+      ok: themeRowAfterTakedown === null,
+    });
+    const detailAfterTakedown = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "takedown: getPublishedHotEventDetail returns null (no leak, AD-8)",
+      ok: detailAfterTakedown === null,
+    });
+
+    // --- 9: listPublishedThemeMemberships returns the projected row ---
+    // Re-publish the newEnergy event + generate themes to test
+    // listPublishedThemeMemberships on a populated projection (the candidate was
+    // taken down above). Generate for BOTH newEnergy and re-published candidate
+    // so the membership has >=2 events sharing the stub slug (continuity
+    // substrate shape — the /topics/[slug] page aggregates them).
+    await generateThemes({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: newEnergy.id,
+      adapter,
+    });
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: newEnergy.id,
+      action: "publish",
+    });
+    const listResult = await listPublishedThemeMemberships({
+      prisma,
+      traceId: newTraceId(),
+    });
+    const newEnergyMembership = listResult.find((r) => r.hotEventId === newEnergy.id);
+    assertions.push({
+      name: "listPublishedThemeMemberships returns the projected row (theme-page source)",
+      ok:
+        newEnergyMembership !== undefined &&
+        newEnergyMembership.items.length >= 1 &&
+        newEnergyMembership.items.every(
+          (it) => it.slug.trim() !== "" && it.mappingBasis.trim() !== "",
+        ),
+      detail:
+        newEnergyMembership === undefined
+          ? "(no row for newEnergy)"
+          : `items=${newEnergyMembership.items.map((i) => `${i.slug}:${i.label}`).join(",")}`,
+    });
+  } finally {
+    await cleanup(prisma);
+    resetPrisma();
+  }
+
+  report(assertions);
+}
+
+// --- helpers -----------------------------------------------------------------
+
+/**
+ * The investment-advice keywords the derivation must NEVER emit (NFR: the
+ * product must not imply investment advice). The check is conservative — these
+ * are the common buy/sell/target-price/position terms. Theme item labels are
+ * descriptive (theme concept identity), never advisory.
+ */
+const ADVICE_KEYWORDS = ["买入", "卖出", "目标价", "持仓", "增持", "减持", "建议买", "建议卖"];
+
+function noInvestAdvice(text: string): boolean {
+  return !ADVICE_KEYWORDS.some((k) => text.includes(k));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  // Order matters for FK constraints. published_hot_event_themes +
+  // event_theme_sets + published_hot_event_associations + event_association_sets
+  // + published_hot_event_reactions + market_reaction_snapshots +
+  // explanation_versions + published_* new tables reference hot_events;
+  // hot_event_evidence references both. hot_event_revisions (Story 1.9) has a
+  // Restrict FK on hot_events, so it must be cleared before hot_events. The new
+  // 2.3 tables (themes/sets) have Cascade FKs but we clear them explicitly
+  // before hot_events to keep reset ordering uniform with
+  // verify-publish/verify-explain/verify-market-reaction/verify-associations.
+  await prisma.publishedHotEventTheme.deleteMany({});
+  await prisma.eventThemeSet.deleteMany({});
+  await prisma.publishedHotEventAssociation.deleteMany({});
+  await prisma.eventAssociationSet.deleteMany({});
+  await prisma.publishedHotEventReaction.deleteMany({});
+  await prisma.marketReactionSnapshot.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+}
+
+async function seedRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  sourceId: string,
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
+): Promise<void> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const salt = randomUUID();
+  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
+  const contentHash = createHash("sha256").update(material).digest("hex");
+  await prisma.evidenceRecord.create({
+    data: {
+      id: newTraceId(),
+      sourceId,
+      url: data.url,
+      title: data.title,
+      summary: data.summary,
+      publishedAt: data.publishedAt,
+      ingestedAt: new Date(),
+      contentHash,
+      status: "archived",
+      failureReason: null,
+      rawPayload: { seeded: true, salt },
+      traceId: newTraceId(),
+    },
+  });
+}
+
+async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  await resetState(prisma);
+}
+
+// --- reporting ---------------------------------------------------------------
+
+function report(assertions: Assertion[]): void {
+  console.log("");
+  console.log("=== themes verification ===");
+  for (const a of assertions) {
+    const mark = a.ok ? "PASS" : "FAIL";
+    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
+  }
+  const failed = assertions.filter((a) => !a.ok);
+  console.log("");
+  if (failed.length === 0) {
+    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
+    process.exit(0);
+  } else {
+    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
+    process.exit(1);
+  }
+}
+
+void main().catch((error) => {
+  console.error("[verify-themes] fatal", error);
+  process.exit(1);
+});
+
+--- NEW FILE: packages/core/prisma/migrations/20260710153750_theme_read_models/migration.sql ---
+-- CreateTable
+CREATE TABLE "event_theme_sets" (
+    "id" TEXT NOT NULL,
+    "hot_event_id" TEXT NOT NULL,
+    "items" JSONB NOT NULL,
+    "source" TEXT NOT NULL,
+    "trace_id" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "event_theme_sets_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "published_hot_event_themes" (
+    "hot_event_id" TEXT NOT NULL,
+    "items" JSONB NOT NULL,
+    "theme_source" TEXT NOT NULL,
+    "generated_at" TIMESTAMP(3) NOT NULL,
+    "trace_id" TEXT,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "published_hot_event_themes_pkey" PRIMARY KEY ("hot_event_id")
+);
+
+-- CreateIndex
+CREATE INDEX "event_theme_sets_hot_event_id_idx" ON "event_theme_sets"("hot_event_id");
+
+-- CreateIndex
+CREATE INDEX "event_theme_sets_created_at_idx" ON "event_theme_sets"("created_at");
+
+-- AddForeignKey
+ALTER TABLE "event_theme_sets" ADD CONSTRAINT "event_theme_sets_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "published_hot_event_themes" ADD CONSTRAINT "published_hot_event_themes_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+--- NEW FILE: packages/core/src/modules/theme-linking/stub-theme-adapter.ts ---
+/**
+ * StubThemeAdapter — a deterministic test-only ThemeAdapter (AD-7).
+ *
+ * TEST-ONLY: this adapter is NOT wired in the worker/prod runtime. It returns
+ * fixture theme memberships (fixed slug/label with a "knowledge_base:v1" mapping
+ * basis). Putting fixture themes on a public page without a real mapping basis
+ * would mislead readers — a violation of AC2 ("theme memberships must rest on an
+ * explicit mapping basis; arbitrary hand-filled memberships are not allowed")
+ * and the NFR "absence shown as absence, never fabricated completeness" (see
+ * spec Design Notes).
+ *
+ * V1 has a theme-backfill worker (epic lists theme-backfill as a BullMQ job
+ * category, unlike 2.2 associations which had no worker) but the worker resolves
+ * adapter = undefined (procurement deferred) → generateThemes returns null →
+ * prod degrades honestly (AC3). This stub exists solely so verify/e2e can call
+ * generateThemes directly and exercise the happy path (proving the pipeline is
+ * correct). apps/worker does NOT import it.
+ *
+ * The fixture is deterministic: every call returns the same ThemeRef[] (one
+ * theme: chip-supply-chain / 芯片供应链, with mappingBasis="knowledge_base:v1")
+ * so verify/e2e assertions on the projected items are deterministic across runs
+ * and multiple seeded events share the same slug (so the /topics/[slug] page has
+ * >=2 chronological members to assert the continuity time-series).
+ */
+
+import type { ThemeAdapter, ThemeRef } from "./types.js";
+
+/**
+ * The slug the stub reports. Exported so verify/e2e can assert the
+ * /topics/{slug} route + the detail→theme FilterPill link land on a known slug
+ * (FR9/FR11 closed-loop, AC1 theme page). Stable across runs; multiple seeded
+ * events share this slug so the theme page aggregates >=2 members.
+ */
+export const STUB_THEME_SLUG = "chip-supply-chain";
+
+/**
+ * The label the stub reports. Exported so verify/e2e can assert the theme page
+ * title (editorial serif) renders the known label.
+ */
+export const STUB_THEME_LABEL = "芯片供应链";
+
+/**
+ * The fixed theme items the stub reports. One theme (chip-supply-chain /
+ * 芯片供应链), with a non-empty mappingBasis so AC2's explicit-basis requirement
+ * is exercised. Stable across runs.
+ */
+const STUB_ITEMS: ThemeRef[] = [
+  {
+    slug: STUB_THEME_SLUG,
+    label: STUB_THEME_LABEL,
+    mappingBasis: "knowledge_base:v1",
+  },
+];
+
+/**
+ * Deterministic stub theme adapter. Returns a fixed non-null ThemeRef[] on
+ * every call. See the module doc for why this is test-only.
+ */
+export class StubThemeAdapter implements ThemeAdapter {
+  async fetchThemes(
+    _args: { hotEventId: string },
+  ): Promise<ThemeRef[] | null> {
+    // Return a fresh array each call so callers cannot mutate the shared
+    // fixture constant (defensive copy; the items themselves are immutable
+    // value types).
+    return STUB_ITEMS.map((item) => ({ ...item }));
+  }
+}
+
+--- NEW FILE: packages/core/src/modules/theme-linking/theme-adapter.ts ---
+/**
+ * ThemeAdapter port — the boundary domain modules use to reach external theme
+ * knowledge sources (theme mapping libraries, NER, LLM-based theme extraction)
+ * (AD-7).
+ *
+ * The theme-linking theme sub-domain depends only on this interface; concrete
+ * adapters are resolved and constructed at the call site. In V1 the
+ * theme-backfill worker resolves NO adapter (real theme knowledge source
+ * procurement is deferred) → generateThemes returns null and writes nothing →
+ * prod degrades honestly (AC3). The only concrete implementation today is
+ * StubThemeAdapter, which is test-only (verify/e2e import it from core and pass
+ * it to generateThemes directly; it is NOT imported by apps/worker runtime code
+ * — the worker resolves adapter = undefined).
+ *
+ * This mirrors adapter.ts (AssociationAdapter) + market-reaction/adapter.ts +
+ * source-ingest/adapter.ts's in-module port convention (describe-by-purpose: the
+ * port lives in the module it serves, not in a separate contracts dir). Story 2.3
+ * extends the theme-linking module (2.2 built the association sub-domain) with a
+ * theme sub-domain alongside it — same shape, same conventions.
+ */
+
+// The interface is defined in types.ts (single source of truth, alongside the
+// other theme-linking domain types) and re-exported here as the port's home.
+// Importing code reaches the port via either ./types.js or ./theme-adapter.js —
+// both resolve to the same interface.
+export type { ThemeAdapter } from "./types.js";
+
+--- NEW FILE: packages/core/src/modules/theme-linking/theme-service.ts ---
+/**
+ * theme-service — derive theme memberships from an adapter's output and append
+ * an EventThemeSet row (AD-2/AD-5 append-only).
+ *
+ * Story 2.3. This module owns the event_theme_sets table (AD-2 append-only). It
+ * derives ThemeRef[] memberships from a ThemeAdapter's output, each item
+ * carrying a slug (URL identity), a label (display identity), and a NON-EMPTY
+ * mappingBasis (provenance — AC2).
+ *
+ *   - generateThemes: read the adapter → validate each item's mappingBasis/
+ *     slug/label is non-empty (throw on any missing field — AC2 fail-fast, never
+ *     silently fill a default) → normalize (dedup by slug, preserve order) →
+ *     APPEND one EventThemeSet (never update/delete prior rows — AD-5). Returns
+ *     null when adapter is missing, returns null, or returns an empty array (no
+ *     honest derivation possible; never writes a fabricated set).
+ *     source="template" in V1.
+ *   - getLatestThemeSet: createdAt desc + id desc first row, or null.
+ *     publish-orchestrator reads this at projection time.
+ *   - normalizeThemeItems: pure function (items → deduped items), testable
+ *     without a DB. Same input → identical output (deterministic).
+ *
+ * This module never writes published_* (publish-orchestrator owns those
+ * projections) and never writes hot_events (event-assembly owns those). It only
+ * appends event_theme_sets.
+ *
+ * The derivation is pure logic + a DB append (no BullMQ, no SDK), so verify/seed
+ * scripts can call it directly without Redis — same convention as
+ * generateAssociations / generateMarketReaction / generateExplanation /
+ * clusterEvents. The theme-backfill worker calls this with adapter = undefined
+ * in V1 prod (procurement deferred) → honest degradation.
+ */
+
+import type { Prisma } from "../../../generated/client.js";
+import { newTraceId } from "../../shared/ids.js";
+import { ThemeSource } from "./types.js";
+import type {
+  GenerateThemesOptions,
+  GenerateThemesResult,
+  GetLatestThemeSetOptions,
+  ThemeRef,
+  ThemeSetRecord,
+} from "./types.js";
+
+/**
+ * Generate theme memberships from the adapter's output, then APPEND one
+ * EventThemeSet row (source="template"). Returns null and writes nothing when:
+ *   - adapter is undefined (V1 prod: theme-backfill worker resolves none), OR
+ *   - adapter.fetchThemes returns null, OR
+ *   - adapter.fetchThemes returns an empty array (no themes).
+ *
+ * Honest degradation (NFR: never fake data): no adapter / no data → no set →
+ * the public detail page shows the "暂无已确认的主题关联。" degraded state
+ * (AC3). Never fabricates a set from nothing.
+ *
+ * AC2 explicit mapping basis + identity: every adapter-returned item MUST have
+ * a non-empty mappingBasis AND a non-empty slug AND a non-empty label. An item
+ * missing any field is rejected — generateThemes THROWS (fail-fast). It never
+ * silently fills a default, because that would make AC2's "explicit basis"
+ * requirement decorative (any source, including future hand-filled, could
+ * produce basis-less / identity-less themes).
+ *
+ * Append-only (AD-5): every successful call inserts a NEW row. Prior rows are
+ * never updated or deleted — the full set history is the version series.
+ * publish-orchestrator projects the LATEST row (createdAt desc, id desc
+ * tiebreaker) into the public read model.
+ *
+ * NFR: the item labels describe theme concept identity only (e.g. "芯片供应链")
+ * and NEVER contain buy/sell/target-price/position wording (explanatory, not
+ * advisory).
+ */
+export async function generateThemes(
+  options: GenerateThemesOptions,
+): Promise<GenerateThemesResult | null> {
+  const { prisma, traceId, hotEventId, adapter } = options;
+
+  // No adapter → honest degradation (V1 prod: theme-backfill worker resolves
+  // none). Never fabricate.
+  if (adapter === undefined) return null;
+
+  const rawItems = await adapter.fetchThemes({ hotEventId });
+  if (rawItems === null) return null;
+  if (rawItems.length === 0) return null;
+
+  // AC2: validate every item has non-empty mappingBasis + slug + label. Throw
+  // on any missing field rather than silently filling a default (fail-fast).
+  const normalized = normalizeThemeItems(rawItems);
+  if (normalized.length === 0) return null;
+
+  // APPEND a new set row (source="template"). Never update or delete prior
+  // rows (AD-5). The items Json column accepts the typed array via a cast to
+  // Prisma.InputJsonValue (Prisma's Json envelope does not infer the element
+  // type; the cast is the documented boundary between TS types and the Json
+  // column — same role as in association-service.ts).
+  const created = await prisma.eventThemeSet.create({
+    data: {
+      id: newTraceId(),
+      hotEventId,
+      items: normalized as unknown as Prisma.InputJsonValue,
+      source: ThemeSource.Template,
+      traceId,
+    },
+    select: {
+      id: true,
+      items: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  return {
+    eventThemeSetId: created.id,
+    hotEventId,
+    items: created.items as unknown as ThemeRef[],
+    source: created.source as ThemeSource,
+    createdAt: created.createdAt,
+    traceId,
+  };
+}
+
+/**
+ * Return the latest EventThemeSet for an event (createdAt desc, id desc
+ * tiebreaker — UUIDv7 ids embed a monotonic timestamp so two sets sharing the
+ * same createdAt millisecond resolve deterministically to the newer one), or
+ * null if none exist. publish-orchestrator uses this at projection time to
+ * surface the current set into the public read model.
+ */
+export async function getLatestThemeSet(
+  options: GetLatestThemeSetOptions,
+): Promise<ThemeSetRecord | null> {
+  const { prisma, hotEventId } = options;
+
+  const latest = await prisma.eventThemeSet.findFirst({
+    where: { hotEventId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      hotEventId: true,
+      items: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) return null;
+  return {
+    id: latest.id,
+    hotEventId: latest.hotEventId,
+    items: latest.items as unknown as ThemeRef[],
+    source: latest.source as ThemeSource,
+    createdAt: latest.createdAt,
+  };
+}
+
+// --- deterministic normalization --------------------------------------------
+
+/**
+ * Normalize the adapter's raw items into the stored form:
+ *   - validate each item has NON-EMPTY mappingBasis + slug + label (AC2). An
+ *     item missing any field THROWS (fail-fast, never silently filled). This is
+ *     the AC2 data-level enforcement.
+ *   - dedup by slug, preserving first-seen order so re-projection is
+ *     deterministic across runs (multiple events sharing the same slug is the
+ *     intended continuity-substrate behavior — they aggregate on the theme
+ *     page; within one event's set, slug is unique).
+ *
+ * Pure function: same input → identical output. No clocks, no randomness.
+ */
+export function normalizeThemeItems(rawItems: ThemeRef[]): ThemeRef[] {
+  const seen = new Set<string>();
+  const out: ThemeRef[] = [];
+  for (const item of rawItems) {
+    // AC2 hard gate: every item must carry non-empty mappingBasis + slug +
+    // label. Throw on any missing/empty field — never silently fill a default.
+    if (
+      item.mappingBasis === undefined ||
+      item.mappingBasis === null ||
+      item.mappingBasis.trim() === ""
+    ) {
+      throw new Error(
+        `[theme-linking] adapter returned a theme item without a mappingBasis (slug=${item.slug}, label=${item.label}); AC2 requires an explicit mapping basis on every item`,
+      );
+    }
+    if (item.slug === undefined || item.slug === null || item.slug.trim() === "") {
+      throw new Error(
+        `[theme-linking] adapter returned a theme item without a slug (label=${item.label}); AC2 requires a non-empty slug (URL identity) on every item`,
+      );
+    }
+    if (item.label === undefined || item.label === null || item.label.trim() === "") {
+      throw new Error(
+        `[theme-linking] adapter returned a theme item without a label (slug=${item.slug}); AC2 requires a non-empty label on every item`,
+      );
+    }
+    const key = item.slug;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      slug: item.slug,
+      label: item.label,
+      mappingBasis: item.mappingBasis,
+    });
+  }
+  return out;
+}

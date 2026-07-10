@@ -113,6 +113,14 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
   const stockItems = associationItems.filter((i) => i.kind === "stock");
   const hasAssociations = associationItems.length > 0;
 
+  // Story 2.3: the theme membership block. Null/empty when generateThemes has
+  // not produced a set (V1 prod: theme-backfill worker resolves no adapter) →
+  // honest degraded state (AC3). When present, each theme is a clickable
+  // FilterPill link to /topics/{slug} (FR9, the theme-continuity jump).
+  const themes = detail.themes;
+  const themeItems = themes?.items ?? [];
+  const hasThemes = themeItems.length > 0;
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
       {/* Return link to the feed (stable back path; originating-context retention is 2.5). */}
@@ -262,6 +270,39 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
           <p className="text-base text-ink-tertiary">
             暂无已确认的概念 / 行业 / 个股关联。
           </p>
+        )}
+      </section>
+
+      {/* Theme membership (Story 2.3, AC4/AC2/AC3). Each theme is a clickable
+          FilterPill link to /topics/{slug} (FR9, the theme-continuity jump —
+          the detail→theme half of the closed loop). Provenance line
+          "关联依据：系统映射" makes the explicit mapping basis observable (AC2).
+          Honest degraded line when no set was projected (V1 prod: theme-backfill
+          worker resolves no adapter → AC3, never fabricated themes). NFR: labels
+          are theme-concept identity only, never advisory. */}
+      <section className="mt-6 space-y-3 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+            主题
+          </h2>
+          {hasThemes ? <AiLabel /> : null}
+        </div>
+        {hasThemes ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {themeItems.map((item) => (
+                <FilterPill
+                  key={item.slug}
+                  href={`/topics/${encodeURIComponent(item.slug)}`}
+                >
+                  {item.label}
+                </FilterPill>
+              ))}
+            </div>
+            <p className="text-xs text-ink-tertiary">关联依据：系统映射</p>
+          </div>
+        ) : (
+          <p className="text-base text-ink-tertiary">暂无已确认的主题关联。</p>
         )}
       </section>
 

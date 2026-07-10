@@ -154,6 +154,16 @@ model HotEvent {
   // write-ownership (AD-2).
   eventAssociationSets EventAssociationSet[]
   publishedAssociation PublishedHotEventAssociation?
+  // Read-only reverse relations to the theme read models (Story 2.3).
+  // The theme-linking module owns event_theme_sets (AD-2 append-only write table,
+  // one row per generation of ThemeRef[]); publish-orchestrator owns
+  // published_hot_event_themes (AD-3 public projection). These navigations let
+  // publish-orchestrator read the latest set at projection time and let the
+  // theme-backfill worker query published events without a theme set via
+  // `eventThemeSets: { none: {} }`. They do NOT change the respective modules'
+  // write-ownership (AD-2).
+  eventThemeSets   EventThemeSet[]
+  publishedTheme   PublishedHotEventTheme?
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -518,4 +528,60 @@ model PublishedHotEventAssociation {
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
   @@map("published_hot_event_associations")
+}
+
+// The append-only write table for a hot event's theme membership (AD-2, Story
+// 2.3). The theme-linking module is the sole writer. One row per generation;
+// every successful generateThemes call APPENDS a new row (AD-5: never update or
+// delete prior rows — the full theme-set history is the version series).
+// publish-orchestrator projects the LATEST row (createdAt desc, id desc
+// tiebreaker) into published_hot_event_themes.
+//
+// `items` is a Json column holding ThemeRef[] ({slug,label,mappingBasis}). These
+// are display-only: the detail page renders each theme as a FilterPill link to
+// /topics/{slug}, the /topics directory derives distinct themes from memberships
+// via an in-memory join (listPublishedThemeMemberships → JS dedup by slug), and
+// the /topics/[slug] page filters members by slug in JS. A normalized Theme
+// directory table + member child table would be over-engineering for a
+// display-only, variable-cardinality set read whole (ponytail: no directory
+// table for a consumerless single-theme SQL query — slug is the URL, label comes
+// from Json). Mirrors the 2.2 EventAssociationSet items-Json decision.
+model EventThemeSet {
+  id         String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId String   @map("hot_event_id")
+  items      Json     // ThemeRef[] ({slug,label,mappingBasis}); display-only
+  source     String // ThemeSource union value ("template"; future knowledge-base/provider id)
+  traceId    String?  @map("trace_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("event_theme_sets")
+}
+
+// The public read model for a published hot-event's theme membership (AD-3,
+// Story 2.3). The publish-orchestrator module is the sole writer. Row existence
+// = currently published themes: publish/republish upserts the row (projecting
+// the latest EventThemeSet), takedown deletes it. There is intentionally NO
+// status column — row existence is the visibility contract (same pattern as the
+// other published_* read models). FK onDelete: Cascade so a HotEvent deletion
+// cleans up the projection. `theme_source` records the provenance of the
+// projected set (operator audit), and `generated_at` records when that set was
+// generated. A row may be ABSENT while the event is published if
+// generateThemes has not produced a set yet (V1 worker resolves no adapter →
+// skip → never produced) — the detail page renders an honest degraded state in
+// that case (AC3, never fabricates themes).
+model PublishedHotEventTheme {
+  hotEventId    String   @id @map("hot_event_id")
+  items         Json // ThemeRef[] ({slug,label,mappingBasis}); display-only
+  themeSource   String   @map("theme_source") // ThemeSource union value
+  generatedAt   DateTime @map("generated_at")
+  traceId       String?  @map("trace_id")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@map("published_hot_event_themes")
 }

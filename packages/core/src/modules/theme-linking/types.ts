@@ -164,3 +164,124 @@ export interface AssociationSetRecord {
   source: AssociationSource;
   createdAt: Date;
 }
+
+// --- Story 2.3: theme membership (continuity substrate) ----------------------
+
+/**
+ * The provenance of a theme set. Stored on every EventThemeSet row. The public
+ * read model carries this through as `themeSource`.
+ *
+ *   - template: V1 deterministic fixture-backed derivation
+ *     (StubThemeAdapter, test-only). When a real theme knowledge source lands,
+ *     source becomes the provider id (e.g. "tushare:theme").
+ *
+ * V1 worker resolves NO adapter (real theme knowledge source procurement is
+ * deferred), so no set with source="template" is ever written in prod by the
+ * worker — only by verify/e2e direct calls. The worker exists (epic lists
+ * theme-backfill as a job category) but its adapter resolves to undefined →
+ * generateThemes returns null → honest degradation.
+ */
+export const ThemeSource = {
+  Template: "template",
+} as const;
+
+export type ThemeSource = (typeof ThemeSource)[keyof typeof ThemeSource];
+
+/**
+ * One theme membership reference — a theme identity + its explicit mapping
+ * basis (AC2). The detail page renders each theme as a FilterPill link to
+ * `/topics/{slug}` (FR9, the theme-continuity jump). The /topics directory and
+ * the /topics/[slug] page use the slug as the URL/addressing key and the label
+ * for display.
+ *
+ *   - slug: NON-EMPTY URL-safe identity (e.g. "chip-supply-chain"). Drives the
+ *     /topics/{slug} route and the /topics directory's distinct-theme set.
+ *   - label: the theme's display identity (e.g. "芯片供应链"). Descriptive,
+ *     never advisory.
+ *   - mappingBasis: NON-EMPTY provenance (e.g. "knowledge_base:v1"). AC2
+ *     mandates an explicit mapping basis; an adapter item with an empty/missing
+ *     mappingBasis is rejected by generateThemes (fail-fast, never silently
+ *     filled with a default).
+ */
+export interface ThemeRef {
+  slug: string;
+  label: string;
+  mappingBasis: string;
+}
+
+/**
+ * The ThemeAdapter port (AD-7). All theme knowledge sources (theme mapping
+ * libraries, NER, LLM-based theme extraction) enter exclusively through this
+ * interface; domain modules never import a third-party SDK. V1 has no concrete
+ * implementation wired in prod (procurement deferred) — the theme-backfill
+ * worker resolves `adapter = undefined` so generateThemes returns null and prod
+ * degrades honestly (AC3). verify/e2e pass StubThemeAdapter directly to
+ * generateThemes. The only concrete implementation today is StubThemeAdapter
+ * (test-only).
+ *
+ * Defined in theme-adapter.ts and re-exported here for the package barrel.
+ */
+export interface ThemeAdapter {
+  /**
+   * Fetch the theme memberships for the given hot event. Implementations
+   * resolve the event's relevant themes and return them with a NON-EMPTY
+   * mappingBasis + non-empty slug + non-empty label on each item (AC2). Return
+   * null or an empty array when no themes are available (the caller writes
+   * nothing and degrades honestly). Each returned item MUST have all three
+   * fields non-empty — items missing any field are rejected by generateThemes
+   * (it throws, never silently fills a default).
+   */
+  fetchThemes(args: { hotEventId: string }): Promise<ThemeRef[] | null>;
+}
+
+/**
+ * Options for generateThemes. `{ prisma, traceId, hotEventId, adapter? }`
+ * mirrors generateAssociations plus an optional adapter. When adapter is
+ * omitted, returns null, or returns null/[], the function returns null and
+ * writes nothing (honest degradation — never fabricates a set from no data).
+ * Otherwise it validates each item's mappingBasis/slug/label is non-empty (AC2),
+ * normalizes the items (dedup by slug, preserve order), and APPENDS one
+ * EventThemeSet row (source="template").
+ */
+export interface GenerateThemesOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  adapter?: ThemeAdapter;
+}
+
+/**
+ * The result of a successful theme generation: the newly-appended set's id +
+ * the normalized items + provenance + createdAt.
+ */
+export interface GenerateThemesResult {
+  eventThemeSetId: string;
+  hotEventId: string;
+  items: ThemeRef[];
+  source: ThemeSource;
+  createdAt: Date;
+  traceId: string;
+}
+
+/**
+ * Options for getLatestThemeSet — returns the most recent EventThemeSet for an
+ * event (createdAt desc, id desc tiebreaker) or null if none exist.
+ * publish-orchestrator uses this at projection time.
+ */
+export interface GetLatestThemeSetOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+}
+
+/**
+ * One theme-set row projected for read. Mirrors the EventThemeSet columns the
+ * public projection + operator audit need (no write paths here).
+ */
+export interface ThemeSetRecord {
+  id: string;
+  hotEventId: string;
+  items: ThemeRef[];
+  source: ThemeSource;
+  createdAt: Date;
+}

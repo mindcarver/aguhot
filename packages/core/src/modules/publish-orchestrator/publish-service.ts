@@ -51,10 +51,13 @@ import type {
   GetPublishedHotEventDetailOptions,
   ListPublishedAssociationsOptions,
   ListPublishedHotEventsOptions,
+  ListPublishedThemeMembershipsOptions,
   PublishedAssociationRow,
   PublishedEvidenceRow,
   PublishedHotEventDetail,
   PublishedHotEventSummary,
+  PublishedThemeMembershipRow,
+  ThemeRef,
 } from "./types.js";
 
 export interface RefreshPublishedReadModelOptions {
@@ -90,12 +93,13 @@ export async function refreshPublishedReadModel(
   if (action === "none") return;
 
   if (action === "takedown") {
-    // Idempotent delete across all five published_* tables. Order does not
+    // Idempotent delete across all six published_* tables. Order does not
     // matter (no inter-table FKs among the published_* models), but we delete
-    // the evidence + explanation + reaction + association rows alongside the
-    // summary row so "row exists = currently published" holds for all five read
-    // models uniformly. Story 2.1 added published_hot_event_reactions; Story 2.2
-    // added published_hot_event_associations to this batch.
+    // the evidence + explanation + reaction + association + theme rows
+    // alongside the summary row so "row exists = currently published" holds for
+    // all six read models uniformly. Story 2.1 added published_hot_event_reactions;
+    // Story 2.2 added published_hot_event_associations; Story 2.3 added
+    // published_hot_event_themes to this batch.
     await prisma.publishedHotEventEvidence.deleteMany({
       where: { hotEventId },
     });
@@ -106,6 +110,9 @@ export async function refreshPublishedReadModel(
       where: { hotEventId },
     });
     await prisma.publishedHotEventAssociation.deleteMany({
+      where: { hotEventId },
+    });
+    await prisma.publishedHotEventTheme.deleteMany({
       where: { hotEventId },
     });
     await prisma.publishedHotEvent.deleteMany({
@@ -197,6 +204,9 @@ export async function refreshPublishedReadModel(
 
   // 5. Association projection (published_hot_event_associations, Story 2.2).
   await projectAssociations(prisma, traceId, hotEventId);
+
+  // 6. Theme membership projection (published_hot_event_themes, Story 2.3).
+  await projectThemes(prisma, traceId, hotEventId);
 }
 
 /**
@@ -468,6 +478,65 @@ async function projectAssociations(
 }
 
 /**
+ * Project the latest EventThemeSet into published_hot_event_themes (Story 2.3).
+ * If a set exists, upsert the row (1:1 per hotEventId, items as Json). If no set
+ * exists (V1 prod: theme-backfill worker resolves no adapter / generation has
+ * not run), deleteMany that hotEventId's theme row so the detail page renders
+ * the honest degraded state (themes: null) rather than a stale prior projection.
+ * Called inside the publish transaction and by the theme-backfill worker after
+ * it appends a set. Mirrors projectAssociations / projectMarketReaction /
+ * projectExplanation: read latest → upsert or deleteMany.
+ */
+async function projectThemes(
+  prisma: PrismaClient,
+  traceId: string,
+  hotEventId: string,
+): Promise<void> {
+  const latest = await prisma.eventThemeSet.findFirst({
+    where: { hotEventId },
+    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
+    // embed a monotonic timestamp) — same convention as projectExplanation /
+    // projectMarketReaction / projectAssociations.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      items: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    // No set yet: clear any stale projection so the detail page shows the
+    // degraded state (no fabricated themes).
+    await prisma.publishedHotEventTheme.deleteMany({
+      where: { hotEventId },
+    });
+    return;
+  }
+
+  await prisma.publishedHotEventTheme.upsert({
+    where: { hotEventId },
+    create: {
+      hotEventId,
+      // The items Json column already holds the typed array (ThemeRef[]) from
+      // the source EventThemeSet row; re-project it verbatim. Cast through
+      // InputJsonValue (Prisma's Json envelope does not carry the element type
+      // across the read→write boundary).
+      items: latest.items as unknown as Prisma.InputJsonValue,
+      themeSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      items: latest.items as unknown as Prisma.InputJsonValue,
+      themeSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
  * List all currently-published hot events for the public feed — Story 1.7.
  *
  * This is the first public consumer of the published_hot_events read model (AD-3:
@@ -610,6 +679,18 @@ export async function getPublishedHotEventDetail(
     },
   });
 
+  // Theme membership block (nullable, Story 2.3). Absent when generateThemes has
+  // not produced a set yet (V1 prod: theme-backfill worker resolves no adapter) →
+  // the detail page renders the honest degraded state.
+  const themeRow = await prisma.publishedHotEventTheme.findUnique({
+    where: { hotEventId },
+    select: {
+      items: true,
+      themeSource: true,
+      generatedAt: true,
+    },
+  });
+
   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
     id: r.id,
     hotEventId: r.hotEventId,
@@ -663,6 +744,14 @@ export async function getPublishedHotEventDetail(
             source: associationRow.associationSource,
             generatedAt: associationRow.generatedAt,
           },
+    themes:
+      themeRow === null
+        ? null
+        : {
+            items: themeRow.items as unknown as ThemeRef[],
+            source: themeRow.themeSource,
+            generatedAt: themeRow.generatedAt,
+          },
     evidence,
   };
 }
@@ -699,5 +788,46 @@ export async function listPublishedAssociations(
   return rows.map((r) => ({
     hotEventId: r.hotEventId,
     items: r.items as unknown as AssociationItem[],
+  }));
+}
+
+/**
+ * List all currently-published theme memberships — the hotEventId→ThemeRef[] map
+ * the /topics directory and /topics/[slug] page use to derive the distinct-theme
+ * set and filter member events (Story 2.3).
+ *
+ * The /topics directory derives its distinct-theme list from this in JS (dedup
+ * by slug, preserve first-seen order). The /topics/[slug] page filters members
+ * by slug in JS (events whose items contain that slug). Both mirror the 2.2
+ * listPublishedAssociations + 1.7 filterByWindow JS-join pattern.
+ * `listPublishedHotEvents` stays filter-free. V1 published volume is tiny, so a
+ * full read + an in-memory join is the ponytail choice over a SQL join or
+ * per-slug index (deferred as a scale ceiling).
+ *
+ * Returns `{ hotEventId, items }` for every published_hot_event_themes row. It
+ * only SELECTs published_hot_event_themes — never event_theme_sets / hot_events
+ * / evidence_* (AD-3). Row existence = currently published theme membership.
+ */
+export async function listPublishedThemeMemberships(
+  options: ListPublishedThemeMembershipsOptions,
+): Promise<PublishedThemeMembershipRow[]> {
+  const { prisma } = options;
+
+  // orderBy hotEventId ASC so the row order is deterministic across loads.
+  // The /topics/[slug] page derives the theme label as "first-seen ThemeRef.label
+  // for this slug"; without a deterministic row order, Postgres could return
+  // rows in unspecified order and the label would flicker when multiple events
+  // share a slug. hotEventId ASC makes first-seen stable.
+  const rows = await prisma.publishedHotEventTheme.findMany({
+    select: {
+      hotEventId: true,
+      items: true,
+    },
+    orderBy: { hotEventId: "asc" },
+  });
+
+  return rows.map((r) => ({
+    hotEventId: r.hotEventId,
+    items: r.items as unknown as ThemeRef[],
   }));
 }

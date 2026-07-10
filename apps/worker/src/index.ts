@@ -1,18 +1,20 @@
 /**
- * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction runtime.
+ * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction /
+ * theme-backfill runtime.
  *
  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
- * cluster worker. Story 1.8 added the explain worker. Story 2.1 adds the
- * market-reaction worker alongside them: validate required env (DB + Redis),
- * connect Redis, register all four workers, and wire graceful shutdown (close
- * all four). The web request path never imports this module — heavy work is
- * async (AD-4).
+ * cluster worker. Story 1.8 added the explain worker. Story 2.1 added the
+ * market-reaction worker. Story 2.3 adds the theme-backfill worker alongside
+ * them: validate required env (DB + Redis), connect Redis, register all five
+ * workers, and wire graceful shutdown (close all five). The web request path
+ * never imports this module — heavy work is async (AD-4).
  *
- * The four workers are independent and idempotent: ingest does not trigger a
- * cluster job automatically, cluster does not trigger an explain job, and
- * explain does not trigger a market-reaction job automatically (the jobs are
- * decoupled; pipeline chaining/cron orchestration is deferred — see deferred-
- * work.md). Each can run in isolation against the shared DB/Redis.
+ * The five workers are independent and idempotent: ingest does not trigger a
+ * cluster job automatically, cluster does not trigger an explain job, explain
+ * does not trigger a market-reaction job, and market-reaction does not trigger
+ * a theme-backfill job automatically (the jobs are decoupled; pipeline
+ * chaining/cron orchestration is deferred — see deferred-work.md). Each can run
+ * in isolation against the shared DB/Redis.
  */
 
 import { requireEnv } from "@aguhot/config";
@@ -22,6 +24,7 @@ import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
 import { registerExplainWorker } from "./queues/explain-queue.js";
 import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
 import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
+import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
 
 async function main(): Promise<void> {
   // Fail loud and early if infra is missing (Block-If): a worker without DB or
@@ -36,8 +39,9 @@ async function main(): Promise<void> {
   const eventClusterWorker = registerEventClusterWorker();
   const explainWorker = registerExplainWorker();
   const marketReactionWorker = registerMarketReactionWorker();
+  const themeBackfillWorker = registerThemeBackfillWorker();
 
-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction workers registered and running");
+  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill workers registered and running");
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -46,6 +50,7 @@ async function main(): Promise<void> {
       eventClusterWorker.close(),
       explainWorker.close(),
       marketReactionWorker.close(),
+      themeBackfillWorker.close(),
     ]);
     await closeRedis();
     process.exit(0);

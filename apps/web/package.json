@@ -9,7 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "eslint .",
-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations\"",
+    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes\"",
     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
@@ -17,13 +17,15 @@
     "e2e:merge-split": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @merge-split",
     "e2e:market-reaction": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @market-reaction",
     "e2e:associations": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @associations",
+    "e2e:themes": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @themes",
     "seed:console": "tsx e2e/seed-console.ts",
     "seed:feed": "tsx e2e/seed-feed.ts",
     "seed:detail": "tsx e2e/seed-detail.ts",
     "seed:revision": "tsx e2e/seed-revision.ts",
     "seed:merge-split": "tsx e2e/seed-merge-split.ts",
     "seed:market-reaction": "tsx e2e/seed-market-reaction.ts",
-    "seed:associations": "tsx e2e/seed-associations.ts"
+    "seed:associations": "tsx e2e/seed-associations.ts",
+    "seed:themes": "tsx e2e/seed-themes.ts"
   },
   "dependencies": {
     "@aguhot/config": "workspace:*",
