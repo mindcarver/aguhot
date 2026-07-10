@@ -77,6 +77,12 @@ export function TagChip({ children, className }: { children: React.ReactNode; cl
  * filtering (server-rendered, shareable URL, no client JS / useState). When
  * omitted the pill renders as a display-only `<span>` (keeps 1.3 / /design use).
  * The active/default class styles are identical in both forms.
+ *
+ * Story 3.6 — `min-h-11` (44px) touch target, UX-DR13「密集小标签」baseline. One
+ * pillClass change covers home 筛选 / topics 目录 / search 主题命中 / detail 关联
+ * / `/design` five surfaces (FilterPill renders as both `<Link>` and `<span>`,
+ * same pillClass). `min-h-11` is the existing 44px token (nav/SearchBox/
+ * FollowButton share it). Visual style (color/radius/font-size) is byte-unchanged.
  */
 export function FilterPill({
   active = false,
@@ -90,7 +96,7 @@ export function FilterPill({
   className?: string;
 }) {
   const pillClass = cn(
-    "inline-flex items-center rounded-full px-3 py-1 text-sm",
+    "inline-flex items-center min-h-11 rounded-full px-3 py-1 text-sm",
     active
       ? "bg-brand text-brand-foreground"
       : "bg-surface-base text-ink-secondary",

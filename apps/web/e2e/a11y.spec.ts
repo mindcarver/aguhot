@@ -285,3 +285,252 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     }
   });
 });
+
+/**
+ * Touch-target + reduced-motion baseline e2e — Story 3.6.
+ *
+ * Surface-anchored coverage for the AC1 baseline laid down in 3.6:
+ *
+ *   - AC1 touch target: `/design` (DB-free) renders FilterPill samples
+ *     (`全部` / `市场反应`). FilterPill is the representative「密集小标签」
+ *     control (UX-DR13) — one pillClass change covers home 筛选 / topics 目录 /
+ *     search 主题命中 / detail 关联 / `/design` five surfaces. Asserting the
+ *     rendered height ≥ 44px proves the `min-h-11` token landed and is
+ *     respected by the flex container (the `<span>` form shares pillClass with
+ *     the `<Link>` form, so this also covers the interactive variant).
+ *   - AC1 reduced motion: under `reducedMotion: "reduce"`, the global
+ *     `@media (prefers-reduced-motion: reduce) { *, ::before, ::after { ...
+ *     !important } }` rule in globals.css must collapse EVERY transition to
+ *     ~0ms. We prove the MECHANISM (not a specific element) by injecting a
+ *     probe `<div style="transition:color 150ms ease">` and asserting its
+ *     computed `transition-duration` is NOT `150ms` and resolves to ≤ 1ms —
+ *     the same `* !important` mechanism that degrades the daily
+ *     `transition-colors` hover. Anchored on `/design` (DB-free) to avoid the
+ *     `/daily` seed dependency (daily's seeded transition behavior is deferred;
+ *     the probe proves the CSS mechanism that would degrade it).
+ *
+ * Infrastructure note: both tests anchor on `/design` (DB-free static server
+ * component), so this file adds NO new DATABASE_URL / seed dependency beyond
+ * what the 3.5 `@a11y` describe already requires (the `/` first test needs PG;
+ * `/design` does not). The reduced-motion test lives in its own describe with
+ * `test.use({ contextOptions: { reducedMotion: "reduce" } })` so the emulation
+ * is scoped to that test only (the touch-target test needs the default
+ * no-preference context). Playwright 1.60 does not expose `reducedMotion` as a
+ * standalone test option (unlike `colorScheme`/`viewport`); it is passed via
+ * `contextOptions` (a `BrowserContextOptions` passthrough) to
+ * `browser.newContext()`, which sets the browser's `prefers-reduced-motion:
+ * reduce` media query — the same OS-level preference a reader sets.
+ */
+test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @a11y", () => {
+  test("FilterPill 触控热区高度 ≥ 44px (AC1 触控尺寸)", async ({ page }) => {
+    // `/design` is DB-free (static server component rendering token samples),
+    // so this touch-target guard has zero DB/seed dependency.
+    const response = await page.goto("/design");
+    expect(response, "/design should respond").not.toBeNull();
+    expect(response!.status(), "/design status should be 200").toBe(200);
+
+    // FilterPill renders two samples on /design: `全部` (default) and
+    // `市场反应` (active). Both share pillClass (`min-h-11`). Assert the
+    // `全部` pill's rendered height ≥ 44px — the AC1 touch-target floor
+    // (UX-DR13「密集小标签」baseline). `min-h-11` = 44px (the existing token
+    // nav/SearchBox/FollowButton share). A regression that removes `min-h-11`
+    // from pillClass collapses the height back to ~28px (py-1 + text-sm) and
+    // fails here.
+    const pill = page.getByText("全部", { exact: true }).first();
+    const box = await pill.boundingBox();
+    expect(box, "FilterPill「全部」must exist in the DOM").not.toBeNull();
+    expect(
+      box!.height,
+      "FilterPill rendered height must be ≥ 44px (min-h-11 touch target, AC1)",
+    ).toBeGreaterThanOrEqual(44);
+  });
+
+  /**
+   * Matrix row 2 — empty-state CTA touch target ≥ 44px.
+   *
+   * Covers I/O & Edge-Case Matrix row 2: "空态 CTA 移动端点击 (AC1 触控)" —
+   * home/favorites/search 空态 CTA ≥ 44px (min-h-11). The search no-results
+   * state renders a `<Link href="/">`「返回首页」CTA with `min-h-11`. Asserting
+   * its boundingBox().height ≥ 44 proves the touch-target floor landed on the
+   * empty-state return path. Anchored on `/search?q=zzznomatch-x1y2z3` (local
+   * PG, same DATABASE_URL dependency as home.spec — the @a11y suite already
+   * requires local PG `aguhot_dev`). The no-results marker is asserted visible
+   * BEFORE the CTA so a height-regression failure is distinguishable from a
+   * DB gibberish collision / missing-CTA failure (and the locator doesn't
+   * time out on the wrong cause).
+   */
+  test("search 空态 CTA「返回首页」触控热区高度 ≥ 44px (矩阵行 2 空态 CTA)", async ({
+    page,
+  }) => {
+    const response = await page.goto("/search?q=zzznomatch-x1y2z3");
+    expect(response, "/search?q=zzznomatch-x1y2z3 should respond").not.toBeNull();
+    expect(response!.status(), "/search status should be 200").toBe(200);
+    // AC: the page responded 200 and is not a redirect (e.g. to /login).
+    expect(response!.url(), "/search should not redirect").not.toMatch(/\/login/);
+    await expect(
+      page.getByText(/未找到与/),
+      "no-results marker must be visible (confirms zero-hit empty state before asserting CTA height)",
+    ).toBeVisible();
+
+    // The no-results state renders a `<Link href="/">`「返回首页」CTA. Its
+    // className carries `min-h-11` (44px). A regression that removes the token
+    // collapses the height back to ~28px (py-1 + text-sm) and fails here.
+    const cta = page.getByRole("link", { name: /返回首页/ }).first();
+    const box = await cta.boundingBox();
+    expect(box, "search empty-state CTA must exist in the DOM").not.toBeNull();
+    expect(
+      box!.height,
+      "search empty-state CTA height must be ≥ 44px (min-h-11 touch target, matrix row 2)",
+    ).toBeGreaterThanOrEqual(44);
+  });
+
+  /**
+   * Matrix row 3 — return-link touch target ≥ 44px.
+   *
+   * Covers I/O & Edge-Case Matrix row 3: "返回链接 / 证据外链移动端点击 (AC1 触控)"
+   * — detail BackLink / daily 返回 / topics 返回 / detail「原文链接 ↗」 ≥ 44px.
+   * `/daily` renders its「← 返回首页」return link UNCONDITIONALLY at the top of
+   * the page (it does NOT call `notFound()` when `digest === null` — it renders
+   * a degraded state with the return link still present), so this test has no
+   * seed dependency beyond the @a11y suite's existing local PG requirement.
+   */
+  test("/daily 返回首页链接触控热区高度 ≥ 44px (矩阵行 3 返回链接)", async ({
+    page,
+  }) => {
+    const response = await page.goto("/daily");
+    expect(response, "/daily should respond").not.toBeNull();
+    expect(response!.status(), "/daily status should be 200").toBe(200);
+    expect(response!.url(), "/daily should not redirect").not.toMatch(/\/login/);
+
+    // The「← 返回首页」link renders unconditionally at the top of /daily
+    // (above the digest-dependent ternary). Its className carries `min-h-11`.
+    // The `←` glyph lives in an `<span aria-hidden>`, so the accessible name
+    // is `返回首页` — `getByRole("link", { name: /返回首页/ })` matches.
+    const returnLink = page
+      .getByRole("link", { name: /返回首页/ })
+      .first();
+    const box = await returnLink.boundingBox();
+    expect(box, "/daily return link must exist in the DOM").not.toBeNull();
+    expect(
+      box!.height,
+      "/daily return link height must be ≥ 44px (min-h-11 touch target, matrix row 3)",
+    ).toBeGreaterThanOrEqual(44);
+  });
+
+  /**
+   * Matrix row 5 — default (no reduced-motion preference) does NOT regress.
+   *
+   * Covers I/O & Edge-Case Matrix row 5: "默认（无减动效偏好）浏览 daily（不回归）"
+   * — default users keep their 150ms `transition-colors` hover (the global
+   * `@media (prefers-reduced-motion: reduce)` rule must NOT fire without the
+   * preference). This is the mirror of the reduced-motion probe test (which
+   * asserts ≤1ms under the preference); here, in the DEFAULT context (no
+   * `reducedMotion` override), a probe `<div style="transition: color 150ms
+   * ease">` must keep `transition-duration: "150ms"` — proving the media query
+   * is correctly scoped and default users suffer no regression. Anchored on
+   * `/design` (DB-free).
+   */
+  test("默认无减动效偏好下 transition 不被降级 (矩阵行 5 不回归)", async ({
+    page,
+  }) => {
+    const response = await page.goto("/design");
+    expect(response, "/design should respond").not.toBeNull();
+    expect(response!.status(), "/design status should be 200").toBe(200);
+
+    // First prove the DEFAULT context has no reduced-motion preference —
+    // `matchMedia` must report false. If this fails, the test is running under
+    // an unintended preference and the "no regression" assertion is void.
+    const prefersReduced = await page.evaluate(() =>
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
+    expect(
+      prefersReduced,
+      "default context must NOT set prefers-reduced-motion (matrix row 5 no-regression mirror)",
+    ).toBe(false);
+
+    // Inject a probe with a 150ms transition. Under the DEFAULT context the
+    // global `@media (prefers-reduced-motion: reduce) { * !important }` rule
+    // is NOT in effect, so the probe's inline `transition: color 150ms ease`
+    // must be honored as-is — the computed `transition-duration` resolves to
+    // 150ms. Browsers serialize sub-second durations as seconds (e.g.
+    // "0.15s"), so parse to ms (mirroring the reduced-motion probe's parsing)
+    // and assert equality with 150. A regression where the media query leaks
+    // into the default context (e.g. missing `@media` wrapper) would collapse
+    // this to ≤ 1ms and fail here.
+    const transitionDuration = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.transition = "color 150ms ease";
+      probe.textContent = "probe";
+      document.body.appendChild(probe);
+      const duration = getComputedStyle(probe).transitionDuration;
+      probe.remove();
+      return duration;
+    });
+
+    const durationMs = parseFloat(transitionDuration) * 1000;
+    expect(
+      durationMs,
+      "default-context probe transition-duration must resolve to 150ms (media query must NOT fire without the preference — matrix row 5 no regression)",
+    ).toBe(150);
+  });
+});
+
+test.describe("减少动态效果偏好下动效即时切换 (Story 3.6) @a11y", () => {
+  // `test.use({ contextOptions: { reducedMotion: "reduce" } })` emulates the
+  // OS-level preference for every test in this describe. Playwright passes
+  // `reducedMotion` to `browser.newContext()`, which sets the browser's
+  // `prefers-reduced-motion: reduce` media query, so `window.matchMedia(...)`
+  // reports true and the globals.css media-query rule is in effect. Scoped to
+  // this describe so the touch-target test above keeps the default
+  // no-preference context. (Playwright 1.60 does NOT expose `reducedMotion` as
+  // a standalone test option like `colorScheme`/`viewport`; it must go through
+  // `contextOptions` — a BrowserContextOptions passthrough.)
+  test.use({ contextOptions: { reducedMotion: "reduce" } });
+
+  test("reducedMotion reduce 偏好生效 + 探针 transition-duration 近 0 (AC1 减动效)", async ({
+    page,
+  }) => {
+    const response = await page.goto("/design");
+    expect(response, "/design should respond").not.toBeNull();
+    expect(response!.status(), "/design status should be 200").toBe(200);
+
+    // First prove the emulation took effect — `matchMedia` must report the
+    // preference as active. If this fails, the rest of the test is meaningless
+    // (the media query would not be in effect and the probe would keep 150ms).
+    const prefersReduced = await page.evaluate(() =>
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
+    expect(
+      prefersReduced,
+      "describe-level test.use({reducedMotion:'reduce'}) must set matchMedia prefers-reduced-motion to true",
+    ).toBe(true);
+
+    // Inject a probe with a 150ms transition. The global
+    // `@media (prefers-reduced-motion: reduce) { *, ::before, ::after {
+    // transition-duration: 0.01ms !important; ... } }` rule must override the
+    // probe's inline `transition: color 150ms ease`. `!important` author
+    // declarations beat normal inline styles — and inline beats normal class
+    // rules — so this also proves class-based transitions (like the daily
+    // `transition-colors`) are overridden by the same `!important` mechanism.
+    // getComputedStyle serializes time in SECONDS, so 150ms comes back as
+    // "0.15s" and the rule's 0.01ms as e.g. "0.00001s"; parse to ms (×1000)
+    // and assert ≤ 1ms — proving the `* !important` mechanism collapses any
+    // transition under the preference. (Daily seeded behavior is deferred;
+    // the probe proves the CSS mechanism that degrades the daily hover.)
+    const transitionDuration = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.transition = "color 150ms ease";
+      probe.textContent = "probe";
+      document.body.appendChild(probe);
+      const duration = getComputedStyle(probe).transitionDuration;
+      probe.remove();
+      return duration;
+    });
+
+    const durationMs = parseFloat(transitionDuration) * 1000;
+    expect(
+      durationMs,
+      "probe transition-duration must resolve to ≤ 1ms under reduced-motion (global * !important collapses the 150ms inline transition; serialized in seconds so ×1000)",
+    ).toBeLessThanOrEqual(1);
+  });
+});

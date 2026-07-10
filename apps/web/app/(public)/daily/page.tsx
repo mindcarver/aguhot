@@ -112,7 +112,7 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
           page BackLink (Story 2.5). href unchanged. */}
       <Link
         href="/"
-        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+        className="inline-flex items-center min-h-11 gap-1 text-sm text-ink-secondary hover:text-ink-primary"
       >
         <span aria-hidden>←</span> 返回首页
       </Link>

@@ -868,3 +868,23 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: `package.json` base `e2e` 的 `--grep-invert` 现累计 14 个 `|@tag`——单字符串正则、无程序化校验，tag 拼写错误会静默含/排某套件
   evidence: Story 3.5 复核（adversarial）指出 base `e2e` 脚本的 `--grep-invert` 累计 `@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return`（3.5 patch 已把 `@a11y` 从该列表移除并入默认闸门）。每个 story 加其 `@tag` 进 grep-invert 是既有模式，但单 pipe-分隔正则无校验：tag 拼写错会静默把该 tagged 套件纳入/排除 base e2e。这是项目级测试编排模式（非 3.5 引入），复核顺带 surface。
   resolution: 已于 Story 3.5 复核登记为 grep-invert 可维护性 defer（项目级）——待 tag 数量继续增长时，考虑改为 playwright `testProjects` 或 `--grep` 白名单模式（base e2e 显式列含哪些 tag，而非 invert 排除），或加一个 lint 校验「grep-invert 里的每个 tag 都对应至少一个 spec 的 describe 标题」。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
+  summary: AGUHOT logo 链接触控热区未达标——header 品牌 `<a>` 非 44px，加 `min-h-11` 会破坏 header `h-16` 布局
+  evidence: Story 3.6 Never 明示「不改 AGUHOT logo 链接触控热区（header 品牌标记，非核心交互；加 44px 会破坏 header `h-16` 布局——defer）」。`apps/web/app/(public)/_components/public-nav.tsx` 的 AGUHOT logo `<Link>` 在 header `h-16`(64px) 容器内用 `text-lg`，实际触控高度约 28px < 44px。logo 是品牌标记非核心交互控件，且 header 高度固定（加 `min-h-11` 会使 logo 超出 `h-16` 容器或撑高 header），故 defer。8 处欠尺寸交互控件均已加 `min-h-11`，logo 是唯一识别但未修的欠尺寸 `<a>`。
+  resolution: 已于 Story 3.6 登记为 logo 触控热区 defer——后续若需达标，重构 header 布局（如把 `h-16` 改为 `min-h-16` + logo `min-h-11` + flex 居中），或接受 logo 作为品牌标记非触控控件（评估是否纳入触控基线）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
+  summary: 减动效在真实 `/daily` transition 上的 seeded 行为验证未做——探针证 CSS 机制，`/daily` 需 seed 故 defer
+  evidence: Story 3.6 Design Notes 明示「为何减动效 e2e 用探针而非测真实 `/daily` transition：`/daily` 是 `(public)` 唯一含 CSS transition 的面，但 `@a11y` 套件在 base `e2e` 闸门跑（无 `seed-daily` 前置），`/daily` 摘要行依赖 digest 数据，空态无 transition li 可断言」。3.6 的 `@a11y` 减动效测试在 `/design`（DB-free）注入探针 `<div style="transition:color 150ms ease">`，断言 `getComputedStyle.transitionDuration` 被全局 `* !important` 规则降级为近 0——证「media query 在偏好下把任一 transition 降级为即时」的机制，即降级 daily hover 的同一机制。但未在真实 `/daily` seeded 摘要行上直接断言 `transition-colors` 被降级（需 seed-daily 前置 + `@a11y` 套件加 seed 依赖）。
+  resolution: 已于 Story 3.6 登记为 seeded daily 减动效验证 defer——待需要时，在 `e2e:a11y` 加 `seed-daily` 前置（或新建 `e2e:a11y:daily` 带 seed），goto `/daily` 在摘要行 `<li>` 上断言 `getComputedStyle.transitionDuration` ≤ 1ms（`reducedMotion:'reduce'` 下），直接证 daily hover 被降级（当前由探针间接证明同机制）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
+  summary: 按面触控热区 e2e 全量 sweep 未做——3.6 仅守 FilterPill 代表性密集标签，逐链接断言 defer
+  evidence: Story 3.6 的 `@a11y` 触控热区测试仅断言 `/design` 上 FilterPill「全部」高度 ≥ 44px（FilterPill 是 UX-DR13 点名的「密集小标签」代表，一处 pillClass 覆盖五面）。8 处欠尺寸交互控件（3 处返回链接 + 4 处空态 CTA + 证据外链）各加 `min-h-11`，但无逐链接 e2e 断言——逐链接断言需各面 seed（home/favorites/search 需 DB + seed，detail 需 seed-detail，daily 需 seed-daily），且是对同一 `min-h-11` token 的冗余覆盖。3.6 选择守 FilterPill 代表性密集标签（触控最易误触的控件），其余逐链接断言 defer。
+  resolution: 已于 Story 3.6 登记为按面触控热区 sweep defer——待真实触控回归出现在特定面（如某面链接被样式覆盖 `min-h-11`）时，给该面加触控高度断言；或引入 axe-core/touch-target 审计一次性扫描全部交互控件高度（比逐面手写断言更省）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
+  summary: 跨浏览器减动效/触控验证缺失——项目 chromium-only 配置，3.6 a11y e2e 仅 Chromium 跑
+  evidence: Story 3.6 沿用 3.5 既有项目级配置：`apps/web/playwright.config.ts` 仅定义 chromium 单 project。`prefers-reduced-motion` media query 的匹配与 `getComputedStyle.transitionDuration` 序列化在 WebKit（Safari）/Firefox 上历史上有差异（如 transition-duration 序列化格式、`!important` 覆盖优先级在旧引擎的边界 case）。3.6 的减动效探针断言（transition-duration ≤ 1ms）与触控高度断言（boundingBox.height ≥ 44px）全部仅 Chromium 跑。这是项目级测试基建配置（所有 spec 同样 chromium-only，3.5 复核已登记同根 defer），非 3.6 引入。
+  resolution: 已于 Story 3.6 沿用 3.5 复核登记为跨浏览器 a11y 验证 defer（项目级）——待引入 WebKit/Firefox project 时，减动效探针与触控高度断言自动跨浏览器跑（需评估 WebKit/Firefox 下 `transition-duration` 序列化格式差异对 `parseFloat` 解析的影响）。

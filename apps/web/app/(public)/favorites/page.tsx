@@ -270,13 +270,13 @@ function EmptyState({ isLoggedIn }: { isLoggedIn: boolean }) {
         <div className="flex flex-wrap gap-3">
           <Link
             href="/"
-            className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+            className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
           >
             返回首页
           </Link>
           <Link
             href="/topics"
-            className="inline-flex items-center rounded-full border border-border-hairline bg-surface-raised px-3 py-1 text-sm text-ink-secondary hover:bg-surface-muted"
+            className="inline-flex items-center min-h-11 rounded-full border border-border-hairline bg-surface-raised px-3 py-1 text-sm text-ink-secondary hover:bg-surface-muted"
           >
             探索主题
           </Link>

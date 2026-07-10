@@ -162,7 +162,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
       <BackLink
         fallback="/"
         searchLabel={<><span aria-hidden>←</span> 返回搜索结果</>}
-        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+        className="inline-flex items-center min-h-11 gap-1 text-sm text-ink-secondary hover:text-ink-primary"
       >
         <span aria-hidden>←</span> 返回首页
       </BackLink>
@@ -387,7 +387,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
                       href={row.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-sm font-medium text-brand"
+                      className="inline-flex items-center min-h-11 gap-1 text-sm font-medium text-brand"
                     >
                       原文链接 <span aria-hidden>↗</span>
                     </a>

@@ -149,7 +149,7 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
           landing point is the detail page BackLink (Story 2.5). href unchanged. */}
       <Link
         href="/topics"
-        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+        className="inline-flex items-center min-h-11 gap-1 text-sm text-ink-secondary hover:text-ink-primary"
       >
         <span aria-hidden>←</span> 返回主题目录
       </Link>

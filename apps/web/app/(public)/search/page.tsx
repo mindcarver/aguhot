@@ -135,7 +135,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
           </p>
           <Link
             href="/"
-            className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+            className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
           >
             返回首页
           </Link>

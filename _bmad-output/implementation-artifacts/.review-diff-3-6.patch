@@ -1,0 +1,580 @@
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index f99d69f..03d1716 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -868,3 +868,23 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   summary: `package.json` base `e2e` 的 `--grep-invert` 现累计 14 个 `|@tag`——单字符串正则、无程序化校验，tag 拼写错误会静默含/排某套件
+   evidence: Story 3.5 复核（adversarial）指出 base `e2e` 脚本的 `--grep-invert` 累计 `@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return`（3.5 patch 已把 `@a11y` 从该列表移除并入默认闸门）。每个 story 加其 `@tag` 进 grep-invert 是既有模式，但单 pipe-分隔正则无校验：tag 拼写错会静默把该 tagged 套件纳入/排除 base e2e。这是项目级测试编排模式（非 3.5 引入），复核顺带 surface。
+   resolution: 已于 Story 3.5 复核登记为 grep-invert 可维护性 defer（项目级）——待 tag 数量继续增长时，考虑改为 playwright `testProjects` 或 `--grep` 白名单模式（base e2e 显式列含哪些 tag，而非 invert 排除），或加一个 lint 校验「grep-invert 里的每个 tag 都对应至少一个 spec 的 describe 标题」。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
++  summary: AGUHOT logo 链接触控热区未达标——header 品牌 `<a>` 非 44px，加 `min-h-11` 会破坏 header `h-16` 布局
++  evidence: Story 3.6 Never 明示「不改 AGUHOT logo 链接触控热区（header 品牌标记，非核心交互；加 44px 会破坏 header `h-16` 布局——defer）」。`apps/web/app/(public)/_components/public-nav.tsx` 的 AGUHOT logo `<Link>` 在 header `h-16`(64px) 容器内用 `text-lg`，实际触控高度约 28px < 44px。logo 是品牌标记非核心交互控件，且 header 高度固定（加 `min-h-11` 会使 logo 超出 `h-16` 容器或撑高 header），故 defer。8 处欠尺寸交互控件均已加 `min-h-11`，logo 是唯一识别但未修的欠尺寸 `<a>`。
++  resolution: 已于 Story 3.6 登记为 logo 触控热区 defer——后续若需达标，重构 header 布局（如把 `h-16` 改为 `min-h-16` + logo `min-h-11` + flex 居中），或接受 logo 作为品牌标记非触控控件（评估是否纳入触控基线）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
++  summary: 减动效在真实 `/daily` transition 上的 seeded 行为验证未做——探针证 CSS 机制，`/daily` 需 seed 故 defer
++  evidence: Story 3.6 Design Notes 明示「为何减动效 e2e 用探针而非测真实 `/daily` transition：`/daily` 是 `(public)` 唯一含 CSS transition 的面，但 `@a11y` 套件在 base `e2e` 闸门跑（无 `seed-daily` 前置），`/daily` 摘要行依赖 digest 数据，空态无 transition li 可断言」。3.6 的 `@a11y` 减动效测试在 `/design`（DB-free）注入探针 `<div style="transition:color 150ms ease">`，断言 `getComputedStyle.transitionDuration` 被全局 `* !important` 规则降级为近 0——证「media query 在偏好下把任一 transition 降级为即时」的机制，即降级 daily hover 的同一机制。但未在真实 `/daily` seeded 摘要行上直接断言 `transition-colors` 被降级（需 seed-daily 前置 + `@a11y` 套件加 seed 依赖）。
++  resolution: 已于 Story 3.6 登记为 seeded daily 减动效验证 defer——待需要时，在 `e2e:a11y` 加 `seed-daily` 前置（或新建 `e2e:a11y:daily` 带 seed），goto `/daily` 在摘要行 `<li>` 上断言 `getComputedStyle.transitionDuration` ≤ 1ms（`reducedMotion:'reduce'` 下），直接证 daily hover 被降级（当前由探针间接证明同机制）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
++  summary: 按面触控热区 e2e 全量 sweep 未做——3.6 仅守 FilterPill 代表性密集标签，逐链接断言 defer
++  evidence: Story 3.6 的 `@a11y` 触控热区测试仅断言 `/design` 上 FilterPill「全部」高度 ≥ 44px（FilterPill 是 UX-DR13 点名的「密集小标签」代表，一处 pillClass 覆盖五面）。8 处欠尺寸交互控件（3 处返回链接 + 4 处空态 CTA + 证据外链）各加 `min-h-11`，但无逐链接 e2e 断言——逐链接断言需各面 seed（home/favorites/search 需 DB + seed，detail 需 seed-detail，daily 需 seed-daily），且是对同一 `min-h-11` token 的冗余覆盖。3.6 选择守 FilterPill 代表性密集标签（触控最易误触的控件），其余逐链接断言 defer。
++  resolution: 已于 Story 3.6 登记为按面触控热区 sweep defer——待真实触控回归出现在特定面（如某面链接被样式覆盖 `min-h-11`）时，给该面加触控高度断言；或引入 axe-core/touch-target 审计一次性扫描全部交互控件高度（比逐面手写断言更省）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-6-touch-target-and-reduced-motion-support.md`
++  summary: 跨浏览器减动效/触控验证缺失——项目 chromium-only 配置，3.6 a11y e2e 仅 Chromium 跑
++  evidence: Story 3.6 沿用 3.5 既有项目级配置：`apps/web/playwright.config.ts` 仅定义 chromium 单 project。`prefers-reduced-motion` media query 的匹配与 `getComputedStyle.transitionDuration` 序列化在 WebKit（Safari）/Firefox 上历史上有差异（如 transition-duration 序列化格式、`!important` 覆盖优先级在旧引擎的边界 case）。3.6 的减动效探针断言（transition-duration ≤ 1ms）与触控高度断言（boundingBox.height ≥ 44px）全部仅 Chromium 跑。这是项目级测试基建配置（所有 spec 同样 chromium-only，3.5 复核已登记同根 defer），非 3.6 引入。
++  resolution: 已于 Story 3.6 沿用 3.5 复核登记为跨浏览器 a11y 验证 defer（项目级）——待引入 WebKit/Firefox project 时，减动效探针与触控高度断言自动跨浏览器跑（需评估 WebKit/Firefox 下 `transition-duration` 序列化格式差异对 `parseFloat` 解析的影响）。
+diff --git a/apps/web/app/(public)/daily/page.tsx b/apps/web/app/(public)/daily/page.tsx
+index 88e64b2..e0ff5fc 100644
+--- a/apps/web/app/(public)/daily/page.tsx
++++ b/apps/web/app/(public)/daily/page.tsx
+@@ -112,7 +112,7 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
+           page BackLink (Story 2.5). href unchanged. */}
+       <Link
+         href="/"
+-        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
++        className="inline-flex items-center min-h-11 gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+       >
+         <span aria-hidden>←</span> 返回首页
+       </Link>
+diff --git a/apps/web/app/(public)/events/[hotEventId]/page.tsx b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+index 63bf8e4..337298a 100644
+--- a/apps/web/app/(public)/events/[hotEventId]/page.tsx
++++ b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+@@ -162,7 +162,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+       <BackLink
+         fallback="/"
+         searchLabel={<><span aria-hidden>←</span> 返回搜索结果</>}
+-        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
++        className="inline-flex items-center min-h-11 gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+       >
+         <span aria-hidden>←</span> 返回首页
+       </BackLink>
+@@ -387,7 +387,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+                       href={row.url}
+                       target="_blank"
+                       rel="noopener noreferrer"
+-                      className="inline-flex items-center gap-1 text-sm font-medium text-brand"
++                      className="inline-flex items-center min-h-11 gap-1 text-sm font-medium text-brand"
+                     >
+                       原文链接 <span aria-hidden>↗</span>
+                     </a>
+diff --git a/apps/web/app/(public)/favorites/page.tsx b/apps/web/app/(public)/favorites/page.tsx
+index 2c71480..4f7207e 100644
+--- a/apps/web/app/(public)/favorites/page.tsx
++++ b/apps/web/app/(public)/favorites/page.tsx
+@@ -270,13 +270,13 @@ function EmptyState({ isLoggedIn }: { isLoggedIn: boolean }) {
+         <div className="flex flex-wrap gap-3">
+           <Link
+             href="/"
+-            className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
++            className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+           >
+             返回首页
+           </Link>
+           <Link
+             href="/topics"
+-            className="inline-flex items-center rounded-full border border-border-hairline bg-surface-raised px-3 py-1 text-sm text-ink-secondary hover:bg-surface-muted"
++            className="inline-flex items-center min-h-11 rounded-full border border-border-hairline bg-surface-raised px-3 py-1 text-sm text-ink-secondary hover:bg-surface-muted"
+           >
+             探索主题
+           </Link>
+diff --git a/apps/web/app/(public)/page.tsx b/apps/web/app/(public)/page.tsx
+index 23b0505..58cee93 100644
+--- a/apps/web/app/(public)/page.tsx
++++ b/apps/web/app/(public)/page.tsx
+@@ -167,7 +167,7 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
+               {hasFilter ? (
+                 <Link
+                   href="/"
+-                  className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
++                  className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+                 >
+                   查看全部
+                 </Link>
+diff --git a/apps/web/app/(public)/search/page.tsx b/apps/web/app/(public)/search/page.tsx
+index e81814d..752b906 100644
+--- a/apps/web/app/(public)/search/page.tsx
++++ b/apps/web/app/(public)/search/page.tsx
+@@ -135,7 +135,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
+           </p>
+           <Link
+             href="/"
+-            className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
++            className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+           >
+             返回首页
+           </Link>
+diff --git a/apps/web/app/(public)/topics/[slug]/page.tsx b/apps/web/app/(public)/topics/[slug]/page.tsx
+index 9e8ad60..a5b1143 100644
+--- a/apps/web/app/(public)/topics/[slug]/page.tsx
++++ b/apps/web/app/(public)/topics/[slug]/page.tsx
+@@ -149,7 +149,7 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
+           landing point is the detail page BackLink (Story 2.5). href unchanged. */}
+       <Link
+         href="/topics"
+-        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
++        className="inline-flex items-center min-h-11 gap-1 text-sm text-ink-secondary hover:text-ink-primary"
+       >
+         <span aria-hidden>←</span> 返回主题目录
+       </Link>
+diff --git a/apps/web/app/globals.css b/apps/web/app/globals.css
+index 5d89d72..225d942 100644
+--- a/apps/web/app/globals.css
++++ b/apps/web/app/globals.css
+@@ -110,3 +110,42 @@
+   outline: 2px solid var(--color-focus-ring);
+   outline-offset: 2px;
+ }
++
++/* Story 3.6 — reduced-motion baseline: one global media query.
++ *
++ * Before 3.6 there was no `@media (prefers-reduced-motion: reduce)` rule
++ * anywhere in `(public)`. The only CSS transition on the public surfaces is
++ * daily/page.tsx's `transition-colors hover:bg-surface-muted` (a non-essential
++ * 150ms hover) — but with no reduced-motion guard, a reader who enables the OS
++ * preference still gets the 150ms fade, and any FUTURE transition/animation
++ * added to a public component would likewise be unguarded.
++ *
++ * This single rule fills that gap for EVERY element across all six public
++ * surfaces + every shared component, with zero per-component `motion-reduce:`
++ * classes. It is the canonical a11y community snippet (the same form used by
++ * the Prefers-Reduced-Motion spec authors and frameworks like Bootstrap/Tailwind
++ * docs): animation/transition durations collapse to 0.01ms, animations run at
++ * most once, and scroll-behavior is forced to auto. `!important` is REQUIRED
++ * here — Tailwind's `transition-colors` compiles to `transition-duration:150ms`
++ * (specificity higher than a plain declaration), and inline styles share the
++ * same fate; `!important` is the only way a media-query rule overrides both.
++ * Sibling to the 3.5 `:focus-visible` rule — same "one global CSS rule covers
++ * every surface" pattern (focus rule → reduced-motion rule), consistency.
++ *
++ * The rule is INSIDE the media query, so a reader WITHOUT the preference sees
++ * zero behavior change (daily hover stays 150ms, byte-for-byte). The
++ * `scroll-behavior:auto` line is defensive — BackLink / ListContextMemory
++ * already use `behavior:"instant"` for scroll restore; this locks the invariant
++ * against a future `scroll-behavior:smooth` addition. Verified by the
++ * `@a11y` reduced-motion probe test in a11y.spec.ts (Story 3.6).
++ */
++@media (prefers-reduced-motion: reduce) {
++  *,
++  ::before,
++  ::after {
++    animation-duration: 0.01ms !important;
++    animation-iteration-count: 1 !important;
++    transition-duration: 0.01ms !important;
++    scroll-behavior: auto !important;
++  }
++}
+diff --git a/apps/web/components/chips.tsx b/apps/web/components/chips.tsx
+index 0f9fecd..76ff4bd 100644
+--- a/apps/web/components/chips.tsx
++++ b/apps/web/components/chips.tsx
+@@ -77,6 +77,12 @@ export function TagChip({ children, className }: { children: React.ReactNode; cl
+  * filtering (server-rendered, shareable URL, no client JS / useState). When
+  * omitted the pill renders as a display-only `<span>` (keeps 1.3 / /design use).
+  * The active/default class styles are identical in both forms.
++ *
++ * Story 3.6 — `min-h-11` (44px) touch target, UX-DR13「密集小标签」baseline. One
++ * pillClass change covers home 筛选 / topics 目录 / search 主题命中 / detail 关联
++ * / `/design` five surfaces (FilterPill renders as both `<Link>` and `<span>`,
++ * same pillClass). `min-h-11` is the existing 44px token (nav/SearchBox/
++ * FollowButton share it). Visual style (color/radius/font-size) is byte-unchanged.
+  */
+ export function FilterPill({
+   active = false,
+@@ -90,7 +96,7 @@ export function FilterPill({
+   className?: string;
+ }) {
+   const pillClass = cn(
+-    "inline-flex items-center rounded-full px-3 py-1 text-sm",
++    "inline-flex items-center min-h-11 rounded-full px-3 py-1 text-sm",
+     active
+       ? "bg-brand text-brand-foreground"
+       : "bg-surface-base text-ink-secondary",
+diff --git a/apps/web/e2e/a11y.spec.ts b/apps/web/e2e/a11y.spec.ts
+index 86e7281..6880696 100644
+--- a/apps/web/e2e/a11y.spec.ts
++++ b/apps/web/e2e/a11y.spec.ts
+@@ -285,3 +285,251 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
+     }
+   });
+ });
++
++/**
++ * Touch-target + reduced-motion baseline e2e — Story 3.6.
++ *
++ * Surface-anchored coverage for the AC1 baseline laid down in 3.6:
++ *
++ *   - AC1 touch target: `/design` (DB-free) renders FilterPill samples
++ *     (`全部` / `市场反应`). FilterPill is the representative「密集小标签」
++ *     control (UX-DR13) — one pillClass change covers home 筛选 / topics 目录 /
++ *     search 主题命中 / detail 关联 / `/design` five surfaces. Asserting the
++ *     rendered height ≥ 44px proves the `min-h-11` token landed and is
++ *     respected by the flex container (the `<span>` form shares pillClass with
++ *     the `<Link>` form, so this also covers the interactive variant).
++ *   - AC1 reduced motion: under `reducedMotion: "reduce"`, the global
++ *     `@media (prefers-reduced-motion: reduce) { *, ::before, ::after { ...
++ *     !important } }` rule in globals.css must collapse EVERY transition to
++ *     ~0ms. We prove the MECHANISM (not a specific element) by injecting a
++ *     probe `<div style="transition:color 150ms ease">` and asserting its
++ *     computed `transition-duration` is NOT `150ms` and resolves to ≤ 1ms —
++ *     the same `* !important` mechanism that degrades the daily
++ *     `transition-colors` hover. Anchored on `/design` (DB-free) to avoid the
++ *     `/daily` seed dependency (daily's seeded transition behavior is deferred;
++ *     the probe proves the CSS mechanism that would degrade it).
++ *
++ * Infrastructure note: both tests anchor on `/design` (DB-free static server
++ * component), so this file adds NO new DATABASE_URL / seed dependency beyond
++ * what the 3.5 `@a11y` describe already requires (the `/` first test needs PG;
++ * `/design` does not). The reduced-motion test lives in its own describe with
++ * `test.use({ contextOptions: { reducedMotion: "reduce" } })` so the emulation
++ * is scoped to that test only (the touch-target test needs the default
++ * no-preference context). Playwright 1.60 does not expose `reducedMotion` as a
++ * standalone test option (unlike `colorScheme`/`viewport`); it is passed via
++ * `contextOptions` (a `BrowserContextOptions` passthrough) to
++ * `browser.newContext()`, which sets the browser's `prefers-reduced-motion:
++ * reduce` media query — the same OS-level preference a reader sets.
++ */
++test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @a11y", () => {
++  test("FilterPill 触控热区高度 ≥ 44px (AC1 触控尺寸)", async ({ page }) => {
++    // `/design` is DB-free (static server component rendering token samples),
++    // so this touch-target guard has zero DB/seed dependency.
++    const response = await page.goto("/design");
++    expect(response, "/design should respond").not.toBeNull();
++    expect(response!.status(), "/design status should be 200").toBe(200);
++
++    // FilterPill renders two samples on /design: `全部` (default) and
++    // `市场反应` (active). Both share pillClass (`min-h-11`). Assert the
++    // `全部` pill's rendered height ≥ 44px — the AC1 touch-target floor
++    // (UX-DR13「密集小标签」baseline). `min-h-11` = 44px (the existing token
++    // nav/SearchBox/FollowButton share). A regression that removes `min-h-11`
++    // from pillClass collapses the height back to ~28px (py-1 + text-sm) and
++    // fails here.
++    const pill = page.getByText("全部", { exact: true }).first();
++    const box = await pill.boundingBox();
++    expect(box, "FilterPill「全部」must exist in the DOM").not.toBeNull();
++    expect(
++      box!.height,
++      "FilterPill rendered height must be ≥ 44px (min-h-11 touch target, AC1)",
++    ).toBeGreaterThanOrEqual(44);
++  });
++
++  /**
++   * Matrix row 2 — empty-state CTA touch target ≥ 44px.
++   *
++   * Covers I/O & Edge-Case Matrix row 2: "空态 CTA 移动端点击 (AC1 触控)" —
++   * home/favorites/search 空态 CTA ≥ 44px (min-h-11). The search no-results
++   * state renders a `<Link href="/">`「返回首页」CTA with `min-h-11`. Asserting
++   * its boundingBox().height ≥ 44 proves the touch-target floor landed on the
++   * empty-state return path. Anchored on `/search?q=zzznomatch` (local PG,
++   * same DATABASE_URL dependency as home.spec — the @a11y suite already
++   * requires local PG `aguhot_dev`). If the dev DB somehow has a hit for this
++   * gibberish query, the intent is "non-empty query, zero hits → CTA renders";
++   * switch to a more unique gibberish string in that case.
++   */
++  test("search 空态 CTA「返回首页」触控热区高度 ≥ 44px (矩阵行 2 空态 CTA)", async ({
++    page,
++  }) => {
++    const response = await page.goto("/search?q=zzznomatch");
++    expect(response, "/search?q=zzznomatch should respond").not.toBeNull();
++    expect(response!.status(), "/search status should be 200").toBe(200);
++    // AC: the page responded 200 and is not a redirect (e.g. to /login).
++    expect(response!.url(), "/search should not redirect").not.toMatch(/\/login/);
++
++    // The no-results state renders a `<Link href="/">`「返回首页」CTA. Its
++    // className carries `min-h-11` (44px). A regression that removes the token
++    // collapses the height back to ~28px (py-1 + text-sm) and fails here.
++    const cta = page.getByRole("link", { name: /返回首页/ }).first();
++    const box = await cta.boundingBox();
++    expect(box, "search empty-state CTA must exist in the DOM").not.toBeNull();
++    expect(
++      box!.height,
++      "search empty-state CTA height must be ≥ 44px (min-h-11 touch target, matrix row 2)",
++    ).toBeGreaterThanOrEqual(44);
++  });
++
++  /**
++   * Matrix row 3 — return-link touch target ≥ 44px.
++   *
++   * Covers I/O & Edge-Case Matrix row 3: "返回链接 / 证据外链移动端点击 (AC1 触控)"
++   * — detail BackLink / daily 返回 / topics 返回 / detail「原文链接 ↗」 ≥ 44px.
++   * `/daily` renders its「← 返回首页」return link UNCONDITIONALLY at the top of
++   * the page (it does NOT call `notFound()` when `digest === null` — it renders
++   * a degraded state with the return link still present), so this test has no
++   * seed dependency beyond the @a11y suite's existing local PG requirement.
++   */
++  test("/daily 返回首页链接触控热区高度 ≥ 44px (矩阵行 3 返回链接)", async ({
++    page,
++  }) => {
++    const response = await page.goto("/daily");
++    expect(response, "/daily should respond").not.toBeNull();
++    expect(response!.status(), "/daily status should be 200").toBe(200);
++    expect(response!.url(), "/daily should not redirect").not.toMatch(/\/login/);
++
++    // The「← 返回首页」link renders unconditionally at the top of /daily
++    // (above the digest-dependent ternary). Its className carries `min-h-11`.
++    // The `←` glyph lives in an `<span aria-hidden>`, so the accessible name
++    // is `返回首页` — `getByRole("link", { name: /返回首页/ })` matches.
++    const returnLink = page
++      .getByRole("link", { name: /返回首页/ })
++      .first();
++    const box = await returnLink.boundingBox();
++    expect(box, "/daily return link must exist in the DOM").not.toBeNull();
++    expect(
++      box!.height,
++      "/daily return link height must be ≥ 44px (min-h-11 touch target, matrix row 3)",
++    ).toBeGreaterThanOrEqual(44);
++  });
++
++  /**
++   * Matrix row 5 — default (no reduced-motion preference) does NOT regress.
++   *
++   * Covers I/O & Edge-Case Matrix row 5: "默认（无减动效偏好）浏览 daily（不回归）"
++   * — default users keep their 150ms `transition-colors` hover (the global
++   * `@media (prefers-reduced-motion: reduce)` rule must NOT fire without the
++   * preference). This is the mirror of the reduced-motion probe test (which
++   * asserts ≤1ms under the preference); here, in the DEFAULT context (no
++   * `reducedMotion` override), a probe `<div style="transition: color 150ms
++   * ease">` must keep `transition-duration: "150ms"` — proving the media query
++   * is correctly scoped and default users suffer no regression. Anchored on
++   * `/design` (DB-free).
++   */
++  test("默认无减动效偏好下 transition 不被降级 (矩阵行 5 不回归)", async ({
++    page,
++  }) => {
++    const response = await page.goto("/design");
++    expect(response, "/design should respond").not.toBeNull();
++    expect(response!.status(), "/design status should be 200").toBe(200);
++
++    // First prove the DEFAULT context has no reduced-motion preference —
++    // `matchMedia` must report false. If this fails, the test is running under
++    // an unintended preference and the "no regression" assertion is void.
++    const prefersReduced = await page.evaluate(() =>
++      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
++    );
++    expect(
++      prefersReduced,
++      "default context must NOT set prefers-reduced-motion (matrix row 5 no-regression mirror)",
++    ).toBe(false);
++
++    // Inject a probe with a 150ms transition. Under the DEFAULT context the
++    // global `@media (prefers-reduced-motion: reduce) { * !important }` rule
++    // is NOT in effect, so the probe's inline `transition: color 150ms ease`
++    // must be honored as-is — the computed `transition-duration` resolves to
++    // 150ms. Browsers serialize sub-second durations as seconds (e.g.
++    // "0.15s"), so parse to ms (mirroring the reduced-motion probe's parsing)
++    // and assert equality with 150. A regression where the media query leaks
++    // into the default context (e.g. missing `@media` wrapper) would collapse
++    // this to ≤ 1ms and fail here.
++    const transitionDuration = await page.evaluate(() => {
++      const probe = document.createElement("div");
++      probe.style.transition = "color 150ms ease";
++      probe.textContent = "probe";
++      document.body.appendChild(probe);
++      const duration = getComputedStyle(probe).transitionDuration;
++      probe.remove();
++      return duration;
++    });
++
++    const durationMs = parseFloat(transitionDuration) * 1000;
++    expect(
++      durationMs,
++      "default-context probe transition-duration must resolve to 150ms (media query must NOT fire without the preference — matrix row 5 no regression)",
++    ).toBe(150);
++  });
++});
++
++test.describe("减少动态效果偏好下动效即时切换 (Story 3.6) @a11y", () => {
++  // `test.use({ contextOptions: { reducedMotion: "reduce" } })` emulates the
++  // OS-level preference for every test in this describe. Playwright passes
++  // `reducedMotion` to `browser.newContext()`, which sets the browser's
++  // `prefers-reduced-motion: reduce` media query, so `window.matchMedia(...)`
++  // reports true and the globals.css media-query rule is in effect. Scoped to
++  // this describe so the touch-target test above keeps the default
++  // no-preference context. (Playwright 1.60 does NOT expose `reducedMotion` as
++  // a standalone test option like `colorScheme`/`viewport`; it must go through
++  // `contextOptions` — a BrowserContextOptions passthrough.)
++  test.use({ contextOptions: { reducedMotion: "reduce" } });
++
++  test("reducedMotion reduce 偏好生效 + 探针 transition-duration 近 0 (AC1 减动效)", async ({
++    page,
++  }) => {
++    const response = await page.goto("/design");
++    expect(response, "/design should respond").not.toBeNull();
++    expect(response!.status(), "/design status should be 200").toBe(200);
++
++    // First prove the emulation took effect — `matchMedia` must report the
++    // preference as active. If this fails, the rest of the test is meaningless
++    // (the media query would not be in effect and the probe would keep 150ms).
++    const prefersReduced = await page.evaluate(() =>
++      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
++    );
++    expect(
++      prefersReduced,
++      "describe-level test.use({reducedMotion:'reduce'}) must set matchMedia prefers-reduced-motion to true",
++    ).toBe(true);
++
++    // Inject a probe with a 150ms transition. The global
++    // `@media (prefers-reduced-motion: reduce) { *, ::before, ::after {
++    // transition-duration: 0.01ms !important; ... } }` rule must override the
++    // inline `transition: color 150ms ease` (inline styles are overridden by
++    // `!important` declarations). Assert the computed `transition-duration` is
++    // NOT `150ms` and resolves to ≤ 1ms — proving the `* !important` mechanism
++    // collapses any transition under the preference. This is the same
++    // mechanism that degrades the daily `transition-colors:150ms` hover (daily
++    // seeded behavior is deferred; the probe proves the CSS mechanism).
++    const transitionDurationSeconds = await page.evaluate(() => {
++      const probe = document.createElement("div");
++      probe.style.transition = "color 150ms ease";
++      probe.textContent = "probe";
++      document.body.appendChild(probe);
++      const duration = getComputedStyle(probe).transitionDuration;
++      probe.remove();
++      return duration;
++    });
++
++    expect(
++      transitionDurationSeconds,
++      "probe transition-duration must NOT be 150ms (global * !important rule must override inline style under reduced-motion)",
++    ).not.toBe("150ms");
++
++    // Computed transition-duration resolves to seconds (e.g. "0.01s"). Parse
++    // to ms and assert ≤ 1 (the canonical snippet sets 0.01ms).
++    const durationMs = parseFloat(transitionDurationSeconds) * 1000;
++    expect(
++      durationMs,
++      "probe transition-duration must resolve to ≤ 1ms (global * !important collapses transition under reduced-motion)",
++    ).toBeLessThanOrEqual(1);
++  });
++});
+
+=== NEW FILE: spec-3-6 ===
+---
+title: '公开页面触控热区与减少动态效果支持 (3.6)'
+type: 'feature'
+created: '2026-07-11'
+status: 'in-review'
+baseline_revision: '0f857be73b8be34f75b0fdb79d4ff1e47f0ede12'
+review_loop_iteration: 0
+followup_review_recommended: false
+context:
+  - '{project-root}/_bmad-output/implementation-artifacts/epic-3-context.md'
+  - '{project-root}/_bmad-output/planning-artifacts/ux-designs/ux-aguhot-2026-07-09/EXPERIENCE.md'
+warnings: ['oversized']
+---
+
+<intent-contract>
+
+## Intent
+
+**Verbatim intent (Story 3.6, epics.md):** "As a 市场观察用户, I want 在移动端和低动态偏好场景下获得稳定的交互体验, So that 我不会因为点击困难或多余动效而中断浏览。" AC1: "Given 用户在移动端或启用减少动态效果偏好, When 页面渲染或状态切换, Then 交互热区满足基础触控尺寸, And 非必要动效被关闭或降级为即时切换。" UX floor (EXPERIENCE.md:108-115): "移动端点击热区至少符合常规触控尺寸，避免密集小标签难以点击" + "如果用户启用减少动态效果，所有状态变化应改为即时切换而非淡入淡出"。
+
+**Problem:** 调查（6 面 + 全部共享组件）表明触控热区**大部分已由前序 epic 落地**——nav 链接 / SearchBox input+button / FollowButton 三按钮 / 移动端汉堡 / EventCard / daily·topics·favorites 卡片链接均已 `min-h-11`(44px) 或更大；减少动态方面 nav drawer 即时开关、BackLink/ListContextMemory 滚动用 `behavior:"instant"`——但存在两类真实缺口。(1) **触控热区缺口**：8 处交互控件 < 44px——`FilterPill`（`chips.tsx` pillClass `px-3 py-1 text-sm` 无 min-h，波及 home 筛选 / topics 目录 / search 主题命中 / detail 关联 / `/design` 五面，正是 UX floor 点名的「密集小标签」）；3 处返回链接（detail BackLink、`daily:113`、`topics/[slug]:150`，共享 `inline-flex items-center gap-1 text-sm text-ink-secondary` 约 20px）；4 处空态 CTA（home「查看全部」、favorites「返回首页」「探索主题」、search「返回首页」，`rounded-full px-3 py-1 text-sm` 约 28px）；detail 证据「原文链接 ↗」外链（`text-sm font-medium text-brand` 约 20px）。(2) **减少动态缺口**：`(public)` 仅有一处 CSS transition（`daily/page.tsx:177` `transition-colors hover:bg-surface-muted`，非必要 hover），无 `@keyframes`/`animate-*`，但**无全局 `@media (prefers-reduced-motion: reduce)` 规则**——启用减动效偏好时该 hover 仍 150ms 淡入，且未来新增动效无守卫。
+
+**Approach:** **纯 web 层、零 core/DB/worker/迁移。** ponytail 高 rung、沿用 3.5「一条全局 CSS 规则」模式：(1) **一条全局 `@media (prefers-reduced-motion: reduce)` 规则**（canonical a11y snippet：`*,::before,::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important }`）——`!important` 覆盖 Tailwind `transition-colors:150ms` 及内联样式，把 daily hover 与一切未来动效在偏好下降级为即时；仅在 media query 内生效，默认用户零回归。(2) **8 处欠尺寸交互控件各加 `min-h-11`**（44px，既有约定：nav/SearchBox/FollowButton 同 token）——FilterPill pillClass 一处改覆盖五面 + 7 处内联 `<Link>`/`<a>` className 各加一 token；不抽公共 Primitive（8 处分属 3 个样式族 + 证据链，抽组件 = 过抽象，每处一 token 是最短 diff）。(3) `@a11y` e2e：FilterPill 触控高度 ≥ 44px（锚 `/design` DB-free）+ 减动效探针（`reducedMotion:'reduce'` 下注入 150ms transition 探针，断言全局 `* !important` 规则将其降级为近 0，证同机制即降级 daily hover；锚 `/design` DB-free，避开 `/daily` 需 seed）。
+
+## Boundaries & Constraints
+
+**Always:**
+- 减动效全局规则（AC1「非必要动效即时切换」）：`globals.css` 末尾追加 `@media (prefers-reduced-motion: reduce) { *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }`——canonical a11y snippet，`!important` 是必须的（Tailwind `transition-colors` 编译为 `transition-duration:150ms`，specificity 高于普通声明，须 `!important` 覆盖；内联样式同理被 `!important` 覆盖）。仅在 media query 内生效 → 默认用户（无偏好）行为字节不变、daily hover 仍 150ms。`scroll-behavior:auto` 与 BackLink/ListContextMemory 既有 `behavior:"instant"` 一致（防御性，锁未来若加 `scroll-behavior:smooth`）。
+- 触控热区（AC1「交互热区满足基础触控尺寸」）：**仅**对 8 处已识别的欠尺寸交互控件加 `min-h-11`——FilterPill pillClass（`chips.tsx`，一处覆盖 home/topics/search/detail/`/design` 五面）、3 处返回链接（detail BackLink 调用方 className、`daily/page.tsx:113`、`topics/[slug]/page.tsx:150`）、4 处空态 CTA（`page.tsx:168`「查看全部」、`favorites/page.tsx:271`「返回首页」+`:277`「探索主题」、`search/page.tsx:136`「返回首页」）、detail 证据「原文链接 ↗」`<a>`（`events/[hotEventId]/page.tsx:378`）。`min-h-11` = 44px，既有约定（nav/SearchBox/FollowButton 同）。`min-h-11` 插入 `items-center` 之后（Tailwind sizing utility 位置约定）。
+- SSR/build 安全（不变量延续）：全部改动是 className 加一 token + 一段纯 CSS media query——零 `"use client"`、零 hydration 变化、零路由动态性变化。`pnpm --filter web build`（无 `DATABASE_URL`）仍成功。
+- 不变性约定（沿用 1.4~3.5）：camelCase；`import type` 用于类型；无新 `enum`；零新 npm 依赖；零新 sessionStorage key。
+
+**Block If:**
+- 改 `globals.css` / `chips.tsx` / 任一 page 致 `pnpm --filter web build`（无 `DATABASE_URL`）失败 → HALT。
+- 改 `globals.css` / `chips.tsx` / 任一 page 致 `pnpm -r typecheck` / `pnpm -r lint` 回归 → HALT。
+- 加 `min-h-11` 致 base `e2e`（home/navigation/design/feed/daily/themes/search/favorites/detail）任一断言回归（如某 spec 断言链接 boundingBox/像素位置/链接计数）→ HALT（须调整 spec selector 跟随，断言意图不变，同 3.4/3.5 模式）。
+- 本地 PG `aguhot_dev` 不可达致 `e2e:a11y`（`/` 首屏需请求期 `DATABASE_URL`，同 home.spec）失败 → HALT（不得跳过 e2e）。
+
+**Never:**
+- 不加全局 `a { min-height: 44px }` 规则（会破坏内联正文链接 / AGUHOT logo / 布局——触控热区仅适用于交互控件，不适用于正文内联链接；8 处均为交互控件，已逐一识别）。
+- 不抽 `PillLink`/`ReturnLink`/`CtaLink` 公共组件（8 处分属 3 样式族 + 证据链，每处仅加一 token；抽组件 = 过抽象，违背 ponytail）。
+- 不改 `FilterPill` 视觉样式（仅 `+min-h-11`；颜色/圆角/字号字节不变）。
+- 不移除 `daily/page.tsx:177` 的 `transition-colors`（默认用户的合理 hover；减动效由全局 media query 处理，不删动效）。
+- 不改 ReactionChip / TagChip / AiLabel（display-only chip，非交互目标，无触控热区要求）。
+- 不改 core / prisma / worker / 任何 `@aguhot/core` 导出 / schema / migration（纯 web 层）。
+- 不改 operator console（非公开面；同 3.5 仅 `(public)`）。
+- 不改 AGUHOT logo 链接触控热区（header 品牌标记，非核心交互；加 44px 会破坏 header `h-16` 布局——defer）。
+- 不做 3.5 范围（焦点 / skip-link / 标题层级 / 非颜色语义）——字节不变。
+- 不新增 seed 脚本（`@a11y` 用 `/design` DB-free + `/` 同 home.spec 本地 PG，零新 seed）。
+- 不改 1.1~3.5 既有 seed / 既有 `@*` spec 断言——**唯一可能例外**：base `e2e` 若有链接 boundingBox/位置类断言被 `min-h-11` 扰动，须跟随调整 selector（断言意图不变）；其余既有 spec 零改动。
+
+## I/O & Edge-Case Matrix
+
+| Scenario | Input / State | Expected Output / Behavior | Error Handling |
+|----------|---------------|----------------------------|----------------|
+| FilterPill 移动端点击（AC1 触控） | 手指点 home 筛选 pill / topics 目录 pill / search 主题 pill / detail 关联 pill | pill 触控热区 ≥ 44px 高（`min-h-11`），点击命中稳定，不再因密集小标签误触 | 无错误预期 |
+| 空态 CTA 移动端点击（AC1 触控） | home/favorites/search 空态点「查看全部」/「返回首页」/「探索主题」 | CTA ≥ 44px 高（`min-h-11`），返回路径点击稳定 | 无错误预期 |
+| 返回链接 / 证据外链移动端点击（AC1 触控） | detail BackLink / daily 返回 / topics 返回 / detail「原文链接 ↗」 | 链接 ≥ 44px 高（`min-h-11`），点击命中稳定 | 无错误预期 |
+| 启用减动效偏好浏览 daily（AC1 减动效） | 系统设 `prefers-reduced-motion: reduce`，hover daily 摘要行 | `transition-colors` 被 media query 降级为即时切换（`transition-duration` ≈ 0），无 150ms 淡入 | 无错误预期 |
+| 默认（无减动效偏好）浏览 daily（不回归） | 系统未设减动效偏好，hover daily 摘要行 | 仍 150ms `transition-colors` hover（media query 不生效，字节不变） | 无错误预期 |
+| 减动效偏好下未来新增动效（守卫） | 有人后续加 `transition`/`animation` 到 `(public)` 组件 | media query 自动将其在偏好下降级为即时（`* !important` 全局覆盖） | 无错误预期 |
+
+</intent-contract>
+
+## Code Map
+
+- `apps/web/app/globals.css` -- MODIFY（追加一条 media query，既有 `@theme` + 3.5 `:focus-visible` 规则零改动）：文件末尾追加 `@media (prefers-reduced-motion: reduce) { *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }`。注释点明：Story 3.6 减动效基线——一条全局 media query（canonical a11y snippet），`!important` 覆盖 Tailwind `transition-colors:150ms`（daily hover）及一切未来动效，仅在偏好下生效（默认用户零回归）；与 3.5 全局 `:focus-visible` 同为「一条 CSS 规则铺满全部面」模式。
+- `apps/web/app/components/chips.tsx` -- MODIFY：`FilterPill` 的 `pillClass` 由 `"inline-flex items-center rounded-full px-3 py-1 text-sm"` 改为 `"inline-flex items-center min-h-11 rounded-full px-3 py-1 text-sm"`（加 `min-h-11`）。一处改覆盖 home 筛选 / topics 目录 / search 主题命中 / detail 关联 / `/design` 五面（FilterPill 同时渲染为 `<Link>` 与 `<span>`，两形态同 pillClass）。注释补「Story 3.6 — `min-h-11`(44px) 触控热区，UX-DR13『密集小标签』基线」。ReactionChip/TagChip/AiLabel 字节不变（display-only，非交互目标）。
+- `apps/web/app/(public)/events/[hotEventId]/page.tsx` -- MODIFY（两处 className 各加 `min-h-11`）：(1) BackLink 调用方 `className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"` → 加 `min-h-11`（插 `items-center` 后）；(2) 证据「原文链接 ↗」`<a>` `className="inline-flex items-center gap-1 text-sm font-medium text-brand"` → 加 `min-h-11`。href / 文本 / `rel="noopener noreferrer"` / `target="_blank"` 字节不变。
+- `apps/web/app/(public)/daily/page.tsx` -- MODIFY：返回链接（`daily:113`「← 返回首页」）`className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"` → 加 `min-h-11`。该页 `transition-colors`（`:177`）**不动**（由 globals.css media query 在偏好下降级）。
+- `apps/web/app/(public)/topics/[slug]/page.tsx` -- MODIFY：返回链接（`topics/[slug]:150`「← 返回主题目录」）`className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"` → 加 `min-h-11`。
+- `apps/web/app/(public)/page.tsx` -- MODIFY：home 空态 CTA「查看全部」（`:168`）`className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"` → 加 `min-h-11`。
+- `apps/web/app/(public)/favorites/page.tsx` -- MODIFY（两处 CTA 各加 `min-h-11`）：(1) 「返回首页」（`:271`）`className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"` → 加 `min-h-11`；(2) 「探索主题」（`:277`）`className="inline-flex items-center rounded-full border border-border-hairline bg-surface-raised px-3 py-1 text-sm text-ink-secondary hover:bg-surface-muted"` → 加 `min-h-11`。
+- `apps/web/app/(public)/search/page.tsx` -- MODIFY：无结果 CTA「返回首页」（`:136`）`className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"` → 加 `min-h-11`。
+- `apps/web/e2e/a11y.spec.ts` -- MODIFY（既有 `@a11y` describe 之外新增一个 describe，标题含 `@a11y`）：新增两条测试——(1) **触控热区**：`page.goto("/design")`（DB-free，渲 FilterPill 样本 `全部`/`市场反应`）→ `getByText("全部",{exact:true}).first()` → `boundingBox().height >= 44`（AC1 FilterPill 触控尺寸）。(2) **减动效**：新 `test.describe("减少动态效果偏好下动效即时切换 (Story 3.6) @a11y", () => { test.use({ reducedMotion: "reduce" }); ... })`——`page.goto("/design")` → 先断言 `window.matchMedia("(prefers-reduced-motion: reduce)").matches === true`（证模拟生效）→ 注入探针 `<div style="transition:color 150ms ease">` → `getComputedStyle(probe).transitionDuration` ≠ `"150ms"` 且解析为 ms 后 ≤ 1（证全局 `* !important` 规则在偏好下把任一 transition 降级为即时，同机制即降级 daily hover）。两测试均锚 `/design`（DB-free），零新 seed。
+- `_bmad-output/implementation-artifacts/deferred-work.md` -- MODIFY：追加 3-6 defer（AGUHOT logo 触控热区；减动效在真实 `/daily` transition 上的 seeded 行为验证——探针证机制、`/daily` 需 seed 故 defer；按面触控热区 e2e 全量 sweep——3.6 仅守 FilterPill 代表性密集标签，逐链接断言 defer；跨浏览器减动效/触控验证——项目 chromium-only 配置）。
+
+## Tasks & Acceptance
+
+**Execution:**
+- `apps/web/app/globals.css` -- 追加全局 `@media (prefers-reduced-motion: reduce)` 规则（canonical snippet，`* !important`） -- AC1 减动效基线（一条 CSS 规则降级 daily hover + 守未来，错失 = 偏好下动效不即时/未来无守卫）
+- `apps/web/app/components/chips.tsx` -- FilterPill `pillClass` 加 `min-h-11` -- AC1 触控热区（一处覆盖五面，密集小标签基线）
+- `apps/web/app/(public)/events/[hotEventId]/page.tsx` -- BackLink 调用方 className + 证据「原文链接」`<a>` className 各加 `min-h-11` -- AC1 触控热区（detail 返回 + 来源外链）
+- `apps/web/app/(public)/daily/page.tsx` -- 返回链接 className 加 `min-h-11` -- AC1 触控热区（daily 返回）
+- `apps/web/app/(public)/topics/[slug]/page.tsx` -- 返回链接 className 加 `min-h-11` -- AC1 触控热区（主题页返回）
+- `apps/web/app/(public)/page.tsx` -- home 空态 CTA「查看全部」className 加 `min-h-11` -- AC1 触控热区（空态返回路径）
+- `apps/web/app/(public)/favorites/page.tsx` -- 两处空态 CTA className 各加 `min-h-11` -- AC1 触控热区（空态返回路径）
+- `apps/web/app/(public)/search/page.tsx` -- 无结果 CTA「返回首页」className 加 `min-h-11` -- AC1 触控热区（无结果返回路径）
+- `apps/web/e2e/a11y.spec.ts` -- 新增 `@a11y` 触控热区测试（FilterPill `/design` ≥ 44px）+ 减动效测试（`reducedMotion:'reduce'` 探针 transition-duration 近 0） -- AC1 surface-anchored 验证；既有 seed/spec 零改动
+- `_bmad-output/implementation-artifacts/deferred-work.md` -- 追加 3-6 defer 项 -- 诚实登记 logo 触控 / seeded daily 减动效 / 按面触控 sweep / 跨浏览器
+
+**Acceptance Criteria:**
+- Given 读者在移动端点击 home 筛选 pill / topics 目录 pill / search 主题命中 pill / detail 关联 pill，When 触控该 FilterPill，Then 其渲染高度 ≥ 44px（`min-h-11`，AC1 触控热区，FilterPill `<Link>` 与 `<span>` 两形态同源 pillClass）。
+- Given 读者在移动端点击 home/favorites/search 空态 CTA 或 daily/topics 返回链接或 detail BackLink 或 detail「原文链接 ↗」，When 触控该链接，Then 其渲染高度 ≥ 44px（`min-h-11`，AC1 触控热区，8 处欠尺寸交互控件均达标）。
+- Given 读者系统启用 `prefers-reduced-motion: reduce`，When hover daily 摘要行（`transition-colors`），Then `transition-duration` 被降级为近 0（即时切换，非 150ms 淡入，AC1 减动效）；And 默认（无偏好）用户 hover 仍 150ms（不回归）。
+- Given 启用减动效偏好后有人新增 `transition`/`animation` 到任一 `(public)` 组件，When 该偏好用户浏览，Then 新动效被 media query 自动降级为即时（`* !important` 全局覆盖，AC1 减动效守卫）。
+- When 执行 `pnpm -r typecheck` / `pnpm -r lint`，Then 通过；And `pnpm --filter web build`（无 `DATABASE_URL`）成功（纯 className + CSS media query，SSR 安全）；And `pnpm --filter web e2e:a11y` 全过（既有 7 条 + 新触控热区 + 新减动效）；And `pnpm --filter web e2e`（base 闸门 home/navigation/design/feed/daily/themes/search/favorites/detail）不回归（`min-h-11` + media query 不破坏既有断言；若有 boundingBox/位置类断言被扰动则跟随调整 selector，断言意图不变）。
+
+## Spec Change Log
+
+<!-- 空，直至首次 bad_spec 回路。 -->
+
+## Review Triage Log
+
+<!-- 空，直至首次复核。 -->
+
+## Design Notes
+
+**为何「一条全局 `@media (prefers-reduced-motion: reduce)` 规则」而非逐组件处理：** `(public)` 仅 daily 一处 CSS transition（非必要 hover），但减动效 AC 是跨面不变量。候选：(1) 仅移除 daily `transition-colors`——丢默认用户的合理 hover，且未来新增动效无守卫；(2) 逐组件加 `motion-reduce:transition-none`——波及多面、大 diff、漏改即破；(3) **一条全局 media query（canonical a11y snippet，`* !important`）**——CSS 优于 JS（ladder rung 3），一行覆盖 daily hover + 一切未来 transition/animation，仅在偏好下生效（默认零回归）。`!important` 是必须的：Tailwind `transition-colors` 编译为 `transition-duration:150ms`（specificity 高于普通声明），须 `!important` 覆盖；内联样式同理。沿用 3.5「一条全局 CSS 规则铺满全部面」模式（焦点规则 → 减动效规则），一致性。canonical snippet（`animation-duration:0.01ms`/`iteration-count:1`/`transition-duration:0.01ms`/`scroll-behavior:auto`）是 a11y 社区公认形态，复核可识别。
+
+**为何 `min-h-11` 逐元素加而非全局 `a { min-height:44px }`：** 触控热区仅适用于**交互控件**（返回链接 / CTA / 筛选 pill / 来源外链），不适用于正文内联链接 / logo / 布局。全局 `a {min-height}` 会破坏 AGUHOT logo（header `h-16` 内 `text-lg`）、未来正文内联链接、布局。故逐元素识别 8 处欠尺寸交互控件、各加 `min-h-11`（44px，既有约定：nav/SearchBox/FollowButton 同 token）。8 处分属 3 样式族（FilterPill `rounded-full px-3 py-1`、返回链接 `gap-1 text-sm text-ink-secondary`、CTA `rounded-full bg-brand px-3 py-1`）+ 证据链——不抽公共 Primitive（每处仅加一 token，抽组件 = 过抽象，违背 ponytail）。`min-h-11` 在 `inline-flex items-center` 元素上生效（flex 容器适用 min-height），文本垂直居中，44px 高的 pill/链接符合触控基线。
+
+**为何减动效 e2e 用探针而非测真实 `/daily` transition：** `/daily` 是 `(public)` 唯一含 CSS transition 的面，但 `@a11y` 套件在 base `e2e` 闸门跑（无 `seed-daily` 前置），`/daily` 摘要行依赖 digest 数据，空态无 transition li 可断言。探针在 `/design`（DB-free）注入 `<div style="transition:color 150ms ease">`，断言 `getComputedStyle.transitionDuration` 被全局 `* !important` 规则降级为近 0——证「media query 在偏好下把任一 transition 降级为即时」的机制，即降级 daily hover 的同一机制。surface-anchored（证 CSS 行为）+ DB-free（避 seed 依赖）+ 诚实（不伪造 `/daily` seeded 验证；seeded 行为 defer）。
+
+## Verification
+
+**Commands:**
+- `pnpm -r typecheck` -- expected: 全 workspace 通过（globals.css CSS only、chips.tsx + 7 page className 一 token、a11y.spec 新增 + tsconfig.e2e）
+- `pnpm -r lint` -- expected: 无错误
+- `pnpm --filter web build` -- expected: 无 `DATABASE_URL` 下构建成功（纯 className + CSS media query，零路由动态性变化）
+- `pnpm --filter web e2e:a11y` -- expected: `@a11y` 全过（既有 7 条 + 触控热区 FilterPill ≥ 44px + 减动效探针 transition-duration ≤ 1ms + matchMedia 偏好生效）
+- `pnpm --filter web e2e` -- expected: base 闸门不回归（home/navigation/design/feed/daily/themes/search/favorites/detail；`min-h-11` 改变链接高度但不断言像素位置，若某 spec 断言 boundingBox/位置被扰动则跟随调整 selector，断言意图不变）
+
+**Manual checks (if no CLI):**
+- `/design`：FilterPill「全部」/「市场反应」样本高度 ≥ 44px（移动端触控尺寸）。
+- 移动端视口下 home 筛选 pill 行、daily/topics 返回链接、favorites/search 空态 CTA、detail BackLink 与「原文链接 ↗」：各链接高度 ≥ 44px，点击命中稳定。
+- 系统启用「减少动态效果」后 hover daily 摘要行：背景即时切换，无 150ms 淡入；默认偏好下 hover 仍 150ms（不回归）。

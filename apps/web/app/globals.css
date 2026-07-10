@@ -110,3 +110,42 @@
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
+
+/* Story 3.6 — reduced-motion baseline: one global media query.
+ *
+ * Before 3.6 there was no `@media (prefers-reduced-motion: reduce)` rule
+ * anywhere in `(public)`. The only CSS transition on the public surfaces is
+ * daily/page.tsx's `transition-colors hover:bg-surface-muted` (a non-essential
+ * 150ms hover) — but with no reduced-motion guard, a reader who enables the OS
+ * preference still gets the 150ms fade, and any FUTURE transition/animation
+ * added to a public component would likewise be unguarded.
+ *
+ * This single rule fills that gap for EVERY element across all six public
+ * surfaces + every shared component, with zero per-component `motion-reduce:`
+ * classes. It is the canonical a11y community snippet (the same form used by
+ * the Prefers-Reduced-Motion spec authors and frameworks like Bootstrap/Tailwind
+ * docs): animation/transition durations collapse to 0.01ms, animations run at
+ * most once, and scroll-behavior is forced to auto. `!important` is REQUIRED
+ * here — Tailwind's `transition-colors` compiles to `transition-duration:150ms`
+ * (specificity higher than a plain declaration), and inline styles share the
+ * same fate; `!important` is the only way a media-query rule overrides both.
+ * Sibling to the 3.5 `:focus-visible` rule — same "one global CSS rule covers
+ * every surface" pattern (focus rule → reduced-motion rule), consistency.
+ *
+ * The rule is INSIDE the media query, so a reader WITHOUT the preference sees
+ * zero behavior change (daily hover stays 150ms, byte-for-byte). The
+ * `scroll-behavior:auto` line is defensive — BackLink / ListContextMemory
+ * already use `behavior:"instant"` for scroll restore; this locks the invariant
+ * against a future `scroll-behavior:smooth` addition. Verified by the
+ * `@a11y` reduced-motion probe test in a11y.spec.ts (Story 3.6).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

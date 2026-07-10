@@ -167,7 +167,7 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
               {hasFilter ? (
                 <Link
                   href="/"
-                  className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+                  className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
                 >
                   查看全部
                 </Link>
