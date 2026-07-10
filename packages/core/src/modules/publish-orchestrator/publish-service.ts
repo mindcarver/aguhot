@@ -11,6 +11,9 @@
  *     hot_event_evidence / evidence_sources directly).
  *   - published_hot_event_reactions (Story 2.1): the projected latest
  *     MarketReactionSnapshot for the detail page's market-reaction block.
+ *   - published_hot_event_associations (Story 2.2): the projected latest
+ *     EventAssociationSet for the detail page's association block + the feed's
+ *     association-dimension filter.
  *
  * refreshPublishedReadModel is called inside decideReview's transaction (and by
  * the market-reaction worker after it appends a snapshot):
@@ -18,8 +21,10 @@
  *     ExplanationVersion → upsert, or deleteMany if none) + rewrite evidence
  *     timeline (deleteMany then re-insert from member records, link_status
  *     derived from url) + project market reaction (latest MarketReactionSnapshot
- *     → upsert, or deleteMany if none). Atomic with the status transition.
- *   - takedown: delete all four tables for the hotEventId (row-gone =
+ *     → upsert, or deleteMany if none) + project associations (latest
+ *     EventAssociationSet → upsert, or deleteMany if none). Atomic with the
+ *     status transition.
+ *   - takedown: delete all five tables for the hotEventId (row-gone =
  *     public-invisible). Idempotent.
  *   - none: no-op.
  *
@@ -27,6 +32,8 @@
  *   - listPublishedHotEvents (Story 1.7): the feed list.
  *   - getPublishedHotEventDetail (Story 1.8): the detail assembly. Returns null
  *     when no published_hot_events row exists (unpublished id → notFound()).
+ *   - listPublishedAssociations (Story 2.2): the hotEventId→items map the feed
+ *     uses for the association-dimension JS filter.
  *
  * This module never writes hot_events, review_decisions, publication_decisions,
  * explanation_versions, market_reaction_snapshots, evidence_records, or
@@ -35,13 +42,16 @@
  * inside the publish projection, then writes only the published_* tables.
  */
 
-import type { PrismaClient } from "../../../generated/client.js";
+import type { Prisma, PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
 import type { PublishAction } from "../review-workflow/types.js";
 import { EvidenceLinkStatus } from "./types.js";
 import type {
+  AssociationItem,
   GetPublishedHotEventDetailOptions,
+  ListPublishedAssociationsOptions,
   ListPublishedHotEventsOptions,
+  PublishedAssociationRow,
   PublishedEvidenceRow,
   PublishedHotEventDetail,
   PublishedHotEventSummary,
@@ -80,11 +90,12 @@ export async function refreshPublishedReadModel(
   if (action === "none") return;
 
   if (action === "takedown") {
-    // Idempotent delete across all four published_* tables. Order does not
+    // Idempotent delete across all five published_* tables. Order does not
     // matter (no inter-table FKs among the published_* models), but we delete
-    // the evidence + explanation + reaction rows alongside the summary row so
-    // "row exists = currently published" holds for all four read models
-    // uniformly. Story 2.1 added published_hot_event_reactions to this batch.
+    // the evidence + explanation + reaction + association rows alongside the
+    // summary row so "row exists = currently published" holds for all five read
+    // models uniformly. Story 2.1 added published_hot_event_reactions; Story 2.2
+    // added published_hot_event_associations to this batch.
     await prisma.publishedHotEventEvidence.deleteMany({
       where: { hotEventId },
     });
@@ -92,6 +103,9 @@ export async function refreshPublishedReadModel(
       where: { hotEventId },
     });
     await prisma.publishedHotEventReaction.deleteMany({
+      where: { hotEventId },
+    });
+    await prisma.publishedHotEventAssociation.deleteMany({
       where: { hotEventId },
     });
     await prisma.publishedHotEvent.deleteMany({
@@ -180,6 +194,9 @@ export async function refreshPublishedReadModel(
 
   // 4. Market-reaction projection (published_hot_event_reactions, Story 2.1).
   await projectMarketReaction(prisma, traceId, hotEventId);
+
+  // 5. Association projection (published_hot_event_associations, Story 2.2).
+  await projectAssociations(prisma, traceId, hotEventId);
 }
 
 /**
@@ -393,6 +410,64 @@ async function projectMarketReaction(
 }
 
 /**
+ * Project the latest EventAssociationSet into published_hot_event_associations
+ * (Story 2.2). If a set exists, upsert the row (1:1 per hotEventId, items as
+ * Json). If no set exists (no adapter in V1 prod / generation has not run),
+ * deleteMany that hotEventId's association row so the detail page renders the
+ * honest degraded state (associations: null) rather than a stale prior
+ * projection. Called inside the publish transaction. Mirrors
+ * projectMarketReaction / projectExplanation: read latest → upsert or deleteMany.
+ */
+async function projectAssociations(
+  prisma: PrismaClient,
+  traceId: string,
+  hotEventId: string,
+): Promise<void> {
+  const latest = await prisma.eventAssociationSet.findFirst({
+    where: { hotEventId },
+    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
+    // embed a monotonic timestamp) — same convention as projectExplanation /
+    // projectMarketReaction.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      items: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    // No set yet: clear any stale projection so the detail page shows the
+    // degraded state (no fabricated associations).
+    await prisma.publishedHotEventAssociation.deleteMany({
+      where: { hotEventId },
+    });
+    return;
+  }
+
+  await prisma.publishedHotEventAssociation.upsert({
+    where: { hotEventId },
+    create: {
+      hotEventId,
+      // The items Json column already holds the typed array from the source
+      // EventAssociationSet row; re-project it verbatim. Cast through
+      // InputJsonValue (Prisma's Json envelope does not carry the element type
+      // across the read→write boundary).
+      items: latest.items as unknown as Prisma.InputJsonValue,
+      associationSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      items: latest.items as unknown as Prisma.InputJsonValue,
+      associationSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
  * List all currently-published hot events for the public feed — Story 1.7.
  *
  * This is the first public consumer of the published_hot_events read model (AD-3:
@@ -439,15 +514,17 @@ export async function listPublishedHotEvents(
  * public reads only published_* read models). It assembles the summary row
  * (published_hot_events), the explanation block (published_hot_event_explanations,
  * nullable), the market-reaction block (published_hot_event_reactions, nullable,
- * Story 2.1), and the evidence timeline (published_hot_event_evidence, ordered
+ * Story 2.1), the association block (published_hot_event_associations, nullable,
+ * Story 2.2), and the evidence timeline (published_hot_event_evidence, ordered
  * by position). It returns null when the summary row does not exist — the detail
  * page then calls notFound() (404) so unpublished ids do not leak (AD-8: no
  * candidate/rejected/taken_down title or content surfaces).
  *
  * This query only SELECTs published_hot_events + published_hot_event_explanations
- * + published_hot_event_reactions + published_hot_event_evidence. It NEVER reads
- * hot_events, evidence_records, evidence_sources, hot_event_evidence,
- * explanation_versions, market_reaction_snapshots, review_decisions, or
+ * + published_hot_event_reactions + published_hot_event_associations +
+ * published_hot_event_evidence. It NEVER reads hot_events, evidence_records,
+ * evidence_sources, hot_event_evidence, explanation_versions,
+ * market_reaction_snapshots, event_association_sets, review_decisions, or
  * publication_decisions — the read models are the sole public surface (AD-3).
  * Row existence = currently published; there is no status column and no WHERE
  * filter to forget.
@@ -521,6 +598,18 @@ export async function getPublishedHotEventDetail(
     },
   });
 
+  // Association block (nullable, Story 2.2). Absent when generateAssociations
+  // has not produced a set yet (V1 prod: no worker, no adapter) → the detail
+  // page renders the honest degraded state.
+  const associationRow = await prisma.publishedHotEventAssociation.findUnique({
+    where: { hotEventId },
+    select: {
+      items: true,
+      associationSource: true,
+      generatedAt: true,
+    },
+  });
+
   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
     id: r.id,
     hotEventId: r.hotEventId,
@@ -566,6 +655,49 @@ export async function getPublishedHotEventDetail(
             source: reactionRow.reactionSource,
             generatedAt: reactionRow.generatedAt,
           },
+    associations:
+      associationRow === null
+        ? null
+        : {
+            items: associationRow.items as unknown as AssociationItem[],
+            source: associationRow.associationSource,
+            generatedAt: associationRow.generatedAt,
+          },
     evidence,
   };
+}
+
+/**
+ * List all currently-published associations — the hotEventId→items map the feed
+ * uses for the association-dimension JS filter (Story 2.2).
+ *
+ * The feed's `?concept=|?industry=|?stock=` URL dimensions filter the published
+ * event list in JS (mirroring the 1.7 `filterByWindow` pattern).
+ * `listPublishedHotEvents` stays filter-free (no signature change, no
+ * consumerless parameter); the web layer joins this association map to the
+ * event list in memory and applies the dimension filter. V1 published volume is
+ * tiny, so a second read + an in-memory join is the ponytail choice over a SQL
+ * join or per-dimension index (deferred as a scale ceiling).
+ *
+ * Returns `{ hotEventId, items }` for every published_hot_event_associations
+ * row. It only SELECTs published_hot_event_associations — never
+ * event_association_sets / hot_events / evidence_* (AD-3). Row existence =
+ * currently published associations.
+ */
+export async function listPublishedAssociations(
+  options: ListPublishedAssociationsOptions,
+): Promise<PublishedAssociationRow[]> {
+  const { prisma } = options;
+
+  const rows = await prisma.publishedHotEventAssociation.findMany({
+    select: {
+      hotEventId: true,
+      items: true,
+    },
+  });
+
+  return rows.map((r) => ({
+    hotEventId: r.hotEventId,
+    items: r.items as unknown as AssociationItem[],
+  }));
 }

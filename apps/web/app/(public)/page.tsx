@@ -1,10 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { getPrisma, listPublishedHotEvents, newTraceId } from "@aguhot/core";
+import {
+  getPrisma,
+  listPublishedAssociations,
+  listPublishedHotEvents,
+  newTraceId,
+  type AssociationItem,
+} from "@aguhot/core";
 
 import { EventCard } from "./_components/event-card";
-import { FeedFilters, parseFeedWindow, type FeedWindow } from "./_components/feed-filters";
+import {
+  FeedFilters,
+  parseAssociationFilter,
+  parseFeedWindow,
+  type FeedWindow,
+} from "./_components/feed-filters";
 
 export const metadata: Metadata = {
   title: "首页",
@@ -47,21 +58,59 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 interface PageProps {
-  searchParams: Promise<{ window?: string }>;
+  searchParams: Promise<{
+    window?: string;
+    concept?: string;
+    industry?: string;
+    stock?: string;
+  }>;
 }
 
 export default async function PublicHomePage({ searchParams }: PageProps) {
   const params = await searchParams;
   const window = parseFeedWindow(params.window);
+  // Story 2.2: the association-dimension filter. At most one of concept/
+  // industry/stock is honored (V1 single-dimension, per spec Never: no
+  // explicit "clear all" control for multi-dimension). parseAssociationFilter
+  // resolves to {kind,label} | null.
+  const association = parseAssociationFilter(params);
 
   // Request-time DB read. getPrisma() throws loudly if DATABASE_URL is missing —
   // that is intentional (DB is core infra, not graceful-degradation territory).
   const prisma = getPrisma();
-  const all = await listPublishedHotEvents({ prisma, traceId: newTraceId() });
+  const traceId = newTraceId();
+  const all = await listPublishedHotEvents({ prisma, traceId });
+
+  // Story 2.2: when an association dimension is active, build a hotEventId→items
+  // map from listPublishedAssociations and filter the published list in JS
+  // (mirroring the 1.7 filterByWindow pattern). listPublishedHotEvents stays
+  // filter-free (no signature change). V1 published volume is tiny, so a second
+  // read + in-memory join is the ponytail choice over a SQL join (deferred as a
+  // scale ceiling).
+  let associationByEvent: Map<string, AssociationItem[]> | null = null;
+  if (association !== null) {
+    const rows = await listPublishedAssociations({ prisma, traceId });
+    associationByEvent = new Map(rows.map((r) => [r.hotEventId, r.items]));
+  }
 
   const totalExists = all.length > 0;
   const now = new Date();
-  const visible = totalExists ? filterByWindow(all, window, now) : [];
+  // Apply the window filter, then the association filter (AND). The association
+  // filter keeps an event iff its projected items include one matching the
+  // active dimension's {kind, label}. Events with no projection row are
+  // excluded (no matching association).
+  const windowed = totalExists ? filterByWindow(all, window, now) : [];
+  const visible =
+    association === null
+      ? windowed
+      : windowed.filter((e) => {
+          const items = associationByEvent?.get(e.hotEventId);
+          if (items === undefined) return false;
+          return items.some(
+            (it) => it.kind === association.kind && it.label === association.label,
+          );
+        });
+  const hasFilter = window !== "all" || association !== null;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -73,7 +122,7 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
       {totalExists ? (
         <>
           <section className="mt-8">
-            <FeedFilters window={window} />
+            <FeedFilters window={window} association={association} />
           </section>
 
           {visible.length > 0 ? (
@@ -93,9 +142,9 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
           ) : (
             <div className="mt-12 space-y-3">
               <p className="text-ink-secondary">当前筛选条件下无热点事件。</p>
-              {window !== "all" ? (
+              {hasFilter ? (
                 <Link
-                  href="?window=all"
+                  href="/"
                   className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
                 >
                   查看全部

@@ -1,20 +1,25 @@
 /**
  * publish-orchestrator domain types: the read-model refresh options (existing,
- * Story 1.6) plus the public read query types (Story 1.7 feed, Story 1.8 detail).
+ * Story 1.6) plus the public read query types (Story 1.7 feed, Story 1.8
+ * detail, Story 2.2 association feed-filter).
  *
  * This module is AD-3's single write-owner of published_hot_events (Story 1.6),
  * published_hot_event_explanations + published_hot_event_evidence (Story 1.8),
- * and the single read-owner for the public read path: listPublishedHotEvents
- * (Story 1.7 feed) and getPublishedHotEventDetail (Story 1.8 detail) are the
- * only public consumers of these read models. Row existence = currently
- * published (no status column, no WHERE to forget).
+ * published_hot_event_reactions (Story 2.1), and
+ * published_hot_event_associations (Story 2.2); and the single read-owner for
+ * the public read path: listPublishedHotEvents (Story 1.7 feed),
+ * getPublishedHotEventDetail (Story 1.8 detail), and listPublishedAssociations
+ * (Story 2.2 feed filter) are the only public consumers of these read models.
+ * Row existence = currently published (no status column, no WHERE to forget).
  *
- * It never writes hot_events, review_decisions, publication_decisions, or any
- * evidence/source tables. The detail query is a pure read — it only SELECTs
+ * It never writes hot_events, review_decisions, publication_decisions,
+ * explanation_versions, market_reaction_snapshots, event_association_sets, or
+ * any evidence/source tables. The detail query is a pure read — it only SELECTs
  * published_hot_events + published_hot_event_explanations +
+ * published_hot_event_reactions + published_hot_event_associations +
  * published_hot_event_evidence (never hot_events / evidence_records /
  * review_decisions / publication_decisions / hot_event_evidence /
- * explanation_versions).
+ * explanation_versions / market_reaction_snapshots / event_association_sets).
  */
 
 import type { PrismaClient } from "../../../generated/client.js";
@@ -116,6 +121,10 @@ export interface GetPublishedHotEventDetailOptions {
  *     generatedAt, or null when the market-reaction worker has not produced a
  *     snapshot yet (V1 prod: adapter resolves to none → honest degraded state,
  *     never a fabricated reaction). Story 2.1.
+ *   - associations: the concept/industry/stock items + provenance + generatedAt,
+ *     or null when generateAssociations has not produced a set yet (V1 prod: no
+ *     worker, no adapter → honest degraded state, never fabricated items). Story
+ *     2.2.
  *   - evidence: the chronological timeline rows (may be empty if projection
  *     happened before any evidence was linked; rare but honest).
  */
@@ -147,6 +156,12 @@ export interface PublishedHotEventDetail {
    * projection). The detail page renders the honest degraded state in that case.
    */
   reaction: PublishedHotEventReaction | null;
+  /**
+   * The association block (Story 2.2). Null when no set was projected (no
+   * worker / adapter unavailable in V1 prod / takedown cleared the projection).
+   * The detail page renders the honest degraded state in that case.
+   */
+  associations: PublishedHotEventAssociation | null;
   evidence: PublishedEvidenceRow[];
 }
 
@@ -168,4 +183,69 @@ export interface PublishedHotEventReaction {
   tradingSession: Date;
   source: string;
   generatedAt: Date;
+}
+
+// --- Story 2.2: public association read types ---------------------------------
+
+/**
+ * One association item projected for public read — mirrors the
+ * AssociationItem the theme-linking module stores in the Json `items` column.
+ * The detail page groups items by `kind` (concept/industry/stock) and renders
+ * each as a FilterPill link to `/?<kind>=<label>` (a filtered feed view). The
+ * non-empty `mappingBasis` is AC2's explicit-mapping-basis guarantee, surfaced
+ * on the detail page as the "关联依据：系统映射" provenance line.
+ *
+ *   - kind: concept / industry / stock. Drives the detail grouping + the feed
+ *     filter dimension.
+ *   - label: the entity identity (concept name / industry name / stock name).
+ *     Descriptive, never advisory.
+ *   - mappingBasis: NON-EMPTY provenance (e.g. "knowledge_base:v1"). AC2.
+ */
+export interface AssociationItem {
+  kind: "concept" | "industry" | "stock";
+  label: string;
+  mappingBasis: string;
+}
+
+/**
+ * The projected public association block for one published hot event
+ * (Story 2.2). Mirrors published_hot_event_associations. `items` is the Json
+ * column value typed as AssociationItem[].
+ *
+ * Row existence = currently published associations (no status column). Absent
+ * when generateAssociations has not produced a set (V1 prod: no worker, no
+ * adapter → never produced) — the detail page shows the "暂无已确认的概念 /
+ * 行业 / 个股关联。" degraded state (AC3).
+ */
+export interface PublishedHotEventAssociation {
+  items: AssociationItem[];
+  source: string;
+  generatedAt: Date;
+}
+
+/**
+ * One row of listPublishedAssociations — the hotEventId→items projection the
+ * feed uses for the association-dimension JS filter (Story 2.2). The web layer
+ * builds a hotEventId→items map from this and filters the published event list
+ * in memory (mirroring the 1.7 filterByWindow pattern; listPublishedHotEvents
+ * stays filter-free).
+ */
+export interface PublishedAssociationRow {
+  hotEventId: string;
+  items: AssociationItem[];
+}
+
+/**
+ * Options for listPublishedAssociations. `{ prisma, traceId }` mirrors the
+ * established query pattern. There is deliberately NO filter parameter: the
+ * query returns all published association rows and the web layer applies the
+ * concept/industry/stock dimension filter in JS (same design as
+ * listPublishedHotEvents — V1 scale is tiny, filtering is a UI concern, and a
+ * SQL-level filter would split the "no associations at all" vs "dimension has
+ * no matches" states across two reads). ponytail: no pre-embedded consumerless
+ * filter parameter.
+ */
+export interface ListPublishedAssociationsOptions {
+  prisma: PrismaClient;
+  traceId: string;
 }

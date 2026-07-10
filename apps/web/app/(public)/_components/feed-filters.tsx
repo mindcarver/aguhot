@@ -18,6 +18,59 @@ import { FilterPill } from "@/components/chips";
 
 export type FeedWindow = "today" | "7d" | "30d" | "all";
 
+// --- Story 2.2: association-dimension filter ---------------------------------
+
+/**
+ * The three association dimensions the feed honors via URL searchParams
+ * (`?concept=|?industry=|?stock=`). Each links to a filtered feed view — the
+ * V1 click-through destination for a detail-page association item (AC1).
+ */
+export const ASSOCIATION_KINDS = ["concept", "industry", "stock"] as const;
+
+export type AssociationFilterKind = (typeof ASSOCIATION_KINDS)[number];
+
+/**
+ * A resolved association-dimension filter: {kind, label}. At most one dimension
+ * is active at a time (V1 single-dimension, per spec Never: no explicit
+ * "clear all" control for multi-dimension). Null when no association dimension
+ * is in the URL (zero-regression with 1.7 behavior).
+ */
+export interface AssociationFilter {
+  kind: AssociationFilterKind;
+  label: string;
+}
+
+/**
+ * The Chinese label for each association kind, used in the active-filter pill
+ * and the clear-link href.
+ */
+const ASSOCIATION_KIND_LABEL: Record<AssociationFilterKind, string> = {
+  concept: "概念",
+  industry: "行业",
+  stock: "个股",
+};
+
+/**
+ * Parse the association-dimension searchParams into a single active filter (or
+ * null). V1 honors exactly one dimension (the first present, in ASSOCIATION_KINDS
+ * order); a multi-dimension URL collapses to one. An empty label value is
+ * ignored (treated as no filter). Kept here so the page and the filter component
+ * share one authority on valid association dimensions.
+ */
+export function parseAssociationFilter(params: {
+  concept?: string;
+  industry?: string;
+  stock?: string;
+}): AssociationFilter | null {
+  for (const kind of ASSOCIATION_KINDS) {
+    const raw = params[kind];
+    if (raw !== undefined && raw.trim() !== "") {
+      return { kind, label: raw };
+    }
+  }
+  return null;
+}
+
 /**
  * The authoritative window list + labels. Order is display order. "all" is last
  * so the clear control sits at the end of the row (and is the default).
@@ -43,9 +96,23 @@ export function parseFeedWindow(raw: string | undefined): FeedWindow {
   return DEFAULT_WINDOW;
 }
 
-export function FeedFilters({ window }: { window: FeedWindow }) {
+/**
+ * Build the href that clears the association dimension while preserving the
+ * current window. Used by the active association pill (clear control).
+ */
+function buildClearAssociationHref(window: FeedWindow): string {
+  return window === "all" ? "/?window=all" : `/?window=${window}`;
+}
+
+export function FeedFilters({
+  window,
+  association = null,
+}: {
+  window: FeedWindow;
+  association?: AssociationFilter | null;
+}) {
   return (
-    <nav aria-label="时间窗口筛选" className="flex flex-wrap items-center gap-2">
+    <nav aria-label="筛选" className="flex flex-wrap items-center gap-2">
       {FEED_WINDOWS.map((w) => (
         <FilterPill
           key={w.value}
@@ -55,6 +122,19 @@ export function FeedFilters({ window }: { window: FeedWindow }) {
           {w.label}
         </FilterPill>
       ))}
+      {/* Story 2.2: the active association dimension renders as a clearable
+          FilterPill (active state). Its href clears the association dimension
+          while preserving the current window (return to the window-filtered
+          feed, no reading-context loss — UX-DR12). Only one association
+          dimension is active at a time in V1. */}
+      {association !== null ? (
+        <FilterPill
+          active
+          href={buildClearAssociationHref(window)}
+        >
+          {ASSOCIATION_KIND_LABEL[association.kind]}：{association.label}
+        </FilterPill>
+      ) : null}
     </nav>
   );
 }

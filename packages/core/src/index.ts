@@ -124,11 +124,15 @@ export type {
 
 // publish-orchestrator module (Story 1.6 — the published_hot_events read-model owner;
 // Story 1.7 — listPublishedHotEvents public read query, first consumer of the read model;
-// Story 1.8 — getPublishedHotEventDetail public detail read + explanation/evidence projection).
+// Story 1.8 — getPublishedHotEventDetail public detail read + explanation/evidence projection;
+// Story 2.1 — published_hot_event_reactions projection + detail.reaction field;
+// Story 2.2 — published_hot_event_associations projection + detail.associations field +
+// listPublishedAssociations feed-filter query).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
   getPublishedHotEventDetail,
+  listPublishedAssociations,
 } from "./modules/publish-orchestrator/publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
 export type {
@@ -139,6 +143,11 @@ export type {
   PublishedEvidenceRow,
   EvidenceLinkStatus,
   EvidenceLinkStatusType,
+  PublishedHotEventReaction,
+  AssociationItem,
+  PublishedHotEventAssociation,
+  PublishedAssociationRow,
+  ListPublishedAssociationsOptions,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
@@ -187,3 +196,27 @@ export type {
   GetLatestMarketReactionOptions,
   MarketReactionSnapshotRecord,
 } from "./modules/market-reaction/index.js";
+
+// theme-linking module (Story 2.2 — AssociationAdapter port AD-7 +
+// StubAssociationAdapter test-only + generateAssociations append-only AD-2 +
+// normalizeItems pure derivation with AC2 mappingBasis enforcement; V1 has NO
+// worker — epic lists no association-generation job category — so prod has no
+// trigger and degrades honestly, stub is verify/e2e-only).
+export {
+  generateAssociations,
+  getLatestAssociationSet,
+  normalizeItems,
+  StubAssociationAdapter,
+  STUB_CONCEPT_LABEL,
+} from "./modules/theme-linking/index.js";
+export { AssociationKind, AssociationSource } from "./modules/theme-linking/index.js";
+export type {
+  AssociationKind as AssociationKindType,
+  AssociationSource as AssociationSourceType,
+  AssociationItem as ThemeLinkingAssociationItem,
+  AssociationAdapter,
+  GenerateAssociationsOptions,
+  GenerateAssociationsResult,
+  GetLatestAssociationSetOptions,
+  AssociationSetRecord,
+} from "./modules/theme-linking/index.js";

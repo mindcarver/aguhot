@@ -2,8 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { AiLabel, ReactionChip, TagChip } from "@/components/chips";
-import { getPrisma, getPublishedHotEventDetail, newTraceId } from "@aguhot/core";
+import { AiLabel, FilterPill, ReactionChip, TagChip } from "@/components/chips";
+import {
+  getPrisma,
+  getPublishedHotEventDetail,
+  newTraceId,
+  type AssociationItem,
+} from "@aguhot/core";
 
 export const metadata: Metadata = {
   title: "热点事件详情",
@@ -96,6 +101,17 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
   // Story 2.1: the market-reaction block. Null when the worker has not produced
   // a snapshot (V1 prod: adapter resolves to none) → honest degraded state (AC3).
   const reaction = detail.reaction;
+
+  // Story 2.2: the association block. Null/empty when generateAssociations has
+  // not produced a set (V1 prod: no worker, no adapter) → honest degraded state
+  // (AC3). When present, group items by kind (concept/industry/stock) and render
+  // each as a FilterPill link to the filtered feed (AC1 non-dead-link).
+  const associations = detail.associations;
+  const associationItems = associations?.items ?? [];
+  const conceptItems = associationItems.filter((i) => i.kind === "concept");
+  const industryItems = associationItems.filter((i) => i.kind === "industry");
+  const stockItems = associationItems.filter((i) => i.kind === "stock");
+  const hasAssociations = associationItems.length > 0;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -210,6 +226,45 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
         )}
       </section>
 
+      {/* Associations (Story 2.2, AC1/AC2/AC3). Concept/industry/stock items
+          grouped by kind, each rendered as a clickable FilterPill link to the
+          filtered feed (`/?<kind>=<label>` — the V1 click-through destination).
+          Provenance line "关联依据：系统映射" makes the explicit mapping basis
+          observable (AC2). Honest degraded line when no set was projected (V1
+          prod: no worker, no adapter → AC3, never fabricated items). NFR: labels
+          are entity-identity only, never advisory. */}
+      <section className="mt-6 space-y-3 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+          关联
+        </h2>
+        {hasAssociations ? (
+          <div className="space-y-3">
+            {conceptItems.length > 0 ? (
+              <AssociationGroup
+                title="概念"
+                items={conceptItems}
+                kind="concept"
+              />
+            ) : null}
+            {industryItems.length > 0 ? (
+              <AssociationGroup
+                title="行业"
+                items={industryItems}
+                kind="industry"
+              />
+            ) : null}
+            {stockItems.length > 0 ? (
+              <AssociationGroup title="个股" items={stockItems} kind="stock" />
+            ) : null}
+            <p className="text-xs text-ink-tertiary">关联依据：系统映射</p>
+          </div>
+        ) : (
+          <p className="text-base text-ink-tertiary">
+            暂无已确认的概念 / 行业 / 个股关联。
+          </p>
+        )}
+      </section>
+
       {/* Evidence timeline (AC2). One row per source, chronological. */}
       <section className="mt-10 space-y-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
@@ -260,6 +315,43 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
           <p className="text-sm text-ink-tertiary">暂无证据行。</p>
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * One association group (concept / industry / stock). Renders the group title
+ * + the items as FilterPill links to the filtered feed. Each link's href is
+ * `/?<kind>=<label>` (URL-encoded) — the V1 click-through destination (epic:
+ * every associated item has a clear click-through destination; dead links are
+ * defects). The feed honors the dimension via a JS filter (Story 2.2 page.tsx),
+ * so the link is a real filter, not a dead link (AC1).
+ *
+ * Only groups with >=1 confirmed item are rendered (AC3: a missing dimension is
+ * omitted, never fabricated).
+ */
+function AssociationGroup({
+  title,
+  items,
+  kind,
+}: {
+  title: string;
+  items: AssociationItem[];
+  kind: "concept" | "industry" | "stock";
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-semibold text-ink-secondary">{title}</p>
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <FilterPill
+            key={`${kind}:${item.label}`}
+            href={`/?${kind}=${encodeURIComponent(item.label)}`}
+          >
+            {item.label}
+          </FilterPill>
+        ))}
+      </div>
     </div>
   );
 }

@@ -146,6 +146,14 @@ model HotEvent {
   // They do NOT change the respective modules' write-ownership (AD-2).
   marketReactionSnapshots MarketReactionSnapshot[]
   publishedReaction       PublishedHotEventReaction?
+  // Read-only reverse relations to the association read models (Story 2.2).
+  // The theme-linking module owns event_association_sets (AD-2 append-only write
+  // table); publish-orchestrator owns published_hot_event_associations (AD-3
+  // public projection). These navigations let publish-orchestrator read the
+  // latest set at projection time. They do NOT change the respective modules'
+  // write-ownership (AD-2).
+  eventAssociationSets EventAssociationSet[]
+  publishedAssociation PublishedHotEventAssociation?
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -456,4 +464,58 @@ model PublishedHotEventReaction {
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
   @@map("published_hot_event_reactions")
+}
+
+// The append-only write table for concept/industry/stock associations (AD-2,
+// Story 2.2). The theme-linking module is the sole writer. One row per
+// generation; every successful generateAssociations call APPENDS a new row
+// (AD-5: never update or delete prior rows — the full association-set history
+// is the version series). publish-orchestrator projects the LATEST row (createdAt
+// desc, id desc tiebreaker) into published_hot_event_associations.
+//
+// `items` is a Json column holding AssociationItem[] ({kind,label,mappingBasis}).
+// These are display-only editorial annotations: the detail page reads the whole
+// array to render concept/industry/stock groups, and the feed applies
+// association-dimension filters via an in-memory join (listPublishedAssociations
+// → JS filter), NOT via per-item SQL queries. A normalized child table would be
+// over-engineering for a display-only, variable-cardinality set that is always
+// read whole (ponytail: no child table for a consumerless per-item SQL query).
+model EventAssociationSet {
+  id         String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId String   @map("hot_event_id")
+  items      Json     // AssociationItem[] ({kind,label,mappingBasis}); display-only
+  source     String // AssociationSource union value ("template"; future knowledge-base/provider id)
+  traceId    String?  @map("trace_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("event_association_sets")
+}
+
+// The public read model for a published hot-event's concept/industry/stock
+// associations (AD-3, Story 2.2). The publish-orchestrator module is the sole
+// writer. Row existence = currently published associations: publish/republish
+// upserts the row (projecting the latest EventAssociationSet), takedown deletes
+// it. There is intentionally NO status column — row existence is the visibility
+// contract (same pattern as the other published_* read models). FK onDelete:
+// Cascade so a HotEvent deletion cleans up the projection. `association_source`
+// records the provenance of the projected set (operator audit), and
+// `generated_at` records when that set was generated. A row may be ABSENT while
+// the event is published if generateAssociations has not produced a set yet (V1
+// has NO worker — prod has no trigger → never produced) — the detail page
+// renders an honest degraded state in that case (AC3, never fabricates items).
+model PublishedHotEventAssociation {
+  hotEventId         String   @id @map("hot_event_id")
+  items              Json // AssociationItem[] ({kind,label,mappingBasis}); display-only
+  associationSource  String   @map("association_source") // AssociationSource union value
+  generatedAt        DateTime @map("generated_at")
+  traceId            String?  @map("trace_id")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@map("published_hot_event_associations")
 }

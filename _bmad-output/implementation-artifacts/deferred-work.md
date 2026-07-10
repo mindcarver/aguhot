@@ -256,3 +256,83 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: market-reaction worker 为未测运行时——镜像 event-cluster/explain 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
   evidence: Story 2.1 的 `verify:market-reaction`（`apps/worker/src/verify-market-reaction.ts`）直调 `generateMarketReaction` + `refreshPublishedReadModel`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerMarketReactionWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、per-event try/catch 隔离、shutdown 关闭均无集成测试覆盖（镜像 event-cluster/explain 同款未测运行时 defer）。`pnpm -r typecheck/lint` 全绿仍可放行 worker 运行时回归。
   resolution: 已于 Story 2.1 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB snapshot/projection）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 真实关联知识源 / 映射库 / NER / LLM provider + SDK 接入未落地——V1 `StubAssociationAdapter` 仅 verify/e2e 用、不接 worker/prod
+  evidence: Story 2.2 的 `AssociationAdapter` 端口（`packages/core/src/modules/theme-linking/adapter.ts`）已落地（AD-7），但 V1 无真实关联知识源（概念/行业/个股映射库、NER、LLM 抽取——采购 defer）。`StubAssociationAdapter`（`packages/core/src/modules/theme-linking/stub-adapter.ts`）返回确定性 fixture（concept=半导体、industry=芯片、stock=中芯国际，mappingBasis="knowledge_base:v1"），仅 verify/e2e 直调 `generateAssociations` 走通 happy path；fixture 关联上公开页而无真实映射依据会误导读者（违反 AC2「禁止随意映射」+ NFR「absence as absence」），故 prod 不接线。真实知识源落地时 worker/命令路径解析 concrete adapter、`EventAssociationSet.source` 由 "template" 翻为 provider id（如 "tushare:concept"）。
+  resolution: 已于 Story 2.2 登记为 defer——真实关联知识源采购后，在命令/worker 装配层（或 publish→association 钩子）解析 concrete `AssociationAdapter`，`source` 翻为 provider id，详情关联自动流入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 关联生成 worker / cron / publish→association 自动触发未做——epic 未列关联生成 BullMQ job 类目，`generateAssociations` 为纯逻辑+DB append，verify/seed 直调
+  evidence: Story 2.2 的 `generateAssociations`（`packages/core/src/modules/theme-linking/association-service.ts`）是纯逻辑+DB append（无 BullMQ、无 SDK），verify/seed 直调（同 `generateExplanation`/`generateMarketReaction`/`clusterEvents`）。epic-2-context Technical Decisions 只列三个 Epic-2 BullMQ job 类目（market-signal aggregation 2-1 / daily digest 2-4 / theme backfill 2-3）——关联生成不在其列，故不建 worker（建无触发、无真实 adapter 的 worker 纯属仪式，ponytail）。V1 prod 无任何触发→无关联生成→诚实降级（AC3）。自动编排（publish→association 钩子、定时 cron、操作命令）defer。
+  resolution: 已于 Story 2.2 登记为 defer——真实知识源 + 运营负载出现时，引入 publish→association 钩子、BullMQ repeat job 或运营命令触发 `generateAssociations` + `refreshPublishedReadModel(publish)`。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 运营 curated 关联修订 UI + 分类法（taxonomy）未做——AC2 禁止无映射依据的手填关联，运营关联需先有 taxonomy + 映射依据机制
+  evidence: Story 2.2 AC2「关联结果必须基于明确映射依据 / 不允许完全手工随意填写后直接公开」。运营手填关联若无 taxonomy + 映射依据校验机制会违反 AC2（任意来源可产出无依据关联）。`AssociationItem.mappingBasis` 数据级强制（`generateAssociations` 校验每项非空、缺则抛错）已落地，但运营 UI（选择/编辑关联、绑定映射依据、分类法下拉）未建。需先定义 taxonomy（概念/行业/个股本体、同义词、层级），再引入运营 curated 关联写点（复用 1.9 追加式 + 映射依据字段）。
+  resolution: 已于 Story 2.2 登记为 defer——待真实运营需要人工 curated 关联时，先定义 taxonomy + 映射依据机制，再建运营关联 UI（source="human:curated"，mappingBasis 强制）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 概念/行业/个股独立详情页未做——V1 关联项跳转去向仅为过滤 feed（`/?<kind>=<label>`）
+  evidence: Story 2.2 AC1「每个关联项有明确跳转去向」+ epic「dead links are defects」。V1 无 concept/industry/stock 独立详情页（2.3 theme 页未建、stock 详情页不存在），唯一 V1 内部可行去向是过滤 feed 视图（epic 列举的「filtered view」）。故关联项链 `/?concept=半导体`，feed 真实 honor 该维度（JS 过滤）。概念/行业/个股独立聚合页（如 `/concept/半导体` 列出所有该概念事件）是 epic 未列的扩展，defer。
+  resolution: 已于 Story 2.2 登记为 defer——待真实导航负载需要概念/行业/个股聚合页时，建独立路由（读 published_hot_event_associations JS 过滤或 SQL 索引），关联项链改为指向聚合页。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 多关联维度同时活动的「清除全部」控件未做——V1 单维度（concept/industry/stock 最多一个活动），沿用 1.7 filter-pill clear defer
+  evidence: Story 2.2 `parseAssociationFilter` 只 honor 第一个出现的维度（V1 单维度）。`FeedFilters` 的活动关联 pill 各自带 clear（href 去该维度、保留 window），但无显式「清除全部」控件。多维度同时活动（concept + industry 同时过滤）+ 显式 dismiss chip 沿用 1.7 defer（「全部」pill 实现 clear 语义）；`parseAssociationFilter` 也只解析第一个维度。待真实多维度筛选需求出现时评估。
+  resolution: 已于 Story 2.2 登记为 defer——多维度同时活动落地时，扩 `parseAssociationFilter` 解析多维度 + 加「清除全部」控件（或每维度独立 dismiss chip）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: feed 关联过滤 JS 全表读 scale ceiling——`listPublishedAssociations` 返回全部行 + web 层内存 join，已发布集增长后有瓶颈
+  evidence: Story 2.2 `listPublishedAssociations`（`packages/core/src/modules/publish-orchestrator/publish-service.ts`）做 `prisma.publishedHotEventAssociation.findMany`（无 where），返回全部已发布关联行（仅 hotEventId + items），web 层建 Map + JS 过滤（沿用 1.7 `filterByWindow` + `listPublishedHotEvents` 全表读模式）。V1 已发布集体量极小（每次关联过滤触发一次额外全表读 + 内存 join），规模可接受；已发布集增长后（数千+行）全表读 + 内存 join 会成为瓶颈，需改 SQL GIN 索引（Json items）或规范化子表 + WHERE 下推。ponytail：不预埋无消费者的 SQL 过滤参数。
+  resolution: 已于 Story 2.2 登记为 scale ceiling——待已发布集体量增长至关联过滤有可测延迟时，将过滤下推为 SQL（Json GIN 索引或子表 + WHERE kind/label）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: `items` Json 列的查询性上限——当前整体读、永不按单项 SQL 查询；未来按 concept/industry 聚合或索引需重构
+  evidence: Story 2.2 `EventAssociationSet.items` / `PublishedHotEventAssociation.items` 是 Prisma `Json` 列存 `AssociationItem[]`。这些项是 display-only 编辑注解，整体读（详情分组渲染、feed 内存过滤），永不按单项做 SQL 查询。未来若需按 concept/industry 做 SQL 聚合（如「所有含 concept=半导体 的事件」服务端分页）、加 GIN 索引、或单项更新（运营修订单个关联项），需重构为规范化子表（`published_hot_event_association_items` 多行，带 kind/label/mappingBasis 列 + 索引）。沿用 `tags String[]` 的「display-only 集合用非规范化列」精神，但 items 有结构故用 Json。
+  resolution: 已于 Story 2.2 登记为查询性上限——待真实需要按 concept/industry SQL 聚合或单项更新时，重构为子表（schema migration + 投影/读取扩展）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: `StubAssociationAdapter` 仅测试、非 prod 的诚实下限——fixture 关联上公开页会误导读者，故 prod 降级、stub 仅 verify/e2e
+  evidence: Story 2.2 的 `StubAssociationAdapter`（`packages/core/src/modules/theme-linking/stub-adapter.ts`）返回确定性 fixture（concept=半导体 等固定值）。fixture 关联上公开页而无真实映射依据会违反 AC2（「禁止随意映射」）+ NFR（「absence as absence」）。故 V1 无 worker + 无真实 adapter → prod 无关联生成 → 诚实降级（AC3）；stub 仅 verify/e2e 直调 `generateAssociations` 走通 happy path（证明管道正确）。`apps/worker` 不 import stub（头注释标明 test-only）。
+  resolution: 已于 Story 2.2 登记为诚实下限——真实知识源落地前，prod 永远降级（AC3）；stub 永远仅测试，不上公开面。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 关联生成无 worker 的触发缺口——V1 prod 无任何触发关联生成的路径（无 worker/cron/钩子），关联只能由 verify/seed 手动生成
+  evidence: Story 2.2 epic 未列关联生成 BullMQ job 类目，故不建 worker（区别于 2-1 market-reaction 有 worker）。V1 prod 无任何触发关联生成的路径：无 worker、无 cron、无 publish→association 钩子、无运营命令。`generateAssociations` 只能由 verify/seed 脚本直调。这意味着 prod 永远无关联投影（详情页永远显降级文案 AC3）——这是 V1 诚实下限（无真实知识源时降级是正确行为），但触发缺口是功能 defer（真实知识源落地后需触发机制才能让关联流入公开面）。
+  resolution: 已于 Story 2.2 登记为触发缺口 defer——真实知识源落地时，必须同步引入触发（publish→association 钩子 / cron / 运营命令），否则 prod 关联永远不生成。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: projectAssociations（及所有 published_* 投影）read→write 非原子——seed/verify 用 root prisma（非事务）路径下，并发 append 可投影到非最新 set
+  evidence: Story 2-2 step-04 adversarial 审计：`projectAssociations`（`publish-service.ts`）先 `findFirst` 最新 `EventAssociationSet` 再 `upsert`/`deleteMany`，两步非原子。经 `decideReview` 调用时在事务内（原子）；但 verify/seed（`refreshPublishedReadModel` 直传 root prisma）与未来 worker 触发路径是两条 auto-commit 语句，若两次 `generateAssociations`+`refresh` 在读与写之间交错，可投影到非最新 set。此为所有 published_* 投影（projectExplanation/projectMarketReaction/projectEvidenceTimeline/projectAssociations）共有的设计性质（共享投影模式），非 2-2 引入，但 2-2 新增第 4 个同形投影放大了面。V1 无并发触发（无 worker/cron、decideReview 运营门控非并发）故不可达。
+  resolution: 已于 Story 2.2 登记为并发 defer——待引入并发 worker 触发投影时，把 read+write 包进 `prisma.$transaction`（或 `SELECT ... FOR UPDATE`），覆盖所有 published_* 投影。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: `normalizeItems` 静默丢弃未知 kind / 空白 label 项（无 observability）——仅 mappingBasis 缺失抛错，其他非法项 silent continue
+  evidence: Story 2-2 step-04 审计：`association-service.ts` 的 `normalizeItems` 对缺 `mappingBasis` 项 fail-fast 抛错（AC2），但对未知 `kind`（不在 concept/industry/stock union）与空白 label 项 silent `continue` 丢弃（前者为前向兼容注释 justify）。这削弱「absence as absence, never fabricated completeness」——运营看到部分关联集无法得知有项被丢。V1 仅 stub（返回合法三项）故不可达；真实 provider 产出未知 kind / 异常 label 时静默丢失。
+  resolution: 已于 Story 2.2 登记为 observability defer——真实 provider 引入时，把 silent-drop 改为 console.warn（带 traceId + 被丢项）或可配置 strict 模式（未知 kind 抛错）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 关联 label 在存储边界未 trim/归一化——feed 过滤为精确串匹配，大小写/Unicode/首尾空白不一致会静默零命中
+  evidence: Story 2-2 step-04 edge-case 审计：`normalizeItems` 跳过 trim 后为空的 label，但存储的是 raw 未 trim 的 label；feed `parseAssociationFilter` 同样不 trim，匹配为精确 `===`。若 adapter 产出 `" 半导体"`（首尾空白）或大小写/Unicode 变体，存储与过滤两侧需完全一致才命中——URL 手输 trailing `%20` 或 NFC 差异会静默零命中（feed 空态）。stub 产出干净 label 故不可达；真实 provider label 质量不可控时存在风险。
+  resolution: 已于 Story 2.2 登记为 label 归一化 defer——真实 provider 引入时，在 `normalizeItems` 入口对 label `trim()` + Unicode NFC 归一，过滤侧同步归一后再匹配。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: 读侧（projectAssociations / getPublishedHotEventDetail）未运行时校验 `items` Json 为数组——corrupt DB Json 会导致详情页 500
+  evidence: Story 2-2 step-04 edge-case 审计：`items` Prisma Json 列以 `as AssociationItem[]` 强转读回，未做 `Array.isArray` 校验。若 items 列被手工/外部写入非数组（对象/原始值/null），`projectAssociations` 会 upsert 非 Json 数组到 published 表、详情页 `items.filter(...)` 抛 TypeError → 500。DB 仅由 Prisma 类型化写入（AD-2 单一写拥有者），corrupt 场景不可达（defense-in-depth 缺口，非正确性 bug）。同类 concern 适用所有 Json/String[] 读（tags 等）。
+  resolution: 已于 Story 2.2 登记为 defense-in-depth defer——若未来放宽 items 写拥有者或观察到 corrupt，在读侧加 `Array.isArray(items) ? items : []` 兜底。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: AC2 provenance 为固定文案「系统映射」，与每项 `mappingBasis` 实际值解耦——多 provider 落地后需动态化
+  evidence: Story 2-2 step-04 intent-alignment 审计：详情关联区块渲染固定 provenance「关联依据：系统映射」，而非每项实际 `mappingBasis`（如 stub 的 "knowledge_base:v1"、未来 "tushare:concept"）。spec Design Notes 显式选择 V1 单一来源下用固定文案（知识库=系统映射，准确）。但多 provider 落地后，固定文案无法反映某项来自哪个 provider——AC2「明确映射依据可观测」需动态化（按 source/basis 渲染 provenance，或挂 AiLabel 区分 AI 抽取 vs 知识库映射）。mappingBasis 当前 fetched 到 server component 但未渲染（server 组件不序列化未消费字段到 client，无泄露）。
+  resolution: 已于 Story 2.2 登记为 multi-basis defer——多 provider 落地时，provenance 行改为按 `mappingBasis`/`source` 动态渲染（区分知识库映射 / AI 抽取 / 运营 curated）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: `generateAssociations` 降级路径（adapter 缺失/返回 null/空）未带 traceId 日志——运营无法区分「无 adapter 接线」vs「adapter 返回空」
+  evidence: Story 2-2 step-04 edge-case 审计：`generateAssociations` 在 adapter 缺失 / 返回 null / 返回空数组时返回 null、不写，但未 log traceId + 原因。这与既有 generators（`generateExplanation`/`generateMarketReaction`）一致（均不在降级路径 log），故为 codebase 一致行为而非 2-2 引入；但关联生成未来上 worker 触发后，无日志会让「prod 永远降级」难以排障（不知是 adapter 未接还是返回空）。
+  resolution: 已于 Story 2.2 登记为 observability defer——关联生成上 worker/触发后，在降级路径加结构化日志（traceId + hotEventId + reason），同步考虑给既有 generators 补。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-concept-industry-and-stock-associations.md`
+  summary: `EventAssociationSet` 无复合索引 `(hotEventId, createdAt DESC)`——投影取最新走 hotEventId 索引 + 排序，scale 后是 perf cliff
+  evidence: Story 2-2 step-04 adversarial 审计：`EventAssociationSet` 有 `@@index([hotEventId])` + `@@index([createdAt])`（沿用 2-1 MarketReactionSnapshot 同形），但投影热路径 `findFirst({ where:{hotEventId}, orderBy:[{createdAt:"desc"},{id:"desc"}] })` 需 `(hotEventId, createdAt DESC, id DESC)` 才能索引服务；当前是 hotEventId 索引过滤 + 排序。每次 publish/republish 触发投影（最频繁的写路径操作）。V1 体量极小故无延迟；与 2-1 同款 scale ceiling。
+  resolution: 已于 Story 2.2 登记为 perf defer——待 EventAssociationSet 体量增长致投影有可测延迟时，加复合索引 `@@index([hotEventId, createdAt(sort: Desc), id(sort: Desc)])`（同步评估 2-1 MarketReactionSnapshot）。

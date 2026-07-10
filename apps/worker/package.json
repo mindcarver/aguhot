@@ -11,6 +11,7 @@
     "verify:publish": "tsx src/verify-publish.ts",
     "verify:explain": "tsx src/verify-explain.ts",
     "verify:market-reaction": "tsx src/verify-market-reaction.ts",
+    "verify:associations": "tsx src/verify-associations.ts",
     "verify:revision": "tsx src/verify-revision.ts",
     "verify:merge-split": "tsx src/verify-merge-split.ts",
     "typecheck": "tsc --noEmit",
