@@ -13,6 +13,7 @@
     "verify:market-reaction": "tsx src/verify-market-reaction.ts",
     "verify:associations": "tsx src/verify-associations.ts",
     "verify:themes": "tsx src/verify-themes.ts",
+    "verify:digest": "tsx src/verify-digest.ts",
     "verify:revision": "tsx src/verify-revision.ts",
     "verify:merge-split": "tsx src/verify-merge-split.ts",
     "typecheck": "tsc --noEmit",

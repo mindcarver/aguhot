@@ -22,6 +22,9 @@ export {
   getPublishedHotEventDetail,
   listPublishedAssociations,
   listPublishedThemeMemberships,
+  refreshPublishedDailyDigest,
+  getPublishedDailyDigest,
+  listPublishedDailyDigestCoverageDates,
 } from "./publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./publish-service.js";
 export type {
@@ -41,4 +44,9 @@ export type {
   PublishedHotEventTheme,
   PublishedThemeMembershipRow,
   ListPublishedThemeMembershipsOptions,
+  DailyDigestEntry,
+  PublishedDailyDigest,
+  RefreshPublishedDailyDigestOptions,
+  GetPublishedDailyDigestOptions,
+  ListPublishedDailyDigestCoverageDatesOptions,
 } from "./types.js";

@@ -14,6 +14,16 @@
  *   - published_hot_event_associations (Story 2.2): the projected latest
  *     EventAssociationSet for the detail page's association block + the feed's
  *     association-dimension filter.
+ *   - published_hot_event_themes (Story 2.3): the projected latest EventThemeSet
+ *     for the detail page's theme block + the /topics theme-page membership map.
+ *
+ * Story 2.4 adds a coverageDate-keyed read model alongside the hotEventId-keyed
+ * ones:
+ *   - published_daily_digests (Story 2.4): the projected latest DailyDigest for
+ *     one coverageDate. Row existence = a published digest for that day. This
+ *     projection is driven by a SIBLING function refreshPublishedDailyDigest
+ *     (not a branch inside refreshPublishedReadModel) because the digest is
+ *     coverageDate-keyed (aggregates multiple events), not hotEventId-keyed.
  *
  * refreshPublishedReadModel is called inside decideReview's transaction (and by
  * the market-reaction worker after it appends a snapshot):
@@ -34,12 +44,21 @@
  *     when no published_hot_events row exists (unpublished id → notFound()).
  *   - listPublishedAssociations (Story 2.2): the hotEventId→items map the feed
  *     uses for the association-dimension JS filter.
+ *   - listPublishedThemeMemberships (Story 2.3): the hotEventId→ThemeRef[] map
+ *     the /topics directory + /topics/[slug] page use.
+ *   - getPublishedDailyDigest (Story 2.4): the /daily page's digest for one
+ *     coverageDate (or null → degrade).
+ *   - listPublishedDailyDigestCoverageDates (Story 2.4): the distinct
+ *     coverageDates that have a published digest (the /daily page's default-
+ *     view resolver).
  *
  * This module never writes hot_events, review_decisions, publication_decisions,
  * explanation_versions, market_reaction_snapshots, evidence_records, or
  * evidence_sources. It reads explanation_versions (latest version),
  * market_reaction_snapshots (latest snapshot), and the evidence link chain only
- * inside the publish projection, then writes only the published_* tables.
+ * inside the publish projection, then writes only the published_* tables. The
+ * daily-digest projection reads daily_digests (latest row per coverageDate) and
+ * writes published_daily_digests — it never reads hot_events / evidence_*.
  */
 
 import type { Prisma, PrismaClient } from "../../../generated/client.js";
@@ -48,15 +67,20 @@ import type { PublishAction } from "../review-workflow/types.js";
 import { EvidenceLinkStatus } from "./types.js";
 import type {
   AssociationItem,
+  DailyDigestEntry,
+  GetPublishedDailyDigestOptions,
   GetPublishedHotEventDetailOptions,
   ListPublishedAssociationsOptions,
+  ListPublishedDailyDigestCoverageDatesOptions,
   ListPublishedHotEventsOptions,
   ListPublishedThemeMembershipsOptions,
   PublishedAssociationRow,
+  PublishedDailyDigest,
   PublishedEvidenceRow,
   PublishedHotEventDetail,
   PublishedHotEventSummary,
   PublishedThemeMembershipRow,
+  RefreshPublishedDailyDigestOptions,
   ThemeRef,
 } from "./types.js";
 
@@ -830,4 +854,146 @@ export async function listPublishedThemeMemberships(
     hotEventId: r.hotEventId,
     items: r.items as unknown as ThemeRef[],
   }));
+}
+
+// --- Story 2.4: daily-digest projection + reads -------------------------------
+
+/**
+ * Refresh the published daily-digest read model for one coverageDate (Story
+ * 2.4). This is a SIBLING function to refreshPublishedReadModel, NOT a new
+ * branch inside it. Reason: refreshPublishedReadModel is hotEventId-keyed
+ * (projects one hot event's published_* tables on publish/takedown), whereas
+ * the daily digest is coverageDate-keyed (aggregates multiple events into one
+ * versioned artifact). Mixing the two keys in one function would conflate two
+ * distinct aggregate contracts (see spec Design Notes). Same module
+ * (publish-orchestrator, AD-3's single write-owner), different aggregate key,
+ * independent function.
+ *
+ * Reads the latest daily_digests row for the coverageDate (createdAt desc, id
+ * desc tiebreaker) → upsert published_daily_digests (items Json). If no
+ * daily_digests row exists (generateDailyDigest has not run / returned null /
+ * V1 prod adapter resolves none), deleteMany that coverageDate's row so the
+ * /daily page renders the honest degraded state rather than a stale prior
+ * projection. Idempotent.
+ *
+ * Unlike the hotEventId-keyed projections, the digest has NO FK to hot_events —
+ * hotEventId in each entry is a data-only link. A hotEvent takedown does NOT
+ * trigger this refresh (the digest is a versioned point-in-time artifact; the
+ * link honestly 404s, staleness recompute is deferred).
+ *
+ * This query only reads daily_digests and writes published_daily_digests. It
+ * never reads hot_events / evidence_* / published_hot_event_* (AD-3: the digest
+ * read model is the sole public surface for /daily).
+ */
+export async function refreshPublishedDailyDigest(
+  options: RefreshPublishedDailyDigestOptions,
+): Promise<void> {
+  const { prisma, traceId, coverageDate } = options;
+
+  const latest = await prisma.dailyDigest.findFirst({
+    where: { coverageDate },
+    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
+    // embed a monotonic timestamp) — same convention as the hotEventId-keyed
+    // projections.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      items: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    // No digest row: clear any stale projection so the /daily page shows the
+    // degraded state (no fabricated digest).
+    await prisma.publishedDailyDigest.deleteMany({
+      where: { coverageDate },
+    });
+    return;
+  }
+
+  await prisma.publishedDailyDigest.upsert({
+    where: { coverageDate },
+    create: {
+      coverageDate,
+      // The items Json column already holds the typed array
+      // (DailyDigestEntry[]) from the source daily_digests row; re-project it
+      // verbatim. Cast through InputJsonValue (Prisma's Json envelope does not
+      // carry the element type across the read→write boundary).
+      items: latest.items as unknown as Prisma.InputJsonValue,
+      source: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      items: latest.items as unknown as Prisma.InputJsonValue,
+      source: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
+ * Read the public daily digest for one coverageDate — Story 2.4.
+ *
+ * This is the public read query the /daily page consumes (AD-3: public reads
+ * only published_* read models). It returns the projected digest for that
+ * coverageDate, or null when no published_daily_digests row exists (digest not
+ * generated / adapter unavailable in V1 prod / coverageDate has no eligible
+ * events) — the /daily page then renders the honest degraded state (AC3).
+ *
+ * This query only SELECTs published_daily_digests. It NEVER reads daily_digests
+ * / hot_events / evidence_* (AD-3). Row existence = a published digest for that
+ * coverageDate (no status column).
+ */
+export async function getPublishedDailyDigest(
+  options: GetPublishedDailyDigestOptions,
+): Promise<PublishedDailyDigest | null> {
+  const { prisma, coverageDate } = options;
+
+  const row = await prisma.publishedDailyDigest.findUnique({
+    where: { coverageDate },
+    select: {
+      coverageDate: true,
+      items: true,
+      source: true,
+      generatedAt: true,
+    },
+  });
+
+  if (row === null) return null;
+  return {
+    coverageDate: row.coverageDate,
+    entries: row.items as unknown as DailyDigestEntry[],
+    source: row.source,
+    generatedAt: row.generatedAt,
+  };
+}
+
+/**
+ * List the distinct coverageDates that have a published daily digest — Story
+ * 2.4. The /daily page uses the first row (max coverageDate) as the default
+ * view when no ?date= query param is present (the "latest digest").
+ *
+ * Returns `{ coverageDate }` for every published_daily_digests row, ordered by
+ * coverageDate DESC so the first row is the latest. It only SELECTs
+ * published_daily_digests — never daily_digests / hot_events / evidence_*
+ * (AD-3).
+ *
+ * Note: coverageDate is the PK of published_daily_digests, so findMany +
+  orderBy coverageDate DESC already returns distinct coverageDates (one row per
+  coverageDate). No SQL DISTINCT needed.
+ */
+export async function listPublishedDailyDigestCoverageDates(
+  options: ListPublishedDailyDigestCoverageDatesOptions,
+): Promise<{ coverageDate: Date }[]> {
+  const { prisma } = options;
+
+  const rows = await prisma.publishedDailyDigest.findMany({
+    select: { coverageDate: true },
+    orderBy: { coverageDate: "desc" },
+  });
+
+  return rows;
 }

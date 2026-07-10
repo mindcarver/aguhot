@@ -322,3 +322,99 @@ export interface ListPublishedThemeMembershipsOptions {
   prisma: PrismaClient;
   traceId: string;
 }
+
+// --- Story 2.4: public daily-digest read types --------------------------------
+
+/**
+ * One daily-digest entry projected for public read — mirrors the
+ * DailyDigestEntry the digest module stores in the Json `items` column. The
+ * /daily page renders each entry as a clickable row linking to
+ * `/events/{hotEventId}` (FR10, the daily→detail jump). hotEventId is a
+ * data-only foreign-key-style link (the digest has NO FK to hot_events — it is
+ * a coverageDate-keyed aggregate).
+ *
+ *   - hotEventId: data-only link to /events/{hotEventId}. If the event is later
+ *     taken down, the link honestly 404s (AD-8) — the digest is a versioned
+ *     point-in-time artifact and does NOT auto-recompute (staleness recompute
+ *     deferred).
+ *   - title: the event's title at digest generation time. Descriptive, never
+ *     advisory.
+ *   - conclusion: NON-EMPTY brief summary (from the adapter). AC2: descriptive,
+ *     never advisory (no buy/sell/target-price/position).
+ *   - latestEvidenceAt: ISO 8601 string of the event's most recent evidence
+ *     time (for display — when did this event last update).
+ *   - evidenceCount: number of supporting evidence records (multi-source signal
+ *     for display).
+ */
+export interface DailyDigestEntry {
+  hotEventId: string;
+  title: string;
+  conclusion: string;
+  latestEvidenceAt: string; // ISO 8601
+  evidenceCount: number;
+}
+
+/**
+ * The projected public daily digest for one coverageDate (Story 2.4). Mirrors
+ * published_daily_digests. `entries` is the Json column value typed as
+ * DailyDigestEntry[].
+ *
+ * Row existence = a currently-published digest for that coverageDate (no status
+ * column). Absent when generateDailyDigest has not produced a digest (V1 prod:
+ * daily-digest worker resolves no adapter → skip → never produced, OR the
+ * coverageDate has no eligible published events) — the /daily page shows the
+ * honest degraded state ("该覆盖日期的日报尚未生成。" + current coverage scope,
+ * AC3). Absent does NOT block the existing feed/detail/theme rendering.
+ */
+export interface PublishedDailyDigest {
+  coverageDate: Date;
+  entries: DailyDigestEntry[];
+  source: string;
+  generatedAt: Date;
+}
+
+/**
+ * One row of listPublishedDailyDigestCoverageDates — the coverageDate values
+ * for which a published_daily_digests row exists. The /daily page uses this to
+ * resolve the "latest digest" (the max coverageDate) when no ?date= query param
+ * is present.
+ */
+export interface DigestCoverageDateRow {
+  coverageDate: Date;
+}
+
+/**
+ * Options for refreshPublishedDailyDigest. `{ prisma, traceId, coverageDate }`
+ * — coverageDate-keyed (NOT hotEventId-keyed like refreshPublishedReadModel).
+ * This is a SIBLING function to refreshPublishedReadModel, not a new branch:
+ * the digest is a coverageDate-keyed aggregate (multiple events per digest),
+ * so its projection key differs from the hotEventId-keyed published_hot_event_*
+ * projections. See spec Design Notes for why a sibling function was chosen over
+ * overloading refreshPublishedReadModel's contract.
+ */
+export interface RefreshPublishedDailyDigestOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  coverageDate: Date;
+}
+
+/**
+ * Options for getPublishedDailyDigest. `{ prisma, traceId, coverageDate }` —
+ * returns the published digest for that coverageDate, or null when none exists
+ * (the /daily page degrades honestly).
+ */
+export interface GetPublishedDailyDigestOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  coverageDate: Date;
+}
+
+/**
+ * Options for listPublishedDailyDigestCoverageDates. `{ prisma, traceId }` —
+ * returns the distinct coverageDates that have a published digest, descending.
+ * The /daily page uses the first row (latest coverageDate) as the default view.
+ */
+export interface ListPublishedDailyDigestCoverageDatesOptions {
+  prisma: PrismaClient;
+  traceId: string;
+}

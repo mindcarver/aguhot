@@ -585,3 +585,78 @@ model PublishedHotEventTheme {
 
   @@map("published_hot_event_themes")
 }
+
+// The append-only write table for a daily digest (AD-2, Story 2.4). The digest
+// module is the sole writer. One row per generation; every successful
+// generateDailyDigest call APPENDS a new row (AD-5: never update or delete prior
+// rows — the full digest history is the version series). publish-orchestrator
+// projects the LATEST row for a coverageDate (createdAt desc, id desc tiebreaker)
+// into published_daily_digests.
+//
+// `coverage_date` is the trading day this digest covers (V1: the UTC day of the
+// member events' latestEvidenceAt — a real trading calendar is deferred). It is
+// NOT unique: multiple generations for the same coverageDate append multiple
+// rows; the public projection takes the latest.
+//
+// `items` is a Json column holding DailyDigestEntry[] ({hotEventId,title,
+// conclusion,latestEvidenceAt,evidenceCount}). These are display-only editorial
+// entries: the /daily page reads the whole array to render one clickable row
+// per event. A normalized child table would be over-engineering for a
+// display-only, variable-cardinality set that is always read whole (ponytail:
+// no child table for a consumerless per-entry SQL query — mirrors the 2.2/2.3
+// items-Json decision). The digest aggregate is keyed by coverageDate (NOT
+// hotEventId), so it has NO FK to hot_events — hotEventId is a data-only
+// foreign-key-style link (epic: "cross-page navigation is not a module ...
+// foreign-key-style links between them (DAILY_DIGEST → HOT_EVENT)"). This means
+// a hotEvent takedown does NOT cascade-clear the digest (the digest is a
+// versioned point-in-time artifact; the link honestly 404s, staleness recompute
+// is deferred).
+//
+// NFR: conclusions are explanatory, never advisory — describe the day's key
+// events, NEVER buy/sell/target-price/position wording. generateDailyDigest
+// validates each conclusion via noInvestAdvice (throws on a keyword hit, AC2
+// fail-fast).
+model DailyDigest {
+  id           String   @id // UUIDv7, assigned in application code (newTraceId)
+  coverageDate DateTime @map("coverage_date")
+  items        Json // DailyDigestEntry[] ({hotEventId,title,conclusion,latestEvidenceAt,evidenceCount}); display-only
+  source       String // DigestSource union value ("template"; future llm/provider id)
+  traceId      String?  @map("trace_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // No FK to hot_events — the digest is a coverageDate-keyed aggregate, not a
+  // hotEvent-owned sub-aggregate. hotEventId in each entry is a data-only link.
+  @@index([coverageDate])
+  @@index([createdAt])
+  @@map("daily_digests")
+}
+
+// The public read model for a daily digest (AD-3, Story 2.4). The publish-
+// orchestrator module is the sole writer. Row existence = a currently-published
+// digest for that coverageDate: refreshPublishedDailyDigest upserts the row
+// (projecting the latest DailyDigest for the coverageDate), or deleteMany's it
+// when no DailyDigest row exists. There is intentionally NO status column — row
+// existence is the visibility contract (same pattern as the other published_*
+// read models). coverageDate is the PK (one projected digest per coverageDate).
+//
+// Unlike the published_hot_event_* read models, this table has NO FK to
+// hot_events — the digest is a coverageDate-keyed aggregate (mirroring the
+// write table's no-FK decision). `source` records the provenance of the
+// projected digest (operator audit), and `generated_at` records when that
+// digest was generated (so the public surface can show "日报生成于 <time>"). A
+// row may be ABSENT for a coverageDate if generateDailyDigest has not produced
+// a digest (V1 worker resolves no adapter → skip → never produced) — the /daily
+// page renders an honest degraded state in that case (AC3, never fabricates a
+// digest).
+model PublishedDailyDigest {
+  coverageDate DateTime @id @map("coverage_date")
+  items        Json // DailyDigestEntry[] ({hotEventId,title,conclusion,latestEvidenceAt,evidenceCount}); display-only
+  source       String // DigestSource union value
+  generatedAt  DateTime @map("generated_at")
+  traceId      String?  @map("trace_id")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // No FK to hot_events — coverageDate-keyed aggregate, not hotEvent-owned.
+
+  @@map("published_daily_digests")
+}

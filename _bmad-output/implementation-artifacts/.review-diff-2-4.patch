@@ -1,0 +1,3119 @@
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index c6dca71..1ca8c21 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -426,3 +426,73 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   summary: 主题页 `/topics/[slug]` 成员行仅显 title + latestEvidenceAt + 来源数，未显 source name / 原始链接——完整 traceability 经成员链「一跳」到详情页才有
+   evidence: Story 2.3 step-04 intent-alignment 审计：epic-2-context「Public content surfaced via daily/theme paths must retain evidence source, source name, time, and original link; traceability propagates into every Epic 2 surface」。主题页成员行渲染 title + `latestEvidenceAt` + 来源数（evidenceCount），但不显 source name 与原始链接——完整证据 traceability 经成员链 `/events/{id}` 跳到详情页（证据时间线）才有。审计判定「navigational-index 读法下合规」（主题页是导航索引、traceability 一跳可达），但「每条主题路径自带 source name/link」的字面读法未满足。
+   resolution: 已于 Story 2.3 登记为 traceability 丰富化 defer——待真实主题页需要就地核验来源时，在成员行加 source name + 原始链接（读 `published_hot_event_evidence` 首条/代表性来源），避免读者必须跳详情才能溯源。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 真实日报 LLM 摘要 provider + SDK 接入未落地——V1 `StubDigestAdapter` 仅 verify/e2e 用、不接 worker/prod
++  evidence: Story 2.4 的 `DigestAdapter` 端口（`packages/core/src/modules/digest/digest-adapter.ts`）已落地（AD-7），但 V1 无真实日报 LLM/摘要 provider（采购 defer）。`StubDigestAdapter`（`packages/core/src/modules/digest/stub-digest-adapter.ts`）返回确定性 fixture conclusion（`STUB_DIGEST_CONCLUSION = "当日重点事件，证据链已归档。"`），仅 verify/e2e 直调 `generateDailyDigest` 走通 happy path；fixture 结论上公开日报页而无真实生成依据会误导读者（违反 NFR「absence as absence, never fabricated completeness」），故 prod 不接线。daily-digest worker 运行时 adapter 解析为 `undefined`（`// ponytail: real provider wired when procured`）→ `generateDailyDigest` 返回 null → prod 诚实降级（AC3）。真实 provider 落地时 worker 解析它、`DailyDigest.source` 由 "template" 翻为 provider id。
++  resolution: 已于 Story 2.4 登记为 defer——真实日报 LLM/摘要 provider 采购后，在 worker 装配层解析 concrete `DigestAdapter`（`apps/worker/src/queues/daily-digest-queue.ts` 的 `adapter` 变量改从 provider 构造），`source` 翻为 provider id，/daily 页日报自动流入。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: daily-digest worker cron / 自动编排 / publish→digest 自动触发 / 「每日定点」/ job 链式未落地——worker V1 仅占位（adapter 缺失→skip），触发/cron defer
++  evidence: Story 2.4 的 `registerDailyDigestWorker`（`apps/worker/src/queues/daily-digest-queue.ts`）解析 `coverageDate = new Date(data.coverageDate)`（从 job data），但 V1 运行时 adapter 解析为 `undefined` → `{generated:0, considered:1, skipped:1}`。worker 无 BullMQ repeat job / cron / job 链式触发（沿用 1-5/1-8/2-1/2-3「job 独立、幂等、chaining/cron 未落地」）。`enqueueDailyDigest` 存在但无调用方（无 publish→digest 钩子、无定时 cron、无「每日定点自动跑」、无运营命令）。这意味着 prod 永远无日报生成（除非手动 enqueue 或 verify/seed 直调）——V1 诚实下限（无真实 LLM 时降级是正确行为），但触发缺口是功能 defer。
++  resolution: 已于 Story 2.4 登记为 defer——真实 LLM + 运营负载出现时，引入 publish→digest 钩子、BullMQ repeat job（`Queue.upsertJobScheduler`，如交易日收盘后触发）、或运营命令触发 `enqueueDailyDigest`。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 日报编辑 / 版本对比 / 回滚 / 多版本展示未做——V1 日报只追加（append-only set 取最新），编辑 UI / 版本 diff defer
++  evidence: Story 2.4 `DailyDigest` 是 append-only（AD-5，每次 `generateDailyDigest` append 一行、永不 update/delete），公开投影取最新行。无「编辑日报文案」「版本差异 diff」「回滚到上一版」「展示多版本」UI（运营修订日报文案归未来日报治理）。V1 日报内容 = 最新 set 的 entries。
++  resolution: 已于 Story 2.4 登记为 defer——待真实运营需要人工修订日报/版本对比/回滚时，先定义日报编辑语义（谁可编、编辑哪些字段、版本链展示），再扩 `DailyDigest` 或引入日报修订记录。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 日报邮件推送 / 订阅 / Webhook 未做——V1 日报仅 Web 页阅读
++  evidence: Story 2.4 `/daily` 是 Web 页（请求期读 published_daily_digests）。无邮件推送日报、无订阅机制、无 Webhook 通知。epic「日报」核心是 Web 页阅读 + daily→detail 跳转，推送/订阅属独立 concern（依赖 user-profile 模块 + 通知系统，均未建）。defer。
++  resolution: 已于 Story 2.4 登记为推送/订阅 defer——待 user-profile + 通知系统落地后，引入日报邮件推送 / 订阅 / Webhook（作为独立 concern，不改 /daily Web 页）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 跨页返回路径上下文恢复（scroll 位 / filter 态 / 阅读上下文）归 2.5——本 story 仅做基本导航（daily→detail 链 + 日报页「← 返回首页」链 + 浏览器原生 back，深度一层）
++  evidence: Story 2.4 `/daily` 提供「← 返回首页」链回 `/`，日报每条事件链 `/events/{hotEventId}`（daily→detail）。但从日报进入详情再返回时，filter 态 + scroll 位不恢复（浏览器原生 back 回退到日报页顶部，非原 scroll 位）。完整 UX-DR12（返回恢复 filter 态 + scroll 位）是 2.5 闭环 capstone 职责，2.4 提供日报页/跳转 surface 但不独占返回契约。epic-2-context 明示「Story 2.4 depends on Story 2.5's return-path contract」。
++  resolution: 已于 Story 2.4 登记为 2.5 范围——Epic 2.5 跨首页/主题/日报/详情统一返回契约（referrer 或 return-to query param + scroll/filter 恢复）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 日报内事件分页 / sort toggle 未做——V1 单页全量按证据数降序，分页/sort defer
++  evidence: Story 2.4 `/daily` 固定按 evidenceCount DESC（entries 在生成时已排序）+ hotEventId DESC tiebreaker。首页 feed 按 hotness（evidenceCount/latestEvidenceAt desc）——两者目的不同故排序策略分离。日报页无降序 toggle、无分页（V1 单日事件数极小）。降序/排序 toggle / 分页 defer。
++  resolution: 已于 Story 2.4 登记为 defer——待真实单日事件数增长至单页过长时，加排序 toggle（证据数/时间）+ 分页（或无限滚动）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 日报生成进度 WebSocket/SSE 实时推送未做——V1 靠读模型刷新 + 主动刷新，实时推送 epic defer
++  evidence: Story 2.4 `/daily` 是 force-dynamic 请求期读读模型，无 WebSocket/SSE 实时推送。日报生成进度（adapter 运行中、即将完成）需用户刷新页面才可见。epic-2-context + 架构 spine 把 WebSocket/SSE 实时推送列为 defer（V1 靠读模型刷新 + 主动轮询）。
++  resolution: 已于 Story 2.4 登记为 epic defer——WebSocket/SSE 实时推送随 epic 整体 defer，待实时性需求出现时引入。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 日报内事件被 takedown 后日报 staleness 自动重算未做——日报为 versioned 制品，链诚实 404；重算（append 新行剔除已 takedown 事件）由下次 generateDailyDigest 触发
++  evidence: Story 2.4 `daily_digests`/`published_daily_digests` 无 FK 到 hot_events——日报不「拥有」事件，hotEventId 是 data-only 外键式链接。这意味着事件 takedown 不级联清日报（日报是 versioned 时间点制品）。日报已含事件 X 且 X 随后被 `decideReview(takedown)` 时，日报读模型不自动重算（versioned 制品），链 `/events/{X}` 诚实 404（AD-8 不泄漏）。重算（append 新行、自然剔除已 takedown 事件）由下次 `generateDailyDigest` 触发（V1 显式调/cron defer）。staleness 自动检测/重算 defer。
++  resolution: 已于 Story 2.4 登记为 staleness 重算 defer——待真实运营需要日报自动反映 takedown 时，引入 staleness 检测（定期比对日报成员 vs 当前已发布集）+ 自动重算触发（或定时 cron 重生成日报）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 日报 `published_daily_digests` 全表读 scale ceiling——`listPublishedDailyDigestCoverageDates` 返回全部行 + web 层取首个，已发布集增长后有瓶颈
++  evidence: Story 2.4 `listPublishedDailyDigestCoverageDates`（`publish-service.ts`）做 `prisma.publishedDailyDigest.findMany`（无 where），返回全部已发布日报行（仅 coverageDate），web 层 `/daily` 页取首个（最新 coverageDate）作为默认视图。V1 已发布日报体量极小（每天最多一行）；增长后（数千+天）全表读会成瓶颈，需改 SQL `ORDER BY coverage_date DESC LIMIT 1`（/daily 默认视图）或分页（历史日报浏览）。
++  resolution: 已于 Story 2.4 登记为 scale ceiling——待已发布日报体量增长至全表读有可测延迟时，将默认视图查询改为 `findMany({ orderBy: { coverageDate: "desc" }, take: 1 })` 或加分页。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: `items` Json 列的查询性上限（同 2.2/2.3）——当前整体读、永不按单项 SQL 查询；未来按事件/日期聚合或索引需重构
++  evidence: Story 2.4 `DailyDigest.items` / `PublishedDailyDigest.items` 是 Prisma `Json` 列存 `DailyDigestEntry[]`。整体读（/daily 页渲染所有 entries），永不按单项做 SQL 查询。未来若需按 hotEventId 做 SQL 聚合（如「该事件出现在哪些日报中」）或单项更新，需重构为规范化子表。沿用 2.2/2.3 items Json 决策。
++  resolution: 已于 Story 2.4 登记为查询性上限——待真实需要按 hotEventId SQL 聚合或单项更新时，重构为子表（schema migration + 投影/读取扩展）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: `StubDigestAdapter` 仅测试、非 prod 的诚实下限——fixture 结论上公开日报页会误导读者，故 prod 降级、stub 仅 verify/e2e
++  evidence: Story 2.4 的 `StubDigestAdapter`（`packages/core/src/modules/digest/stub-digest-adapter.ts`）返回确定性 fixture conclusion（固定字符串）。fixture 结论上公开日报页而无真实生成依据会违反 NFR。故 V1 daily-digest worker 运行时 adapter 解析为 none、prod 诚实降级；stub 仅 verify/e2e 直调 `generateDailyDigest` 走通 happy path。`apps/worker` 不 import stub。
++  resolution: 已于 Story 2.4 登记为诚实下限——真实 LLM provider 落地前，prod 永远降级（AC3）；stub 永远仅测试，不上公开面。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: daily-digest worker 为未测运行时——镜像 theme-backfill/market-reaction 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
++  evidence: Story 2.4 的 `verify:digest`（`apps/worker/src/verify-digest.ts`）直调 `generateDailyDigest` + `refreshPublishedDailyDigest`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerDailyDigestWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、coverageDate 解析、shutdown 关闭均无集成测试覆盖（镜像 theme-backfill/market-reaction/explain 同款未测运行时 defer）。
++  resolution: 已于 Story 2.4 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB digest/projection）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 历史相似日报相似度判断未做——日报是按日的聚合，非跨日相似度推理；相似度推理 defer
++  evidence: Story 2.4 日报按 coverageDate 聚合当日已发布事件，非从历史日报做相似度推理。epic「absence as absence, never fabricated」——「历史相似日报」相似度判断是独立 concern（需相似度模型/embedding），非日报生成。相似度判断 defer（沿用 2.3 主题相似度 defer 同型）。
++  resolution: 已于 Story 2.4 登记为相似度推理 defer——待真实需要「历史相似日报」推荐时，引入相似度模型（embedding/相似度计算）作为独立 concern，与日报生成分离。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
++  summary: 「当日事件归属」用 `latestEvidenceAt` UTC 日而非真实交易历——V1 无交易历模块/SDK，真实交易历（盘中/盘后、节假日、时区）落地后替换
++  evidence: Story 2.4 `generateDailyDigest` 的 eligible 过滤用 `latestEvidenceAt` 的 UTC 日作为 coverage 归属（JS 过滤 `listPublishedHotEvents` 输出）。epic-2-context 强调「trading-day scoping」对日报关键，但 V1 无交易历模块/SDK（采购 defer，与 MarketDataAdapter provider 同期 defer）。`latestEvidenceAt` 表达「该事件最近活跃于何日」——比 `publishedAt`（首次发布时间）更贴合「当日热点复盘」语义。V1 用 UTC 日作为 ceiling，真实交易历（含盘中/盘后、节假日、时区）落地后替换。
++  resolution: 已于 Story 2.4 登记为交易历 ceiling defer——真实交易历模块落地后（与 MarketDataAdapter provider 同期），把 `filterByCoverageDay` 的 UTC 日归因替换为交易历 scoping（交易日开收盘、节假日、时区）。
+diff --git a/_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md b/_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md
+new file mode 100644
+index 0000000..ca51112
+--- /dev/null
++++ b/_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md
+@@ -0,0 +1,160 @@
++---
++title: '结构化日报生成与阅读 (2.4)'
++type: 'feature'
++created: '2026-07-11'
++status: 'in-review'
++baseline_revision: '57e020486f10e898f2dc365055acb70dcd9f8006'
++review_loop_iteration: 0
++followup_review_recommended: false
++context:
++  - '{project-root}/_bmad-output/implementation-artifacts/epic-2-context.md'
++  - '{project-root}/_bmad-output/implementation-artifacts/spec-2-3-theme-page-continuity-tracking.md'
++  - '{project-root}/_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md'
++  - '{project-root}/_bmad-output/implementation-artifacts/spec-1-8-hot-event-detail-and-evidence-timeline.md'
++  - '{project-root}/_bmad-output/planning-artifacts/architecture/architecture-aguhot-2026-07-09/ARCHITECTURE-SPINE.md'
++warnings: ['oversized']
++---
++
++<intent-contract>
++
++## Intent
++
++**Problem:** Epic 2 的「日报」入口在 Story 1.2 落地为 `/daily` **静态占位页**（`日报为结构性占位页…`），主图 nav「日报」指向死页面、违反闭环；epic-2-context 明列的三 Epic-2 BullMQ job 类目之一 **daily digest**（另两个为 2.1 market-signal、2.3 theme-backfill）尚未建：无 `DAILY_DIGEST ||--o{ HOT_EVENT` 写表、无 `published_daily_digest` 读模型、无 digest worker、无 digest core 模块、`/daily` 不读任何发布态读模型。FR10（用户查看一个交易日的结构化日报并跳转详情）完全未落地。
++
++**Approach:** 在 `packages/core/src/modules/digest/` 新建日报子域，**镜像 2.1/2.3 的端到端形态**（ponytail：同一套端口/桩/服务/写表/读模型/页/降级，避免再造异形抽象）：`DigestAdapter` 端口（AD-7，日报结论知识源经端口接入，V1 无 LLM/SDK）+ `StubDigestAdapter`（确定性测试双桩，**仅 verify/e2e 用**）+ `generateDailyDigest`（按 `coverageDate` 选当日已发布事件→adapter 派生每条「简要结论」→校验非空+非投资建议→append 一行 `daily_digest` 写表；adapter 缺失/返回 null/空→返回 null、不写，诚实降级；当日无已发布事件→返回 null）。复用 `publish-orchestrator`（AD-3 公开读模型唯一拥有者）新增 **`refreshPublishedDailyDigest`**——日报聚合按 `coverageDate` 而非 `hotEventId` 键控，故它是 `refreshPublishedReadModel` 的**兄弟函数**（非新分支）：读最新 `daily_digest` 行→upsert `published_daily_digest`，无则 deleteMany。新增 `getPublishedDailyDigest`（按 coverageDate 读）+ `listPublishedDailyDigestCoverageDates`（distinct coverageDate desc，供 `/daily` 选最新日）。新增 `daily-digest` BullMQ worker（**镜像 2-1 `market-reaction-queue.ts`**：lazy Queue + `enqueueDailyDigest(traceId,coverageDate)` + `registerDailyDigestWorker`，adapter resolve undefined→诚实 `{generated:0,skipped}`，stub 绝不被 worker import）。Web 落地：替换 `/daily` 占位页为动态页（默认显示最新已生成日报、支持 `?date=YYYY-MM-DD` 选日；显覆盖日期+生成时间+`<AiLabel>`；每条事件为可点击链 `/events/{hotEventId}` 即 FR10；无日报→显当前覆盖范围+处理中状态、不空白即 AC3）。新增 `verify:digest`（worker，直调 stub）与 `@daily` e2e（独立 seed：产 ≥2 已发布共享同 coverageDate + 生成日报；验证日报页渲染、daily→detail 跳转、无日报降级、不回归）。不做 2.5 跨页返回路径上下文恢复（归 2.5）、不做 cron 自动编排/job 链、不接真实 LLM、不做日报编辑/版本对比/邮件推送——均记 defer。
++
++## Boundaries & Constraints
++
++**Always:**
++- 公开站只读发布态读模型（AD-3）：`/daily` 页只经 `getPublishedDailyDigest`/`listPublishedDailyDigestCoverageDates`/`listPublishedHotEvents` 读 `published_daily_digest`（+ 既有 `published_hot_events` summary），绝不读 `daily_digest`/`hot_events`/`evidence_*`。`published_daily_digest` 由 `publish-orchestrator` 投影（epic-2-context「daily page reads only published_* generated/refreshed by publish-orchestrator」），**非** digest 模块直写。行存在=该 coverageDate 当前已发布日报（无 status 列、无 WHERE 可遗忘，沿用 1-6~2-3 读模型契约）。
++- 写归属（AD-2 单一写拥有者）：`digest` 模块仅拥有 `daily_digest`（append-only 写表，一次生成一行，永不 update/delete 旧行）；`publish-orchestrator` 拥有 `published_daily_digest` 投影。digest 模块**绝不**写 `hot_events`/`published_*`/`evidence_*`/`market_reaction_*`/`event_association_*`/`event_theme_*`。日报的「事件成员身份 + 结论」归 digest 模块。
++- 非建议性 + 诚实（AC2/NFR，沿用 1-8/2-1/2-2/2-3 `noInvestAdvice`）：每条 `DailyDigestEntry.conclusion` 必须非空、且**绝不**含买卖/目标价/持仓/增持减持/建议买/建议卖关键词；adapter 返回的结论命中关键词→`generateDailyDigest` 抛错（**不** silently 截断/改写）。日报标题/文案只描述「当日要点复盘」，无投资建议措辞。日报内容带统一 `<AiLabel>`（UX-DR8）。`verify:digest` 断言每条 conclusion 非空 + 无投资建议关键词。
++- adapter 端口（AD-7）：日报结论知识源（LLM/摘要模型）仅经 `DigestAdapter` 接口进入；domain 不依赖第三方 SDK（V1 无 SDK）。`generateDailyDigest({prisma,traceId,coverageDate,adapter?})`——`adapter` 缺失/返回 null/返回 `[]`→返回 null、不写 set（诚实降级，非造假）。
++- append-only（AD-5 风格）：`DailyDigest` 永不 update/delete，每次生成 append 一行；公开投影取该 coverageDate 最新一行（`createdAt` desc、`id` desc tiebreaker——UUIDv7 单调，沿用 1-8/2-1/2-3 修复）。多次生成追加多行版本（公开取最新）；V1 无自动触发（verify/seed 显式调 + worker 按 coverageDate 回填），cron/编排 defer。
++- 日报成员关系诚实（epic-2-context）：当日无已发布事件→不生成日报（返回 null、不写空日报）；adapter 不可得→不生成；`/daily` 无任何已生成日报→显降级文案 + 当前覆盖范围（当日已发布事件数），**不**留空白页、**不**造假日报（AC3）。
++- daily→detail 跳转明确且非死链（AC2/FR10）：日报每条事件为可点击链 `/events/{hotEventId}`；目标 id 已发布则 200，否则 `notFound()`（AD-8 不泄漏）。日报为时间点制品（versioned）——已生成日报内某事件随后被 takedown 时，该链诚实 404（AD-8），日报不自动重算（重算 append 新行自然剔除，staleness 窗口记 defer）。
++- `daily-digest` worker 诚实（镜像 2-1/2-3）：worker resolve `adapter = undefined`（V1 无真实 LLM）→ 当日 eligible（已发布）事件 `generateDailyDigest` 返回 null → `{generated:0, considered, skipped}`，**不**造假结论。`StubDigestAdapter` 是 TEST-ONLY，`apps/worker` **绝不** import 它（与 2-1/2-2/2-3 stub 惯例一致）；真实 LLM 落地时只换 adapter 装配。
++- `next build` 保持无 `DATABASE_URL`（1-6~2-3 build 不变量延续）：`/daily` `force-dynamic`，不改既有路由动态性；`(public)/layout.tsx`、`public-nav.tsx` 及静态公共页（`design`/`favorites`）仍不 import `@aguhot/core`（nav「日报」入口 1.2 已指向 `/daily`，仅需把占位页换动态）。
++- token 安全：日报页用**真实解析** token（`bg-surface-raised`/`bg-surface-base`/`border-border-hairline`/`ink-*`），事件项复用既有 `<Link>` 卡片形态（1.7/2.3 event-card 同形）；日报页标题用编辑级衬线 `font-display`（UX 主题/section/日报标题惯例）；系统派生日报内容带统一 `<AiLabel>`（UX-DR8）。
++- 不变性约定（沿用 1-4~2-3）：状态/种类用 `const … as const` + union（禁 TS `enum`，`erasableSyntaxOnly`）；`import type` 用于类型；相对导入带 `.js`；camelCase 字段 `@map("snake_case")`；每调带 `traceId`；时间 UTC、展示 ISO 8601/稳定格式；PK UUIDv7（`newTraceId()`）；entries 用 Prisma `Json` 列存 `DailyDigestEntry[]`（变量基数结构，display-only，不做规范化子表/事件目录表——ponytail，沿用 2.2/2.3 items Json 决策）。
++
++**Block If:**
++- 本地 PG `aguhot_dev` 不可达（迁移应用、`verify:digest` 或 `@daily` e2e seed 连接失败）→ HALT，不得跳过集成/e2e 验证。
++- 新增模型/模块致 `pnpm -r typecheck`/`lint` 回归 → HALT。
++- `pnpm --filter web build`（无 `DATABASE_URL`）失败 → HALT。
++
++**Never:**
++- 不接真实 LLM / 摘要模型 / 知识库（无 API key/SDK/网络调用；V1 `StubDigestAdapter` 纯确定性 fixture，**且仅 verify/e2e 用、不在 worker/prod 接线**——fixture 结论上公开页而无真实生成依据会误导读者，违反 NFR「absence as absence」）。具体 LLM provider 采购 defer。
++- 不做 worker cron / 自动编排 / publish→digest 自动触发 / job 链式 / 「每日定点自动跑」（沿用 2-1/2-3「workers 独立、解耦、不自动链」不变量；worker 文件 + 注册是本 story 交付物，运行时由 verify 直调 core 验证逻辑、worker 运行时实测 defer）。`daily-digest` worker 在 prod 仅占位（adapter 缺失→skip），真实触发/cron defer。
++- 不做日报编辑 / 版本对比 / 回滚 / 多版本展示（V1 日报只追加，append-only set 取最新；编辑 UI、版本 diff defer）。不做日报邮件推送 / 订阅 / Webhook（defer）。
++- 不做 2.5 跨页返回路径上下文恢复（scroll 位 / filter 态 / 阅读上下文，UX-DR12 完整恢复归 2.5；本 story 仅做基本导航：daily→detail 链 + 日报页「← 返回首页」链 + 浏览器原生 back，深度上限一层）。不做日报内事件「展开全文」/ 分页 / 排序 toggle（V1 单页全量按证据数降序，分页/sort defer）。
++- 不做 WebSocket/SSE 日报生成进度实时推送（V1 靠读模型刷新 + 主动刷新，epic defer）。不做「历史相似日报」相似度判断（defer）。
++- 不做日报事件规范化目录表 / 日报成员规范化子表（沿用 2.2/2.3 items Json 决策：事件成员身份 hotEventId+title+conclusion 存 per-日报 Json，不为尚不存在的 SQL 单日报查询预建表——ponytail）。
++- 不在公开日报读 `daily_digest`/`hot_events` 绕过读模型；不让既有公共页（`design`/`favorites`）新 import `@aguhot/core`；不改 1-6~2-3 既有 verify/seed/spec 断言（console/feed/detail/revision/merge-split/market-reaction/associations/themes seed/spec 零改动保持绿；新表无 FK 到 hot_events→既有 reset 不需扩，仅在新增 verify/seed 内置清表）；不改 `listPublishedHotEvents`/`listPublishedAssociations`/`listPublishedThemeMemberships` 签名（日报当日事件过滤在 digest 服务层 JS，沿用 1-7/2.2/2.3 window/association JS 过滤模式）；不改 `(public)/layout.tsx`/`public-nav.tsx`（「日报」入口已指向 `/daily`，仅需把占位页换动态）。
++- 不渲染投资建议措辞（无买卖/目标价/持仓，NFR）；不新增 `LLMAdapter`/`ThemeAdapter`/`MarketDataAdapter`/`AssociationAdapter` 之外的新端口别名；不改 `packages/config/src/env.ts`（V1 无 LLM env，adapter defer）。
++
++## I/O & Edge-Case Matrix
++
++| Scenario | Input / State | Expected Output / Behavior | Error Handling |
++|----------|---------------|----------------------------|----------------|
++| 当日有已发布事件+adapter 可得→生成+投影（AC1/AC2） | 某 coverageDate 有 ≥1 已发布事件、`adapter` 返回非空 `DigestConclusion[]`（每项 hotEventId 命中 eligible + conclusion 非空无建议词），`generateDailyDigest` | append 一行 `daily_digest`（items 含 eligible 全集、每项 hotEventId/title/conclusion/latestEvidenceAt/evidenceCount、`source="template"`、`traceId`）；随后 `refreshPublishedDailyDigest` upsert `published_daily_digest`；`getPublishedDailyDigest` 返回非 null（entries） | 无错误预期 |
++| 日报页渲染最新日报 + daily→detail 跳转（AC2/FR10） | 已生成日报（coverageDate=D）、`GET /daily`（无 date 参） | `/daily` 200、编辑级衬线标题显「日报」+ 覆盖日期 D + 生成时间（稳定格式）+ `<AiLabel>`、entries 按证据数降序呈现、每条为可点击链 `/events/{hotEventId}`；点链到达详情页 200 | 无错误预期 |
++| 选日查看（AC2） | 已生成多日日报、`GET /daily?date=YYYY-MM-DD` | 渲染该 date 的日报（若存在）；date 非法/格式错→忽略参、回退最新 | 无错误预期 |
++| 日报未生成→降级不空白（AC3） | 该 coverageDate 无 `published_daily_digest`（未生成/adapter 不可得）但当日有已发布事件，`GET /daily?date=D` 或 `GET /daily`（无任何日报） | 显降级文案「该覆盖日期的日报尚未生成。」+「当前覆盖范围：{D} 已发布 {N} 条热点事件，日报生成中。」；**不**留空白、**不**造假日报 | 无错误预期 |
++| 当日无任何已发布事件→不生成（NFR 不造假） | coverageDate 的 eligible（已发布 + latestEvidenceAt UTC 日 = D）为空，`generateDailyDigest` | 返回 null、**不** append 任何 `daily_digest` 行（无事件→不生成空日报） | 无错误预期 |
++| adapter 缺失/空→不写（NFR 不造假） | `generateDailyDigest({adapter:undefined})` / adapter 返回 null / 返回 `[]` | 返回 null、**不** append 任何 `daily_digest` 行（无数据→不生成→降级） | 无错误预期 |
++| 缺结论/含投资建议词→拒写（AC2 强制） | adapter 返回项 conclusion 空 或 命中建议关键词 / hotEventId 非 eligible | `generateDailyDigest` 抛错（不 silently 截断/改写）、不 append | 显式错误（非法 adapter 输出） |
++| append-only + 投影取最新（AD-5） | 同 coverageDate 已有 ≥1 行，再次 `generateDailyDigest` | append 新行（旧行不 update/delete）；`refresh` 后 `published_daily_digest.generatedAt` = 最新行 `createdAt`、items = 最新行 items | 无错误预期 |
++| daily-digest worker 诚实（镜像 2-1/2-3） | worker 运行、adapter resolve undefined（V1 prod） | eligible（当日已发布）事件 `generateDailyDigest` 返回 null → `{generated:0, considered, skipped}`、不 append、不投影 | 无错误预期 |
++| 已生成日报内事件被 takedown→链诚实 404 | 日报已含事件 X、X 随后被 `decideReview(takedown)` | 日报读模型不自动重算（versioned 制品）；`/events/{X}` 返回 404（AD-8 不泄漏）；重算 append 新行剔除 X | 无错误预期 |
++| 未发布/未知 id 不泄漏（AD-8） | daily→detail 链目标 id 未发布/未知，`GET /events/{id}` | `getPublishedHotEventDetail` 返回 null→`notFound()`（404） | 404 |
++| 运行时无 DB | 请求期 `DATABASE_URL` 缺失/PG 不可达 | `getPrisma()` 显式抛错；`next build`（无 DB）仍成功 | 显式错误 |
++
++</intent-contract>
++
++## Code Map
++
++- `packages/core/prisma/schema.prisma` -- MODIFY：新增 2 模型。`DailyDigest`（id UUIDv7 PK, coverageDate `DateTime` `@map("coverage_date")`, items `Json`（存 `DailyDigestEntry[]`）, source String, traceId String?, createdAt；`@@index([coverageDate])` `@@index([createdAt])` `@@map("daily_digests")`；**无 FK 到 hot_events**——日报成员 hotEventId 为 data-only 外键式链接，沿用 epic「cross-page navigation is not a module」决策）。`PublishedDailyDigest`（coverageDate `DateTime` PK `@map("coverage_date")`, items `Json`, source `@map("source")`, generatedAt `@map("generated_at")`, traceId String?, updatedAt `@updatedAt` `@@map("published_daily_digests")`）。不新增 HotEvent 反向导航（日报非 hotEvent 拥有的子聚合）
++- `packages/core/prisma/migrations/<ts>_daily_digest_read_models/migration.sql` -- NEW：`pnpm --filter core db:migrate -- --name daily_digest_read_models` 生成（2 张新表 + 索引；无 FK）
++- `packages/core/src/modules/digest/types.ts` -- NEW：`DailyDigestEntry`（{hotEventId: string; title: string; conclusion: string; latestEvidenceAt: string(ISO); evidenceCount: number}——非空结论+事件身份）、`DigestConclusion`（adapter 返回单元 {hotEventId: string; conclusion: string}）、`DigestSource`（template const，未来 llm/provider id）、`DigestAdapter`（端口 interface `fetchConclusions({coverageDate, hotEventIds}): Promise<DigestConclusion[] | null>`，镜像 `ThemeAdapter`/`AssociationAdapter`）、`GenerateDailyDigestOptions`({prisma,traceId,coverageDate:Date,adapter?})、`GenerateDailyDigestResult`、`GetLatestDigestOptions`、`DigestRecord`。`PrismaClient` 从 `../../../generated/client.js` 导入；`PublishedHotEventSummary` 从 `../../publish-orchestrator/types.js` 导入（eligible 选取用）
++- `packages/core/src/modules/digest/digest-adapter.ts` -- NEW：`DigestAdapter` 端口 interface（镜像 `theme-adapter.ts` 注释风格：domain 依赖端口、concrete adapter 在 worker/assembly 层解析、provider swap 不动 domain；V1 无 SDK）。类型从 `./types.js` 导入，`export type { DigestAdapter } from "./types.js"`
++- `packages/core/src/modules/digest/stub-digest-adapter.ts` -- NEW：`StubDigestAdapter implements DigestAdapter`——确定性 fixture（`fetchConclusions` 对每个传入 hotEventId 返回固定非空 conclusion，如「当日重点事件，证据链已归档。」，无投资建议词）。导出 `STUB_DIGEST_CONCLUSION = "当日重点事件，证据链已归档。"` 供 seed/spec 断言复用。**仅 verify/e2e 消费**，头注释标明「TEST-ONLY: not wired in worker/prod; real LLM summarizer/provider deferred」
++- `packages/core/src/modules/digest/digest-service.ts` -- NEW：`generateDailyDigest({prisma,traceId,coverageDate,adapter?})`。步骤：(1) 经 `listPublishedHotEvents({prisma,traceId})` 读全量 published summary，JS 过滤 `latestEvidenceAt` UTC 日 = coverageDate UTC 日→`eligible: PublishedHotEventSummary[]`（当日已发布事件，沿用 1-7/2.2/2.3 JS 过滤模式，不改 `listPublishedHotEvents` 签名）；(2) eligible 空→返回 null（无事件→不生成）；(3) adapter 缺失→null；`fetchConclusions({coverageDate, hotEventIds: eligible.map(id)})` 返回 null/`[]`→null、不写；(4) 校验：每项 conclusion 非空、hotEventId ∈ eligible、`noInvestAdvice(conclusion)`（命中买入/卖出/目标价/持仓/增持/减持/建议买/建议卖→抛错，AC2 fail-fast）；(5) 组装 `DailyDigestEntry[]`（按 evidenceCount desc 排序，稳定；title/latestEvidenceAt/evidenceCount 取自 eligible summary，conclusion 取自 adapter）；(6) append 一行 `daily_digest`，items=Json，source="template"，每次 append、永不 update/delete。`getLatestDigest({prisma,traceId,coverageDate})`（同 coverageDate 取 createdAt desc、id desc 首条，无则 null）。`noInvestAdvice` 为纯函数（同输入→同输出）。镜像 `theme-service.ts`/`association-service.ts` 结构
++- `packages/core/src/modules/digest/index.ts` -- NEW：桶导出 `generateDailyDigest`/`getLatestDigest`/`StubDigestAdapter`/`STUB_DIGEST_CONCLUSION` + const `DigestSource` + 类型 `DailyDigestEntry`/`DigestConclusion`/`DigestAdapter`/option/result（沿用 barrel 的 `as FooType` 别名惯例）
++- `packages/core/src/index.ts` -- MODIFY：桶追加 digest 组（`generateDailyDigest`/`getLatestDigest`/`StubDigestAdapter`/const+类型）+ 从 publish-orchestrator 追加导出 `refreshPublishedDailyDigest`/`getPublishedDailyDigest`/`listPublishedDailyDigestCoverageDates`/`PublishedDailyDigest`/`DailyDigestEntry`/`DigestCoverageDateRow`
++- `packages/core/src/modules/publish-orchestrator/publish-service.ts` -- MODIFY：新增 `refreshPublishedDailyDigest({prisma,traceId,coverageDate})`（**兄弟函数**，非 `refreshPublishedReadModel` 分支——日报聚合按 coverageDate 键控非 hotEventId：读最新 `DailyDigest`（coverageDate 匹配、createdAt desc id desc）→有则 upsert `published_daily_digest`（items Json）、无则 deleteMany，镜像 `projectThemes` 的 read→upsert/deleteMany 形态但独立函数）。新增 `getPublishedDailyDigest({prisma,traceId,coverageDate})`（`publishedDailyDigest.findUnique({where:{coverageDate}})`，无则 null）。新增 `listPublishedDailyDigestCoverageDates({prisma,traceId})`（`publishedDailyDigest.findMany({select:{coverageDate:true}, orderBy:{coverageDate:"desc"}})`，返回 distinct coverageDate desc 数组，供 `/daily` 选最新日）。既有 `refreshPublishedReadModel`/`getPublishedHotEventDetail`/其他 list **零改动**——日报非 hotEvent 投影
++- `packages/core/src/modules/publish-orchestrator/types.ts` -- MODIFY：加 `DailyDigestEntry`（{hotEventId,title,conclusion,latestEvidenceAt,generatedAt}——展示态；或从 digest 模块 re-export，沿用 2-3 `ThemeRef` 双定义惯例：publish-orchestrator 自持展示副本、digest 模块持写入副本）、`PublishedDailyDigest`（{coverageDate: Date; entries: DailyDigestEntry[]; source: string; generatedAt: Date}）、`DigestCoverageDateRow`（{coverageDate: Date}）、`RefreshPublishedDailyDigestOptions`({prisma,traceId,coverageDate})、`GetPublishedDailyDigestOptions`({prisma,traceId,coverageDate})、`ListPublishedDailyDigestCoverageDatesOptions`({prisma,traceId})
++- `packages/core/src/modules/publish-orchestrator/index.ts` -- MODIFY：桶追加导出 `refreshPublishedDailyDigest`/`getPublishedDailyDigest`/`listPublishedDailyDigestCoverageDates` + 类型 `PublishedDailyDigest`/`DailyDigestEntry`/`DigestCoverageDateRow`
++- `apps/worker/src/queues/daily-digest-queue.ts` -- NEW：**镜像 `market-reaction-queue.ts`/`theme-backfill-queue.ts`**。`export const DAILY_DIGEST_QUEUE_NAME = "daily-digest"`、`DAILY_DIGEST_JOB_NAME = "daily-digest"`、`DailyDigestJobData { traceId: string; coverageDate: string }`（ISO YYYY-MM-DD，序列化安全）；lazy `Queue` 单例 `getDailyDigestQueue()`；`enqueueDailyDigest(traceId, coverageDate)`（removeOnComplete 100 / removeOnFail 500）；`registerDailyDigestWorker()`：dynamic `import("@aguhot/core")` 取 `getPrisma`/`generateDailyDigest`/`refreshPublishedDailyDigest`，解析 `coverageDate = new Date(data.coverageDate)`，eligible 计数 = 当日已发布事件数（同 digest 服务过滤逻辑或直接调 `generateDailyDigest({adapter:undefined})`→null→skip），result!==null 则 `refreshPublishedDailyDigest({coverageDate})`、`generated++`，per-job try/catch，return `{generated, considered}`。**绝不 import `StubDigestAdapter`**（头注释标 V1 adapter 缺失→generated:0 的诚实下限）
++- `apps/worker/src/index.ts` -- MODIFY：import `registerDailyDigestWorker`、`const dailyDigestWorker = registerDailyDigestWorker()`、并入 `Promise.all([…, dailyDigestWorker.close()])` 优雅关闭；头注释「五 worker」改为「六 worker」并保留「独立、解耦、不自动链」不变量表述；console.log 串追加 `+ daily-digest`
++- `apps/worker/src/verify-digest.ts` -- NEW：镜像 `verify-themes.ts`（resetEnvCache→requireEnv DATABASE_URL→getPrisma→resetState 清表序：顶部追加 `publishedDailyDigest.deleteMany`+`dailyDigest.deleteMany`，再接既有 16 表；新表无 FK→独立清）。seed source+records→clusterEvents→`generateExplanation`→`decideReview(approve)` 产 ≥2 已发布事件（latestEvidenceAt 落当日 UTC）→`generateDailyDigest({coverageDate: todayUTC, adapter:new StubDigestAdapter()})`→`refreshPublishedDailyDigest({coverageDate: todayUTC})`；断言：set append（items ≥1 项、每项 hotEventId/title/conclusion 非空、conclusion=STUB_DIGEST_CONCLUSION、`source=template`、traceId）、`getPublishedDailyDigest` 非 null（entries）、`listPublishedDailyDigestCoverageDates` 含该日、append-only（二次 generate append 第二行、旧行不动、refresh 后投影 generatedAt=最新、items=最新）、当日无已发布事件→返回 null 不写（用独立 clean 子流程：另取一日/过滤为空验证）、adapter 缺失/返回 null/`[]`→返回 null 不写、缺 conclusion/含建议词项→抛错（AC2）、NFR 无投资建议关键词、`refreshPublishedDailyDigest` 无 set 时 deleteMany no-op；打印 PASS。无需 Redis（直调 core）
++- `apps/worker/src/verify-publish.ts` / `verify-market-reaction.ts` / `verify-associations.ts` / `verify-themes.ts` -- MODIFY（最小，沿用 2-1/2-2/2-3 惯例）：优先不动；新表无 FK 到 hot_events→既有 `hotEvent.deleteMany` 不受影响，预期不需扩 resetState；仅当 typecheck/runtime 因新表报错才在各自 resetState 清表序顶部追加 `publishedDailyDigest.deleteMany` + `dailyDigest.deleteMany`（独立、无 FK 序约束）
++- `apps/worker/package.json` -- MODIFY：加 `verify:digest`（`tsx src/verify-digest.ts`）
++- `apps/web/app/(public)/daily/page.tsx` -- MODIFY（替换 1.2 静态占位）：改为 `force-dynamic`、`import { getPrisma, getPublishedDailyDigest, listPublishedDailyDigestCoverageDates, listPublishedHotEvents, newTraceId } from "@aguhot/core"`、`export const dynamic = "force-dynamic"`。`PageProps { searchParams: Promise<{ date?: string }> }`（Next 16 async）；`await searchParams` 取 date（非法/格式错→忽略）。解析 targetCoverageDate：合法 date 参→该日；否则 `listPublishedDailyDigestCoverageDates` 取首个（最新）或无则 undefined。调 `getPublishedDailyDigest({coverageDate})`：非 null→渲染编辑级衬线标题「日报」+ 覆盖日期（稳定格式）+ 生成时间（generatedAt 稳定格式）+ `<AiLabel/>`、entries 按 evidenceCount desc `<ol>`、每条为 `<Link href={\`/events/${hotEventId}\`}>` 显 title + conclusion + meta（latestEvidenceAt/evidenceCount）；null→降级文案「该覆盖日期的日报尚未生成。」+「当前覆盖范围：{date 或 今日} 已发布 {N} 条热点事件，日报生成中。」（N 由 `listPublishedHotEvents` JS 过滤该日 latestEvidenceAt 计数）。顶部「← 返回首页」链 `/`。`max-w-3xl px-6 py-12`，真实 token，无投资建议措辞
++- `apps/web/e2e/seed-daily.ts` -- NEW：镜像 `seed-themes.ts`（resetEnvCache→requireEnv DATABASE_URL→getPrisma→清表 FK 序[顶部含新 2 表]→建 source+N records→clusterEvents→generateExplanation→`decideReview(approve)` 产 **≥2 已发布**事件（latestEvidenceAt 落当日 UTC）→计算 `coverageDate = 当日 UTC YYYY-MM-DD`→`generateDailyDigest({coverageDate, adapter:new StubDigestAdapter()})`（append set）→`refreshPublishedDailyDigest({coverageDate})`（投影）；另产场景见 seedDailyEmpty）；导出 `{ coverageDate, digestEntryIds: string[], digestTitles: string[], generatedAt }` 供 spec。`seedDailyEmpty()`（独立、末位 clean DB）：产 ≥1 已发布事件当日但**不**调 generateDailyDigest→验证降级；导出 `{ emptyCoverageDate, emptyEventCount }`。直接运行守卫（`import.meta.url === \`file://${process.argv[1]}\``）
++- `apps/web/e2e/daily.spec.ts` -- NEW（describe 标题含 `@daily`，`test.describe.configure({mode:"serial"})` + beforeAll `seedDailyDigest()` 捕获 id）：断言 `GET /daily` 200、覆盖日期（`coverageDate`）可见、生成时间可见、`<AiLabel>` 可见、≥2 entries 按证据数序可见、每条为可点击链 `/events/{id}`（FR10）；点某条链→`/events/{id}` 200（daily→detail 闭环）；`GET /daily?date={coverageDate}` 200 渲染该日；`GET /daily?date=bogus` 200 回退最新不崩；末位 `seedDailyEmpty()` 后 `GET /daily` 200 显降级文案「日报尚未生成」+「已发布 N 条」不空白（AC3）；既有 detail/feed/themes 不回归
++- `apps/web/package.json` -- MODIFY：加 `e2e:daily`（`playwright test --grep @daily`，spec beforeAll 自 seed）与 `seed:daily`（`tsx e2e/seed-daily.ts`）；**改 `e2e` 的 `--grep-invert` 追加 `@daily`**；既有 `e2e:console`/`e2e:feed`/`e2e:detail`/`e2e:market-reaction`/`e2e:associations`/`e2e:themes` 等不动
++- `_bmad-output/implementation-artifacts/deferred-work.md` -- MODIFY：追加 2-4 defer（真实 LLM 摘要 provider+SDK、worker cron/自动编排/「每日定点」触发/job 链式、日报编辑/版本对比/回滚/多版本展示、日报邮件推送/订阅/Webhook、跨页返回路径 scroll/filter 上下文恢复归 2.5、日报内事件分页/sort toggle、日报生成进度 SSE/WS 实时推送、takedown 后日报 staleness 自动重算、日报 `published_daily_digest` 全表读 scale ceiling、Json items 列查询性上限、stub 仅测试非 prod 的诚实下限、worker 运行时未实测、历史相似日报相似度判断、当日事件归属用 latestEvidenceAt UTC 日而非真实交易历的 ceiling）
++
++## Tasks & Acceptance
++
++**Execution:**
++- `packages/core/prisma/schema.prisma` + `migrations/<ts>_daily_digest_read_models` -- 加 2 模型（DailyDigest append-only + published_daily_digest 读模型，items Json，无 FK 到 hot_events）+ 迁移 -- AD-2 写归属 + AD-3 公开日报读模型落表（coverageDate 键控）
++- `packages/core/src/modules/digest/{types.ts,digest-adapter.ts,stub-digest-adapter.ts,digest-service.ts,index.ts}` + `src/index.ts` 桶 -- `DigestAdapter` 端口 + `StubDigestAdapter`（测试双桩）+ `generateDailyDigest`/`getLatestDigest`（当日 eligible 选取+强制 conclusion 非空/无建议词+append-only）+ 类型 + 桶 -- digest 子域核心（verify/seed 直调 + worker 回填调）
++- `packages/core/src/modules/publish-orchestrator/{publish-service.ts,types.ts,index.ts}` + `src/index.ts` 桶 -- 新 `refreshPublishedDailyDigest`（兄弟函数，coverageDate 键控投影）+ `getPublishedDailyDigest` 读 + `listPublishedDailyDigestCoverageDates` 查询 + `PublishedDailyDigest`/`DailyDigestEntry` 类型/桶 -- AD-3 公开日报读模型唯一拥有者投影 + 日报页数据源（既有 hotEvent 投影零改动）
++- `apps/worker/src/queues/daily-digest-queue.ts` + `index.ts` 注册/关闭 -- `daily-digest` BullMQ worker（镜像 2-1/2-3：lazy Queue + enqueue(traceId,coverageDate) + register，adapter undefined→诚实 skip，stub 不 import） -- epic 列明 job 类目落地（第三 Epic-2 job）
++- `apps/worker/src/verify-digest.ts` + `package.json:verify:digest` + `verify-publish/market-reaction/associations/themes`（仅必要时扩 reset，预期不需——新表无 FK） -- 确定性自检脚本（eligible 选取/items/conclusion 强制/append-only/投影取最新/当日无事件不写/adapter 缺失不写/缺字段或建议词抛错/listCoverageDates/NFR 无建议词） -- AC1/AC2/AC3 数据级验证；既有 verify 零回归
++- `apps/web/app/(public)/daily/page.tsx` -- 替换 1.2 静态占位为动态日报页（最新日报 + ?date 选日 + 覆盖日期/生成时间/AiLabel + daily→detail 链 + 降级显覆盖范围不空白） -- AC2/AC3/FR10 surface（nav「日报」非死链）
++- `apps/web/e2e/{seed-daily.ts,daily.spec.ts}` + `package.json:e2e:daily/seed:daily` + `e2e` grep-invert 加 @daily -- 独立 seed（≥2 已发布共享当日 + 生成日报；+ empty 场景）+ @daily e2e（日报渲染/daily→detail 跳转/?date 选日/降级不空白/不回归） -- AC1/AC2/AC3 surface-anchored 验证；既有 seed/spec 零改动
++- `_bmad-output/implementation-artifacts/deferred-work.md` -- 追加 2-4 defer 项（LLM provider/SDK/worker-cron/编辑版本对比/邮件订阅/返回路径归 2.5/分页 sort/SSE/staleness 重算/scale ceiling/Json 查询性/stub 诚实下限/worker 运行时未测/相似度/交易历 ceiling） -- 诚实登记
++
++**Acceptance Criteria:**
++- Given 本地 PG 可达且 2-4 迁移已应用，When 经 clusterEvents→generateExplanation→decideReview(approve) 发布 ≥2 候选（latestEvidenceAt 落当日 UTC）后 `generateDailyDigest({coverageDate: 当日UTC, adapter:new StubDigestAdapter()})`→`refreshPublishedDailyDigest({coverageDate: 当日UTC})`，Then `daily_digest` append 一行（items 含 ≥1 项、每项 hotEventId/title/conclusion 非空、conclusion 无投资建议词、`source="template"`），And `published_daily_digest` 投影该最新行，And `getPublishedDailyDigest` 返回非 null 且仅 `SELECT published_*`（不触及 daily_digest/hot_events/evidence_*/associations/themes）。
++- Given ≥1 已发布事件当日 + 已生成日报，When 匿名访问 `/daily`，Then 200、编辑级衬线标题显「日报」+ 覆盖日期 + 生成时间 + `<AiLabel>`，And entries 按证据数降序呈现，And 每条为可点击链 `/events/{hotEventId}`（FR10），And 点链到达 `/events/{id}` 200（非死链），And 无投资建议措辞。
++- Given 已生成多日日报，When 访问 `/daily?date=YYYY-MM-DD`（合法），Then 渲染该 date 的日报；And `?date=bogus` 时 200 回退最新日报不崩。
++- Given 该 coverageDate 无 `published_daily_digest`（未生成/adapter 不可得）但当日有已发布事件，When 访问 `/daily?date=D`（或无任何日报时 `/daily`），Then 显降级文案「该覆盖日期的日报尚未生成。」+「当前覆盖范围：{D} 已发布 {N} 条热点事件，日报生成中。」，And 不空白、不造假日报（AC3）。
++- Given coverageDate 当日无任何已发布事件，When `generateDailyDigest`，Then 返回 null、不 append 任何 set 行（无事件→不生成空日报）。
++- Given adapter 返回项 conclusion 空 或 命中投资建议关键词 或 hotEventId 非 eligible，When `generateDailyDigest`，Then 抛错、不 append（AC2 强制，不 silently 截断/改写）。
++- Given `generateDailyDigest({adapter:undefined})` 或 adapter 返回 null/`[]`，When 调用，Then 返回 null、不 append 任何 set 行（无数据→不造假）。
++- Given `DailyDigest` 已有 ≥1 行同 coverageDate，When 再次 `generateDailyDigest`，Then append 新行（旧行不 update/delete），And `refresh` 后投影 `generatedAt` = 最新行 `createdAt`、items = 最新行 items。
++- Given `daily-digest` worker 运行且 adapter resolve 为 undefined（V1 prod 形态），When 处理当日 eligible（已发布）事件，Then `{generated:0, considered, skipped}`、不 append、不投影（诚实降级，镜像 2-1/2-3）。
++- Given 日报已含事件 X 且 X 随后被 `decideReview(takedown)`，When 访问 `/events/{X}`，Then 404（AD-8 不泄漏，日报为 versioned 制品不自动重算，staleness 记 defer）。
++- Given `/daily` 路由 force-dynamic 且 import `@aguhot/core`，When 执行 `pnpm --filter web build`（无 `DATABASE_URL`），Then 构建成功，And `pnpm -r typecheck`/`pnpm -r lint` 通过，And `pnpm --filter worker verify:digest` 打印 PASS（eligible 选取/items/conclusion 强制/append-only/投影取最新/当日无事件不写/adapter 缺失不写/缺字段或建议词抛错/listCoverageDates/NFR 无建议词），And `pnpm --filter worker verify:publish`/`verify:market-reaction`/`verify:associations`/`verify:themes` 不回归。
++- When 执行 `pnpm --filter web e2e:daily`（`@daily`），Then `/daily` 200 且覆盖日期+生成时间+entries 链可见、daily→detail 点击闭环、`/daily?date=` 选日、降级态显覆盖范围不空白；And `pnpm --filter web e2e`（home/navigation/design）/`e2e:console`/`e2e:feed`/`e2e:detail`/`e2e:market-reaction`/`e2e:associations`/`e2e:themes` 不回归。
++
++## Spec Change Log
++
++<!-- 空，直至首次 bad_spec 回路。 -->
++
++## Review Triage Log
++
++<!-- 空，直至首次 review pass。 -->
++
++## Design Notes
++
++**为何日报聚合用 `refreshPublishedDailyDigest` 兄弟函数（coverageDate 键控）而非并入 `refreshPublishedReadModel`（hotEventId 键控）的新分支：** `refreshPublishedReadModel({prisma,traceId,hotEventId,action})` 的契约是**单 hotEvent 发布态投影**（publish/takedown/none→投影/清该事件的六张 published_hot_event_* 表）。日报是**按 coverageDate 聚合多事件**的独立聚合体（epic 数据模型 `DAILY_DIGEST ||--o{ HOT_EVENT`——一个日报聚合多事件，非一个事件拥有日报），其生命周期不绑定任一单 hotEvent：一个事件 takedown 不应触发整个日报重算（versioned 制品），日报生成是对「当日已发布事件集合」的一次快照。把 coverageDate 键控的投影塞进 hotEventId 键控的 `refreshPublishedReadModel` 会混淆两种聚合契约（参数要么 hotEventId 要么 coverageDate、action 语义不适用日报）。故新增**兄弟函数** `refreshPublishedDailyDigest({prisma,traceId,coverageDate})`——同一模块（publish-orchestrator，AD-3 公开读模型唯一拥有者）职责、不同聚合键、独立函数。这仍忠实满足 epic「daily page reads only published_* generated/refreshed by publish-orchestrator」（owner 是模块而非单函数），只是投影入口按聚合类型分离（ponytail：不为虚幻的「统一 refresh」抽象 overload 既有契约，但也不为日报另起模块——一处模块、两个入口）。
++
++**为何日报成员用 per-日报 append-only `items Json` set（镜像 2.2/2.3 关联/主题）而非规范化 `DigestEntry` 成员表 + `daily_digest_events` join，尽管 epic 数据模型写 `DAILY_DIGEST ||--o{ HOT_EVENT`（一对多）：** 与 2.2/2.3 同理——`DAILY_DIGEST ||--o{ HOT_EVENT` 是概念基数模型（「一个日报含多事件」），**不**规定落表形态。日报查询是「给定 coverageDate → 取该日 entries」（单点读，`published_daily_digest.findUnique({where:{coverageDate}})`），**非** SQL `WHERE digest_id=` 跨日报 join；事件身份（hotEventId/title/conclusion）存 per-日报 Json 足以寻址（hotEventId 是到 `/events/{id}` 的外键式链接）+ 显示。故选最简同形：1 张 append-only 写表（`daily_digest`，items `DailyDigestEntry[]`）+ 1 张 published 读模型（`published_daily_digest`），与 2.1/2.2/2.3 端到端同形（写表/投影），避免再造一套异形 DigestEntry 成员表抽象。epic 的一对多概念被忠实满足（entries 数组在），只是不预建规范化成员表。`daily_digest`/`published_daily_digest` **无 FK 到 hot_events**——日报不「拥有」事件，hotEventId 是 data-only 外键式链接（epic「cross-page navigation is not a module ... foreign-key-style links between them (DAILY_DIGEST → HOT_EVENT)」）；这意味着事件 takedown 不级联清日报（日报是 versioned 时间点制品，链诚实 404 见 AD-8，staleness 重算 defer）。
++
++**为何 `daily-digest` worker 建（镜像 2.1/2.3，区别于 2.2 关联无 worker）：** epic-2-context Technical Decisions 明列三 Epic-2 BullMQ job 类目：market signal aggregation（2-1）、**daily digest（2-4）**、theme backfill（2-3）。daily-digest 在列 → 建 worker（镜像 `market-reaction-queue.ts`/`theme-backfill-queue.ts`：lazy Queue + enqueue + register + eligible/coverageDate + try/catch + refresh 投影 + trace_id）。2.2 关联不在列 → 不建 worker。V1 worker resolve adapter=undefined（无真实 LLM）→ `generateDailyDigest` 返回 null → `{generated:0,skipped}`，prod 诚实降级（与 2-1/2-3 worker 跑但 adapter none→skip 同形）；`StubDigestAdapter` 仅 verify/e2e 直调走通 happy path，**apps/worker 绝不 import**（沿用 stub 惯例）。建一个 epic 明列 job 类目的 worker 占位非仪式——LLM provider 落地时只换 adapter 装配、domain/投影/页零改动；触发（cron/编排/「每日定点」/job 链）defer（沿用「workers 独立、解耦、不自动链」不变量，头注释改「六 worker」）。
++
++**为何 `/daily` 默认显示最新日报 + `?date=` 选日而非 `/daily/[date]` 动态路由：** AC2/AC3 要求「打开日报页→见覆盖日期+生成时间+daily→detail」「未生成→显覆盖范围/处理中不空白」。`/daily`（无参）需落到「最新已生成日报」——这要求先知哪些日有日报（`listPublishedDailyDigestCoverageDates`），再 `getPublishedDailyDigest(最新日)`。选 `?date=` query 参而非 `/daily/[date]` 动态路由：query 参复用 feed-filters 的 `?window=` 模式（1.7/2.2 已落地）、单一页面文件处理「最新 + 选日 + 降级」三分支、避免新增动态段 + 第二个 page 文件（ponytail：最少文件）。`?date=` 非法/格式错→忽略参、回退最新（不崩）。day-to-day 前后翻页导航 defer（归 2.5 返回路径 + 日报分页 defer）。
++
++**为何「当日事件归属」用 `latestEvidenceAt` UTC 日而非真实交易历：** epic-2-context 强调「trading-day scoping」对日报关键，但 V1 无交易历模块/SDK（采购 defer，与 MarketDataAdapter provider 同期 defer）。`PublishedHotEventSummary` 带 `latestEvidenceAt`（事件最近证据时间，publish 时重算）与 `publishedAt`（首次发布时间）。`latestEvidenceAt` 表达「该事件最近活跃于何日」——更贴合「当日热点复盘」语义（一个早就发布但今日有新证据的事件仍属今日），而 `publishedAt` 只记首次发布。故 V1 用 `latestEvidenceAt` 的 UTC 日作为 coverage 归属（elaborated in digest 服务 JS 过滤），记为 ceiling：真实交易历（含盘中/盘后、节假日、时区）落地后替换（defer）。verify/seed 通过控制 evidence record 时间戳使 latestEvidenceAt 落「当日 UTC」保证确定性。
++
++**为何日报内事件被 takedown 后日报不自动重算（versioned 制品 + 诚实 404）：** 日报是「某一刻当日热点的快照」（append-only、versioned、traceable，epic「not an in-place overwrite」）。事件 X 在日报生成后被 takedown，自动重算所有含 X 的历史日报会破坏 versioned 语义（历史制品应忠实反映生成时状态）。链 `/events/{X}` 诚实 404（AD-8 不泄漏未发布）即可——读者见 404 知「该事件已下线」，不造假。重算（append 新行、自然剔除已 takedown 事件）由下次 generateDailyDigest 触发（V1 显式调/cron defer）。staleness 自动检测/重算 defer（记 deferred-work）。
++
++## Verification
++
++**Commands:**
++- `pnpm --filter core db:migrate -- --name daily_digest_read_models` -- expected: 迁移应用、2 新表生成（随后 prisma generate 产出新模型类型）
++- `pnpm -r typecheck` -- expected: 全 workspace 通过（含 digest 子域 + publish-orchestrator 日报投影/读 + worker daily-digest queue + web 日报页）
++- `pnpm -r lint` -- expected: 无错误
++- `pnpm --filter worker verify:digest` -- expected: 集成脚本打印 PASS（eligible 选取/items/conclusion 强制/append-only/投影取最新/当日无事件不写/adapter 缺失不写/缺字段或建议词抛错/listCoverageDates/NFR 无建议词）；仅需 live PG、无 Redis
++- `pnpm --filter worker verify:publish` / `verify:market-reaction` / `verify:associations` / `verify:themes` -- expected: 不回归（新表无 FK 到 hot_events→既有 hotEvent.deleteMany 不受影响，预期不需扩 resetState；仅当报错才扩）
++- `pnpm --filter web build` -- expected: 无 `DATABASE_URL` 下构建成功（日报页 force-dynamic 不在 build 求值；静态公共页 design/favorites 不 import core）
++- `pnpm --filter web e2e:daily` -- expected: seed 后 `@daily` 通过（日报渲染 + 覆盖日期/生成时间/AiLabel + daily→detail 链闭环 + ?date 选日 + 降级显覆盖范围不空白）
++- `pnpm --filter web e2e` / `e2e:console` / `e2e:feed` / `e2e:detail` / `e2e:market-reaction` / `e2e:associations` / `e2e:themes` -- expected: 不回归
++
++**Manual checks (if no CLI):**
++- 已生成日报 `/daily` 显覆盖日期+生成时间+AiLabel+entries 链 `/events/{id}`；点链到达详情页；`/daily?date=YYYY-MM-DD` 选日；`?date=bogus` 回退最新；无日报显「尚未生成 + 已发布 N 条」降级不空白；日报内事件 takedown 后 `/events/{id}` 404；既有详情六分区/证据时间线/市场反应/关联/主题不回归；无投资建议措辞；日报匿名可达无登录墙。
+diff --git a/apps/web/app/(public)/daily/page.tsx b/apps/web/app/(public)/daily/page.tsx
+index 5fab5fe..8d1dd67 100644
+--- a/apps/web/app/(public)/daily/page.tsx
++++ b/apps/web/app/(public)/daily/page.tsx
+@@ -1,30 +1,292 @@
+ import type { Metadata } from "next";
++import Link from "next/link";
++
++import { AiLabel } from "@/components/chips";
++import {
++  getPrisma,
++  getPublishedDailyDigest,
++  listPublishedDailyDigestCoverageDates,
++  listPublishedHotEvents,
++  newTraceId,
++} from "@aguhot/core";
++import type { DailyDigestEntry } from "@aguhot/core";
+ 
+ export const metadata: Metadata = {
+   title: "日报",
+ };
+ 
+ /**
+- * Daily digest placeholder — Story 1.2.
++ * Daily digest page — Story 2.4.
++ *
++ * Replaces the Story 1.2 static placeholder. This is the dynamic daily-digest
++ * page: it reads the published daily-digest read model (published_daily_digests
++ * via getPublishedDailyDigest / listPublishedDailyDigestCoverageDates, AD-3 —
++ * never daily_digests / hot_events / evidence_*). The primary nav "日报" target
++ * resolves here (the main image "日报" entry must not be a dead link — closed
++ * loop, FR10).
++ *
++ * Default view: the LATEST published digest (the max coverageDate from
++ * listPublishedDailyDigestCoverageDates). Date selector: ?date=YYYY-MM-DD picks
++ * a specific coverageDate (invalid/malformed → ignored, falls back to latest).
++ *
++ * Each entry is a clickable link to /events/{hotEventId} (FR10, the daily→detail
++ * jump). Entries are already sorted by evidenceCount DESC at generation time
++ * (strongest signal first).
++ *
++ * Honest degradation (AC3 / epic honesty): when no digest exists for the
++ * coverageDate (V1 prod: daily-digest worker resolves no adapter → no digest
++ * generated / coverageDate has no eligible events), the page renders an explicit
++ * degraded line "该覆盖日期的日报尚未生成。" + the current coverage scope ("已发布
++ * N 条热点事件，日报生成中。") — never fabricated entries, never blank.
++ *
++ * Why force-dynamic + @aguhot/core import is safe for the build:
++ *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
++ *     evaluates it at REQUEST time, not BUILD time. getPrisma() reads
++ *     DATABASE_URL at runtime; that call is never reached during `next build`,
++ *     so the public web build stays DATABASE_URL-free (same mechanism as the
++ *     homepage + detail route + /topics).
+  *
+- * Structural server-component placeholder (isomorphic to the 1.1 `/console`
+- * placeholder): exists only so the primary nav target `/daily` is anonymously
+- * reachable (HTTP 200, inside the public shell). The daily-digest content
+- * lands in a later story; this page renders no business content and has no
+- * session dependency (AD-8). H1 uses `font-display` and colors use `@theme`
+- * ink tokens (Story 1.3).
++ * System-derived digest content carries the uniform <AiLabel/> (UX-DR8). NFR:
++ * conclusions are descriptive, never advisory.
+  */
+-export default function DailyPlaceholderPage() {
++export const dynamic = "force-dynamic";
++
++interface PageProps {
++  searchParams: Promise<{ date?: string }>;
++}
++
++export default async function DailyDigestPage({ searchParams }: PageProps) {
++  const prisma = getPrisma();
++
++  // Parse the ?date= query param (YYYY-MM-DD). Invalid/malformed → undefined
++  // (fall back to latest).
++  const params = await searchParams;
++  const requestedDate = parseCoverageDate(params.date);
++
++  // Resolve the target coverageDate: a valid ?date= → that date; otherwise the
++  // latest published digest's coverageDate (or undefined if no digests exist).
++  let coverageDate: Date | undefined;
++  if (requestedDate !== undefined) {
++    coverageDate = requestedDate;
++  } else {
++    const coverageDates = await listPublishedDailyDigestCoverageDates({
++      prisma,
++      traceId: newTraceId(),
++    });
++    coverageDate = coverageDates[0]?.coverageDate;
++  }
++
++  // Read the published digest for the target coverageDate (if any).
++  const digest =
++    coverageDate !== undefined
++      ? await getPublishedDailyDigest({
++          prisma,
++          traceId: newTraceId(),
++          coverageDate,
++        })
++      : null;
++
++  // For the degraded state: count the day's eligible published events
++  // (latestEvidenceAt UTC day = coverageDate) so the page shows the current
++  // coverage scope. Falls back to "今日" when no coverageDate is resolved.
++  let eligibleCount = 0;
++  let degradedScopeDate: Date;
++  if (coverageDate !== undefined) {
++    degradedScopeDate = coverageDate;
++  } else {
++    degradedScopeDate = new Date();
++  }
++  if (digest === null) {
++    const allPublished = await listPublishedHotEvents({
++      prisma,
++      traceId: newTraceId(),
++    });
++    eligibleCount = countByCoverageDay(allPublished, degradedScopeDate);
++  }
++
+   return (
+-    <div className="mx-auto max-w-3xl px-6 py-20">
+-      <header className="space-y-4">
+-        <h1 className="text-4xl font-display font-semibold tracking-tight">日报</h1>
++    <div className="mx-auto max-w-3xl px-6 py-12">
++      {/* Return link to the homepage (stable back path; originating-context retention is 2.5). */}
++      <Link
++        href="/"
++        className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
++      >
++        <span aria-hidden>←</span> 返回首页
++      </Link>
++
++      <header className="mt-4 space-y-3">
++        <div className="flex items-center gap-2">
++          <h1 className="font-display text-4xl font-semibold tracking-tight text-ink-primary">
++            日报
++          </h1>
++          {digest !== null ? <AiLabel /> : null}
++        </div>
+         <p className="text-lg text-ink-secondary">AGUHOT · 每日热点精选</p>
+       </header>
+-      <section className="mt-12 space-y-3">
+-        <h2 className="text-xl font-semibold">当前状态</h2>
+-        <p className="text-ink-secondary">日报为结构性占位页，每日热点精选将在后续迭代中陆续开放。</p>
+-      </section>
++
++      {digest !== null ? (
++        <DigestContent digest={digest} />
++      ) : (
++        <DegradedContent
++          coverageDate={degradedScopeDate}
++          eligibleCount={eligibleCount}
++        />
++      )}
+     </div>
+   );
+ }
++
++/**
++ * Render the digest: coverage date + generation time header, then one clickable
++ * row per entry (already sorted by evidenceCount DESC at generation time).
++ */
++function DigestContent({
++  digest,
++}: {
++  digest: {
++    coverageDate: Date;
++    entries: DailyDigestEntry[];
++    source: string;
++    generatedAt: Date;
++  };
++}) {
++  return (
++    <section className="mt-10 space-y-4">
++      <dl className="flex flex-wrap gap-x-6 gap-y-1 font-mono text-sm text-ink-tertiary">
++        <div>
++          <dt className="inline">覆盖日期 </dt>
++          <dd className="inline text-ink-primary">
++            {formatDate(digest.coverageDate)}
++          </dd>
++        </div>
++        <div>
++          <dt className="inline">生成时间 </dt>
++          <dd className="inline text-ink-primary">
++            {formatDateTime(digest.generatedAt)}
++          </dd>
++        </div>
++      </dl>
++
++      <ol className="mt-4 space-y-3">
++        {digest.entries.map((entry) => (
++          <li
++            key={entry.hotEventId}
++            className="rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition-colors hover:bg-surface-muted"
++          >
++            <Link
++              href={`/events/${entry.hotEventId}`}
++              className="block space-y-2"
++            >
++              <div className="flex items-baseline justify-between gap-3">
++                <h2 className="text-lg font-semibold text-ink-primary">
++                  {entry.title}
++                </h2>
++                <span className="shrink-0 font-mono text-xs text-ink-tertiary">
++                  {entry.evidenceCount} 来源
++                </span>
++              </div>
++              <p className="text-sm text-ink-secondary">{entry.conclusion}</p>
++              <p className="font-mono text-xs text-ink-tertiary">
++                最近证据 {formatDateTime(new Date(entry.latestEvidenceAt))}
++              </p>
++            </Link>
++          </li>
++        ))}
++      </ol>
++    </section>
++  );
++}
++
++/**
++ * Render the honest degraded state: the coverage date with no digest + the
++ * current coverage scope (eligible published event count for that day). Never
++ * blank, never fabricated.
++ */
++function DegradedContent({
++  coverageDate,
++  eligibleCount,
++}: {
++  coverageDate: Date;
++  eligibleCount: number;
++}) {
++  return (
++    <section className="mt-10 space-y-3">
++      <h2 className="text-xl font-semibold text-ink-primary">当前状态</h2>
++      <p className="text-base text-ink-secondary">
++        该覆盖日期的日报尚未生成。
++      </p>
++      <p className="text-sm text-ink-tertiary">
++        当前覆盖范围：{formatDate(coverageDate)} 已发布 {eligibleCount} 条热点事件，日报生成中。
++      </p>
++    </section>
++  );
++}
++
++// --- helpers -----------------------------------------------------------------
++
++/**
++ * Parse a ?date=YYYY-MM-DD query param into a UTC Date at that day's start.
++ * Returns undefined if the param is missing, empty, or not a valid YYYY-MM-DD
++ * date (the caller falls back to the latest digest). Conservative: rejects
++ * partial/ambiguous formats rather than guessing.
++ */
++function parseCoverageDate(raw: string | undefined): Date | undefined {
++  if (raw === undefined || raw.trim() === "") return undefined;
++  // Strict YYYY-MM-DD check (exactly 10 chars, digits + dashes in the right
++  // places).
++  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return undefined;
++  // Parse as UTC midnight to avoid TZ drift. Date.UTC returns NaN for invalid
++  // dates (e.g. month 13).
++  const [y, m, d] = raw.split("-");
++  const ts = Date.UTC(
++    Number(y),
++    Number(m) - 1, // JS months are 0-indexed
++    Number(d),
++  );
++  if (Number.isNaN(ts)) return undefined;
++  return new Date(ts);
++}
++
++/**
++ * Count published events whose latestEvidenceAt UTC day = coverageDate UTC day.
++ * Mirrors the digest-service filterByCoverageDay logic (the /daily degraded
++ * state shows the same "eligible" count the generator would use).
++ */
++function countByCoverageDay(
++  events: { latestEvidenceAt: Date }[],
++  coverageDate: Date,
++): number {
++  const covY = coverageDate.getUTCFullYear();
++  const covM = coverageDate.getUTCMonth();
++  const covD = coverageDate.getUTCDate();
++  let count = 0;
++  for (const e of events) {
++    const t = e.latestEvidenceAt;
++    if (
++      t.getUTCFullYear() === covY &&
++      t.getUTCMonth() === covM &&
++      t.getUTCDate() === covD
++    ) {
++      count += 1;
++    }
++  }
++  return count;
++}
++
++/**
++ * Locale-stable UTC date format (YYYY-MM-DD). Consistent across build-time TZ
++ * and runtime TZ. Shared shape with the detail page formatter.
++ */
++function formatDate(d: Date): string {
++  return d.toISOString().slice(0, 10);
++}
++
++/**
++ * Locale-stable UTC format (avoid locale-dependent toLocaleString). YYYY-MM-DD
++ * HH:mm UTC is consistent across build-time TZ and runtime TZ. Shared shape with
++ * the feed card + detail page formatter.
++ */
++function formatDateTime(d: Date): string {
++  const iso = d.toISOString();
++  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
++}
+diff --git a/apps/web/e2e/daily.spec.ts b/apps/web/e2e/daily.spec.ts
+new file mode 100644
+index 0000000..4a09ab4
+--- /dev/null
++++ b/apps/web/e2e/daily.spec.ts
+@@ -0,0 +1,159 @@
++import { expect, test } from "@playwright/test";
++
++import { seedDailyDigest, seedDailyEmpty } from "./seed-daily";
++
++/**
++ * Public daily-digest e2e — Story 2.4. Tagged @daily so it runs only under
++ * `pnpm --filter web e2e:daily` (DB-backed + seed) and does NOT run under the
++ * public `pnpm --filter web e2e` (whose --grep-invert excludes @console, @feed,
++ * @detail, @revision, @merge-split, @market-reaction, @associations, @themes,
++ * AND @daily).
++ *
++ * The beforeAll imports and runs seedDailyDigest() (the same function
++ * `pnpm --filter web seed:daily` runs) to capture the dynamic coverageDate +
++ * digest entry ids + titles + generatedAt.
++ *
++ * Requires request-time DATABASE_URL: the /daily route is force-dynamic and
++ * reads the published read models via getPrisma at request time.
++ *
++ * Covers:
++ *   - AC2: GET /daily is 200, the editorial-serif title renders, the coverage
++ *     date renders, the generation time renders, <AiLabel> renders, >=2 entries
++ *     render (sorted by evidenceCount DESC), each entry is a clickable link to
++ *     /events/{hotEventId} (FR10).
++ *   - AC2 closed loop (daily→detail): clicking an entry link lands on the detail
++ *     page (200, non-dead-link).
++ *   - AC2 date selector: GET /daily?date={coverageDate} renders that date's
++ *     digest.
++ *   - AC2 bogus date: GET /daily?date=bogus 200s and falls back to the latest
++ *     digest (does not crash).
++ *   - AC3 degraded (no digest for the coverageDate): seeded by seedDailyEmpty()
++ *     (resets the DB → one published hot event with NO digest). /daily renders
++ *     the degraded text「该覆盖日期的日报尚未生成。」+ the coverage scope, never
++ *     blank. Placed LAST in the serial suite: the earlier tests have already
++ *     run against the populated seed, and serial mode guarantees in-file
++ *     ordering. The DB is intentionally left in the empty-digest state after
++ *     this test (no restore needed).
++ */
++
++test.describe("结构化日报生成与阅读 (Story 2.4) @daily", () => {
++  // Serial mode: beforeAll seeds the DB exactly once and the tests share the
++  // captured ids. Without this, fullyParallel would run beforeAll per worker
++  // and the concurrent seeds would race on the same DB.
++  test.describe.configure({ mode: "serial" });
++
++  let coverageDate: string;
++  let digestEntryIds: string[];
++  let digestTitles: string[];
++
++  test.beforeAll(async () => {
++    const seeded = await seedDailyDigest();
++    coverageDate = seeded.coverageDate;
++    digestEntryIds = seeded.digestEntryIds;
++    digestTitles = seeded.digestTitles;
++  });
++
++  test("AC2 日报页：标题 + 覆盖日期 + 生成时间 + AiLabel + ≥2 entries 链 /events/{id}", async ({ page }) => {
++    const response = await page.goto("/daily");
++    expect(response, "/daily should respond").not.toBeNull();
++    expect(response!.status(), "/daily status should be 200").toBe(200);
++
++    // AC2: the editorial-serif title renders.
++    await expect(
++      page.getByRole("heading", { level: 1, name: "日报" }),
++    ).toBeVisible();
++
++    // AC2: the coverage date renders (YYYY-MM-DD).
++    await expect(page.getByText(`覆盖日期 ${coverageDate}`).first()).toBeVisible();
++
++    // AC2: the generation time renders (contains "生成时间" + a UTC timestamp).
++    await expect(page.getByText(/生成时间 \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/).first()).toBeVisible();
++
++    // AC2 (UX-DR8): the <AiLabel> renders (the digest is system-derived).
++    await expect(page.locator(".bg-accent-warm").first()).toBeVisible();
++
++    // AC2: each digest entry title is visible (>=2 entries).
++    expect(digestEntryIds.length, "expected >=2 digest entries").toBeGreaterThanOrEqual(2);
++    for (const title of digestTitles) {
++      await expect(page.getByText(title).first()).toBeVisible();
++    }
++
++    // AC2 (FR10): each entry is a clickable link to /events/{id}.
++    for (const id of digestEntryIds) {
++      const entryLink = page.locator(`a[href="/events/${id}"]`);
++      await expect(entryLink).toBeVisible();
++    }
++  });
++
++  test("AC2 daily→detail 闭环：点 entry 链到达 /events/{id} 200", async ({ page }) => {
++    await page.goto("/daily");
++    // Click the first entry link.
++    const firstEntry = page.locator(`a[href="/events/${digestEntryIds[0]}"]`);
++    await firstEntry.click();
++    await expect(page).toHaveURL(new RegExp(`/events/${digestEntryIds[0]}$`));
++    // The detail page loads (200 — not a dead link).
++    await expect(
++      page.getByRole("heading", { level: 1 }).first(),
++    ).toBeVisible();
++  });
++
++  test("AC2 选日：GET /daily?date={coverageDate} 渲染该日日报", async ({ page }) => {
++    const response = await page.goto(`/daily?date=${coverageDate}`);
++    expect(response, "/daily?date= should respond").not.toBeNull();
++    expect(response!.status(), "/daily?date= status should be 200").toBe(200);
++
++    // The coverage date renders for the selected date.
++    await expect(page.getByText(`覆盖日期 ${coverageDate}`).first()).toBeVisible();
++
++    // The entries render (at least the first entry title).
++    await expect(page.getByText(digestTitles[0]!).first()).toBeVisible();
++  });
++
++  test("AC2 非法 date：GET /daily?date=bogus 200 回退最新不崩", async ({ page }) => {
++    const response = await page.goto("/daily?date=bogus");
++    expect(response, "/daily?date=bogus should respond").not.toBeNull();
++    expect(response!.status(), "/daily?date=bogus status should be 200").toBe(200);
++
++    // Falls back to the latest digest (the coverage date renders for the latest
++    // seeded date, not a crash/blank).
++    await expect(page.getByText(`覆盖日期 ${coverageDate}`).first()).toBeVisible();
++  });
++
++  test("AC3 降级行：无日报时显降级文案 + 已发布 N 条，不空白", async ({ page }) => {
++    // Reseed the DB to the empty-digest state: ONE published hot event with NO
++    // digest for its coverageDate. Runs LAST in the serial suite so the
++    // populated-state tests above have already executed. Serial mode guarantees
++    // ordering.
++    const emptySeeded = await seedDailyEmpty();
++
++    // /daily (no ?date=) now has no digests at all → degrade. The degraded
++    // coverageDate falls back to "today" (no coverageDate resolved), but the
++    // degraded text + count still render.
++    const response = await page.goto("/daily");
++    expect(response, "/daily (empty) should respond").not.toBeNull();
++    expect(response!.status(), "/daily (empty) status should be 200").toBe(200);
++
++    // AC3: the honest degraded line renders.
++    await expect(
++      page.getByText("该覆盖日期的日报尚未生成。"),
++    ).toBeVisible();
++
++    // AC3: the coverage scope renders (mentions "已发布" + "条热点事件").
++    await expect(
++      page.getByText(/已发布 \d+ 条热点事件，日报生成中。/),
++    ).toBeVisible();
++
++    // AC3: NO entry links to /events/{id} should appear (no digest entries).
++    await expect(page.locator('a[href^="/events/"]')).toHaveCount(0);
++
++    // AC3: the specific emptyCoverageDate should also degrade when explicitly
++    // requested via ?date=.
++    const emptyResponse = await page.goto(
++      `/daily?date=${emptySeeded.emptyCoverageDate}`,
++    );
++    expect(emptyResponse!.status()).toBe(200);
++    await expect(
++      page.getByText("该覆盖日期的日报尚未生成。"),
++    ).toBeVisible();
++  });
++});
+diff --git a/apps/web/e2e/seed-daily.ts b/apps/web/e2e/seed-daily.ts
+new file mode 100644
+index 0000000..71425c2
+--- /dev/null
++++ b/apps/web/e2e/seed-daily.ts
+@@ -0,0 +1,323 @@
++/**
++ * Seed script for the @daily e2e — Story 2.4.
++ *
++ * Run with: pnpm --filter web seed:daily
++ *           (tsx e2e/seed-daily.ts)
++ *
++ * Self-contained: produces THREE published events (>=2 sharing the same
++ * coverageDate with a generated digest, +1 for the empty-degradation scenario):
++ *   - 芯片短缺 (2 evidence rows, same UTC day) → PUBLISHED WITH a generated
++ *     daily digest (StubDigestAdapter, test-only) → exercises AC1/AC2 (daily
++ *     page renders coverageDate + generatedAt + entries + daily→detail links).
++ *   - 锂矿 (1 evidence row, same UTC day) → PUBLISHED (eligible for the same
++ *     digest). Both 芯片短缺 + 锂矿 land on the same coverageDate so the digest
++ *     has >=2 entries.
++ *   - (seedDailyEmpty, a SEPARATE function at the end): produces >=1 published
++ *     event on a coverageDate but does NOT call generateDailyDigest → the /daily
++ *     page degrades honestly for that coverageDate (AC3).
++ * Returns the coverageDate + the digest entry ids + titles + generatedAt so
++ * daily.spec.ts can drive /daily + /daily?date= + /events/{id} assertions.
++ *
++ * Requires DATABASE_URL pointing at local PG. Does NOT touch seed-console.ts,
++ * seed-feed.ts, seed-detail.ts, seed-market-reaction.ts, seed-associations.ts,
++ * seed-themes.ts, or any other seed (zero-change contract). Clears the full
++ * table set (including the new 2.4 digest tables) so re-runs are deterministic.
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateDailyDigest,
++  generateExplanation,
++  getPrisma,
++  listPendingCandidates,
++  newTraceId,
++  refreshPublishedDailyDigest,
++  resetPrisma,
++  STUB_DIGEST_CONCLUSION,
++  StubDigestAdapter,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++const HOUR = 60 * 60 * 1000;
++
++export async function seedDailyDigest(): Promise<{
++  coverageDate: string; // ISO YYYY-MM-DD
++  digestEntryIds: string[];
++  digestTitles: string[];
++  generatedAt: Date;
++}> {
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  // Clean the full table set (same superset as verify-* scripts + the new 2.4
++  // digest tables, order respects FK constraints). The new 2.4 tables
++  // (daily_digests + published_daily_digests) have NO FK to hot_events, so they
++  // are independent of the hot_events clear order — but we clear them at the top
++  // to keep reset ordering uniform. Deterministic re-runs; does NOT touch other
++  // seeds.
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++
++  const source = await prisma.evidenceSource.create({
++    data: {
++      id: newTraceId(),
++      name: "daily-e2e-source",
++      kind: "rss",
++      feedUrl: "file:///unused",
++      enabled: true,
++    },
++  });
++
++  // Two distinct-event record groups (both on the SAME UTC day) → 2 candidates
++  // → 2 published events. Both land on the same coverageDate so the digest has
++  // >=2 entries.
++  // Use a fixed recent UTC day so the seed is deterministic across runs
++  // (independent of "now"). 2024-01-15 UTC.
++  const coverageMs = Date.UTC(2024, 0, 15);
++  const coverageDate = new Date(coverageMs);
++
++  // Group A: 芯片短缺 (2 records that merge into 1 event via overlap)
++  await seedRecord(prisma, source.id, {
++    title: "芯片短缺加剧",
++    summary: "全球芯片供应链短缺影响多个行业",
++    url: `https://verify.test/芯片短缺-1`,
++    publishedAt: new Date(coverageMs),
++  });
++  await seedRecord(prisma, source.id, {
++    title: "芯片短缺加剧持续蔓延",
++    summary: "芯片供应链紧张覆盖汽车手机等行业",
++    url: `https://verify.test/芯片短缺-2`,
++    publishedAt: new Date(coverageMs + 2 * HOUR),
++  });
++
++  // Group B: 锂矿 (single record, distinct event, same UTC day)
++  await seedRecord(prisma, source.id, {
++    title: "锂矿资源储量公布",
++    summary: "锂矿储量数据公布",
++    url: `https://verify.test/锂矿`,
++    publishedAt: new Date(coverageMs + 3 * HOUR),
++  });
++
++  await clusterEvents({ prisma, traceId: newTraceId() });
++
++  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++  if (pending.length < 2) {
++    throw new Error(
++      `[seed-daily] expected >= 2 candidates after cluster, got ${pending.length}`,
++    );
++  }
++
++  // Publish ALL candidates so they are eligible for the digest (latestEvidenceAt
++  // UTC day = coverageDate).
++  for (const candidate of pending) {
++    await generateExplanation({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++    });
++    await decideReview({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      outcome: "approve",
++      reviewer: "daily-e2e-seeder",
++      note: "seed published for daily digest e2e",
++    });
++  }
++
++  // Generate the daily digest for coverageDate with the StubDigestAdapter
++  // (test-only). generateDailyDigest selects eligible events (published +
++  // latestEvidenceAt UTC day = coverageDate), validates conclusions, and
++  // appends one daily_digests row.
++  const result = await generateDailyDigest({
++    prisma,
++    traceId: newTraceId(),
++    coverageDate,
++    adapter: new StubDigestAdapter(),
++  });
++  if (result === null) {
++    throw new Error(
++      `[seed-daily] generateDailyDigest returned null — expected a digest with >=2 entries`,
++    );
++  }
++
++  // Refresh the public projection so the digest flows into
++  // published_daily_digests.
++  await refreshPublishedDailyDigest({
++    prisma,
++    traceId: newTraceId(),
++    coverageDate,
++  });
++
++  resetPrisma();
++
++  return {
++    coverageDate: coverageDate.toISOString().slice(0, 10), // YYYY-MM-DD
++    digestEntryIds: result.entries.map((e) => e.hotEventId),
++    digestTitles: result.entries.map((e) => e.title),
++    generatedAt: result.createdAt,
++  };
++}
++
++/**
++ * Seed for the I/O-matrix row "日报未生成→降级不空白 (AC3)": reset the DB and
++ * create ONE published hot event (latestEvidenceAt on a known UTC day) WITHOUT
++ * generating a digest for that day → the /daily page must render the degraded
++ * text「该覆盖日期的日报尚未生成。」+ current coverage scope. Returns the
++ * emptyCoverageDate + emptyEventCount so daily.spec.ts can assert the degraded
++ * text + the count.
++ *
++ * Same pipeline as seedDailyDigest minus generateDailyDigest: resetEnvCache →
++ * requireEnv DATABASE_URL → getPrisma → clear tables in FK order → source + one
++ * record → clusterEvents → generateExplanation → decideReview(approve),
++ * WITHOUT generateDailyDigest → resetPrisma. Table-clear ordering is identical
++ * so re-runs stay deterministic.
++ */
++export async function seedDailyEmpty(): Promise<{
++  emptyCoverageDate: string; // ISO YYYY-MM-DD
++  emptyEventCount: number;
++}> {
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  // Same clean-the-full-table-set ordering as seedDailyDigest() (order respects
++  // FK constraints; hot_event_revisions has a Restrict FK on hot_events, so it
++  // must be cleared before hot_events). See seedDailyDigest() for the rationale.
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++
++  const source = await prisma.evidenceSource.create({
++    data: {
++      id: newTraceId(),
++      name: "daily-empty-e2e-source",
++      kind: "rss",
++      feedUrl: "file:///unused",
++      enabled: true,
++    },
++  });
++
++  // A single record on a known UTC day → a single candidate → published WITHOUT
++  // a digest. The /daily page will degrade for this coverageDate.
++  const emptyCoverageMs = Date.UTC(2024, 1, 20); // 2024-02-20 UTC
++  const emptyCoverageDate = new Date(emptyCoverageMs);
++  await seedRecord(prisma, source.id, {
++    title: "稀土出口配额调整",
++    summary: "稀土出口配额数据公布",
++    url: `https://verify.test/稀土`,
++    publishedAt: new Date(emptyCoverageMs),
++  });
++
++  await clusterEvents({ prisma, traceId: newTraceId() });
++
++  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++  if (pending.length < 1) {
++    throw new Error(
++      `[seed-daily-empty] expected >= 1 candidate after cluster, got ${pending.length}`,
++    );
++  }
++  const toPublish = pending[0]!;
++
++  // PUBLISHED WITHOUT a digest: generate explanation + approve directly (no
++  // generateDailyDigest) → no published_daily_digests row, so the /daily page
++  // degrades. Same path as the no-digest branch of seedDailyDigest().
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: toPublish.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: toPublish.id,
++    outcome: "approve",
++    reviewer: "daily-empty-e2e-seeder",
++    note: "seed published without digest for degraded-daily e2e",
++  });
++
++  resetPrisma();
++
++  return {
++    emptyCoverageDate: emptyCoverageDate.toISOString().slice(0, 10),
++    emptyEventCount: 1,
++  };
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++// Run directly (tsx e2e/seed-daily.ts) — but NOT when imported by the e2e spec
++// (which calls seedDailyDigest() itself in a beforeAll to capture the ids). ESM
++// direct-run detection: only auto-run + exit when this module is the entry.
++if (import.meta.url === `file://${process.argv[1]}`) {
++  const result = await seedDailyDigest();
++  console.log(
++    `[seed-daily] coverageDate: ${result.coverageDate} | entries: ${result.digestEntryIds.length} (${result.digestTitles.join(", ")})`,
++  );
++  console.log(
++    `[seed-daily] stub conclusion: ${STUB_DIGEST_CONCLUSION}`,
++  );
++  process.exit(0);
++}
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 44137bf..04b9694 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -9,7 +9,7 @@
+     "start": "next start",
+     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+     "lint": "eslint .",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily\"",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+@@ -18,6 +18,7 @@
+     "e2e:market-reaction": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @market-reaction",
+     "e2e:associations": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @associations",
+     "e2e:themes": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @themes",
++    "e2e:daily": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @daily",
+     "seed:console": "tsx e2e/seed-console.ts",
+     "seed:feed": "tsx e2e/seed-feed.ts",
+     "seed:detail": "tsx e2e/seed-detail.ts",
+@@ -25,7 +26,8 @@
+     "seed:merge-split": "tsx e2e/seed-merge-split.ts",
+     "seed:market-reaction": "tsx e2e/seed-market-reaction.ts",
+     "seed:associations": "tsx e2e/seed-associations.ts",
+-    "seed:themes": "tsx e2e/seed-themes.ts"
++    "seed:themes": "tsx e2e/seed-themes.ts",
++    "seed:daily": "tsx e2e/seed-daily.ts"
+   },
+   "dependencies": {
+     "@aguhot/config": "workspace:*",
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index 4fe60f7..bef7094 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -13,6 +13,7 @@
+     "verify:market-reaction": "tsx src/verify-market-reaction.ts",
+     "verify:associations": "tsx src/verify-associations.ts",
+     "verify:themes": "tsx src/verify-themes.ts",
++    "verify:digest": "tsx src/verify-digest.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "typecheck": "tsc --noEmit",
+diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+index d318e01..8070e1c 100644
+--- a/apps/worker/src/index.ts
++++ b/apps/worker/src/index.ts
+@@ -1,25 +1,28 @@
+ /**
+  * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction /
+- * theme-backfill runtime.
++ * theme-backfill / daily-digest runtime.
+  *
+  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
+  * cluster worker. Story 1.8 added the explain worker. Story 2.1 added the
+- * market-reaction worker. Story 2.3 adds the theme-backfill worker alongside
+- * them: validate required env (DB + Redis), connect Redis, register all five
+- * workers, and wire graceful shutdown (close all five). The web request path
+- * never imports this module — heavy work is async (AD-4).
++ * market-reaction worker. Story 2.3 added the theme-backfill worker. Story 2.4
++ * adds the daily-digest worker alongside them: validate required env (DB +
++ * Redis), connect Redis, register all six workers, and wire graceful shutdown
++ * (close all six). The web request path never imports this module — heavy work
++ * is async (AD-4).
+  *
+- * The five workers are independent and idempotent: ingest does not trigger a
++ * The six workers are independent and idempotent: ingest does not trigger a
+  * cluster job automatically, cluster does not trigger an explain job, explain
+- * does not trigger a market-reaction job, and market-reaction does not trigger
+- * a theme-backfill job automatically (the jobs are decoupled; pipeline
+- * chaining/cron orchestration is deferred — see deferred-work.md). Each can run
+- * in isolation against the shared DB/Redis.
++ * does not trigger a market-reaction job, market-reaction does not trigger a
++ * theme-backfill job, and theme-backfill does not trigger a daily-digest job
++ * automatically (the jobs are decoupled; pipeline chaining/cron orchestration
++ * is deferred — see deferred-work.md). Each can run in isolation against the
++ * shared DB/Redis.
+  */
+ 
+ import { requireEnv } from "@aguhot/config";
+ 
+ import { closeRedis, getRedis } from "./queues/connection.js";
++import { registerDailyDigestWorker } from "./queues/daily-digest-queue.js";
+ import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
+ import { registerExplainWorker } from "./queues/explain-queue.js";
+ import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
+@@ -40,8 +43,9 @@ async function main(): Promise<void> {
+   const explainWorker = registerExplainWorker();
+   const marketReactionWorker = registerMarketReactionWorker();
+   const themeBackfillWorker = registerThemeBackfillWorker();
++  const dailyDigestWorker = registerDailyDigestWorker();
+ 
+-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill workers registered and running");
++  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest workers registered and running");
+ 
+   const shutdown = async (signal: string): Promise<void> => {
+     console.log(`[worker] received ${signal}, shutting down`);
+@@ -51,6 +55,7 @@ async function main(): Promise<void> {
+       explainWorker.close(),
+       marketReactionWorker.close(),
+       themeBackfillWorker.close(),
++      dailyDigestWorker.close(),
+     ]);
+     await closeRedis();
+     process.exit(0);
+diff --git a/apps/worker/src/queues/daily-digest-queue.ts b/apps/worker/src/queues/daily-digest-queue.ts
+new file mode 100644
+index 0000000..27620b5
+--- /dev/null
++++ b/apps/worker/src/queues/daily-digest-queue.ts
+@@ -0,0 +1,177 @@
++/**
++ * BullMQ daily-digest queue + worker (worker runtime) — Story 2.4.
++ *
++ * AD-4: daily digest generation runs as a BullMQ job, off the web request path.
++ * The worker dynamically imports @aguhot/core's generateDailyDigest (the single
++ * writer of daily_digests, AD-2) and processes ONE coverageDate per job (the
++ * day's digest aggregates all eligible published events for that date).
++ *
++ * This mirrors theme-backfill-queue.ts / market-reaction-queue.ts in structure
++ * (Story 2.1/2.3): lazy Queue singleton, enqueue helper with job-retention
++ * caps, and a worker that resolves the Prisma client via a dynamic import so
++ * the worker bundle stays the only place that pulls in the domain+DB layer.
++ * epic-2-context lists daily digest as one of three Epic-2 BullMQ job
++ * categories (market-signal aggregation 2-1 / theme backfill 2-3 / daily digest
++ * 2-4) — the worker is built here.
++ *
++ * Queue name + job name are kebab-case per ARCHITECTURE-SPINE conventions
++ * ("daily-digest"). Like the other workers, this job is independent and
++ * idempotent: it does NOT chain from explain/market/theme/publish automatically
++ * (publish→digest auto orchestration / cron is deferred). The worker processes
++ * the coverageDate passed in the job data; running it again is safe (a re-run
++ * appends a fresh row, AD-5 — the intended idempotent append behavior).
++ *
++ * V1 HONESTY RULE (load-bearing, mirrors theme-backfill-queue.ts): the worker
++ * runtime resolves NO adapter (real digest LLM/summarizer provider procurement
++ * is deferred). With no adapter, generateDailyDigest returns null and writes
++ * nothing, so prod degrades honestly — the /daily page shows the degraded state
++ * (AC3). StubDigestAdapter is TEST-ONLY (verify/e2e import it from core and
++ * pass it to generateDailyDigest directly); apps/worker MUST NOT import it.
++ *
++ *   // ponytail: real provider wired when procured — V1 no adapter, prod degrades
++ *   // honestly.
++ *
++ * When a real provider lands, the worker will resolve that adapter here (one
++ * line), generateDailyDigest will flow conclusions through, and source will
++ * flip from "template" to the provider id. The port + append-only write table +
++ * read model + /daily page are all already in place.
++ */
++
++import { Queue, Worker, type Job } from "bullmq";
++
++import { getRedis } from "./connection.js";
++
++export const DAILY_DIGEST_QUEUE_NAME = "daily-digest";
++export const DAILY_DIGEST_JOB_NAME = "daily-digest";
++
++export interface DailyDigestJobData {
++  traceId: string;
++  // ISO YYYY-MM-DD string for serialization safety across BullMQ/Redis. The
++  // worker parses this back into a Date (UTC) before calling generateDailyDigest.
++  coverageDate: string;
++}
++
++/**
++ * Lazily-constructed Queue for enqueuing daily-digest jobs. Reused across
++ * enqueue calls in the same process.
++ */
++let queue: Queue | null = null;
++
++export function getDailyDigestQueue(): Queue {
++  if (queue !== null) return queue;
++  queue = new Queue(DAILY_DIGEST_QUEUE_NAME, {
++    connection: getRedis(),
++  });
++  return queue;
++}
++
++/**
++ * Enqueue one daily-digest job for the given coverageDate. Returns the job so
++ * callers (e.g. the verify script) can await its completion.
++ *
++ * coverageDate is serialized as an ISO YYYY-MM-DD string (BullMQ serializes job
++ * data to JSON; Date objects lose fidelity across the Redis boundary, so the
++ * caller passes a Date and we serialize it here).
++ */
++export async function enqueueDailyDigest(
++  traceId: string,
++  coverageDate: Date,
++): Promise<Job> {
++  const q = getDailyDigestQueue();
++  // Prune completed/failed jobs so Redis does not grow unbounded as daily-
++  // digest runs accumulate (keep a short tail for operator inspection).
++  return q.add(
++    DAILY_DIGEST_JOB_NAME,
++    {
++      traceId,
++      coverageDate: coverageDate.toISOString(),
++    },
++    {
++      removeOnComplete: 100,
++      removeOnFail: 500,
++    },
++  );
++}
++
++/**
++ * Register the daily-digest Worker in this process. The worker resolves the
++ * prisma client, parses the coverageDate from the job data, and calls
++ * generateDailyDigest for that coverageDate. The eligible set (published hot
++ * events whose latestEvidenceAt UTC day = coverageDate) is computed inside
++ * generateDailyDigest (JS filter on listPublishedHotEvents).
++ *
++ * V1 worker runtime resolves NO adapter (procurement deferred) →
++ * generateDailyDigest returns null → the whole job skips → returns
++ * {generated:0, skipped} and prod degrades honestly. This is the intended V1
++ * behavior: the pipeline is correct (verify/e2e prove the happy path with
++ * StubDigestAdapter), but the worker cannot produce real conclusions without a
++ * real provider, so it writes nothing rather than fabricating fixture data.
++ *
++ * When an adapter IS available, the worker calls generateDailyDigest, then
++ * refreshPublishedDailyDigest so the new digest flows into
++ * published_daily_digests immediately. try/catch isolates failures (a bad
++ * coverageDate does not abort the worker).
++ */
++export function registerDailyDigestWorker(): Worker {
++  const worker = new Worker(
++    DAILY_DIGEST_QUEUE_NAME,
++    async (job: Job) => {
++      const {
++        getPrisma,
++        generateDailyDigest,
++        refreshPublishedDailyDigest,
++      } = await import("@aguhot/core");
++      const prisma = getPrisma();
++      const data = job.data as DailyDigestJobData;
++      const coverageDate = new Date(data.coverageDate);
++
++      // V1 HONESTY RULE: no real digest LLM/summarizer provider is wired
++      // (procurement deferred). With no adapter, generateDailyDigest cannot
++      // run — it would return null and write nothing. We skip and report it as
++      // skipped so the caller knows the pipeline ran but produced no digest
++      // (honest degradation, AC3). StubDigestAdapter is test-only and is NOT
++      // imported here.
++      //
++      // ponytail: real provider wired when procured — V1 no adapter, prod
++      // degrades honestly.
++      const adapter = undefined;
++      if (adapter === undefined) {
++        return { generated: 0, considered: 1, skipped: 1 };
++      }
++
++      try {
++        const result = await generateDailyDigest({
++          prisma,
++          traceId: data.traceId,
++          coverageDate,
++          adapter,
++        });
++        if (result !== null) {
++          // Refresh the public projection so the new digest flows into
++          // published_daily_digests immediately (mirrors how the theme-backfill
++          // / market-reaction workers call refresh after a successful generate —
++          // the trigger layer refreshes, the generator only appends).
++          await refreshPublishedDailyDigest({
++            prisma,
++            traceId: data.traceId,
++            coverageDate,
++          });
++          return { generated: 1, considered: 1 };
++        }
++        // No eligible events / adapter returned nothing → degrade honestly.
++        return { generated: 0, considered: 1, skipped: 1 };
++      } catch (error) {
++        // Isolate failures: log and re-throw so BullMQ marks the job failed
++        // (operator can inspect). A bad coverageDate or adapter error does not
++        // crash the worker process.
++        console.error(
++          `[daily-digest-worker] failed for coverageDate ${data.coverageDate}`,
++          error,
++        );
++        throw error;
++      }
++    },
++    { connection: getRedis() },
++  );
++  return worker;
++}
+diff --git a/apps/worker/src/verify-digest.ts b/apps/worker/src/verify-digest.ts
+new file mode 100644
+index 0000000..c02f0eb
+--- /dev/null
++++ b/apps/worker/src/verify-digest.ts
+@@ -0,0 +1,601 @@
++/**
++ * Deterministic integration verification for the daily-digest generation
++ * pipeline + projection — Story 2.4.
++ *
++ * Run with: pnpm --filter worker verify:digest (tsx src/verify-digest.ts).
++ *
++ * It exercises generateDailyDigest with the StubDigestAdapter (test-only,
++ * imported from core — NOT wired in the worker/prod runtime: the daily-digest
++ * worker resolves adapter = undefined so prod degrades honestly) against real
++ * local PostgreSQL (NO Redis needed — generateDailyDigest is pure logic + a DB
++ * append, no BullMQ queue at the generator level, same convention as
++ * verify-themes/verify-associations calling generateThemes/generateAssociations
++ * directly), then asserts the DB state — surface-anchored, not mock-based. It
++ * prints PASS/FAIL and exits non-zero iff any assertion fails.
++ *
++ * Flow:
++ *   resetState → seed one source + archived records (same UTC day) →
++ *   clusterEvents (candidates) → generateExplanation → decideReview(approve)
++ *   → published → generateDailyDigest({coverageDate: todayUTC, adapter:
++ *   StubDigestAdapter}) → refreshPublishedDailyDigest(coverageDate) → assert:
++ *
++ * Assertions:
++ *   1. generateDailyDigest appends one daily_digests row (source="template",
++ *      traceId), entries has >=1 item, every entry has non-empty
++ *      hotEventId/title/conclusion.
++ *   2. After refreshPublishedDailyDigest, published_daily_digests projects the
++ *      digest; getPublishedDailyDigest returns non-null (entries).
++ *   3. AD-5 append-only: a second generateDailyDigest appends a SECOND row (the
++ *      first untouched); refresh projects the latest (generatedAt = gen2,
++ *      entries = gen2 entries).
++ *   4. adapter missing → generateDailyDigest returns null, writes nothing.
++ *   5. adapter returns [] → generateDailyDigest returns null, writes nothing.
++ *   6. AC2: an adapter conclusion that is empty OR contains investment-advice
++ *      keywords OR is for a non-eligible hotEventId → generateDailyDigest
++ *      THROWS (fail-fast, never silently truncates).
++ *   7. NFR: no investment-advice wording in any entry conclusion.
++ *   8. coverageDate with NO eligible published events → generateDailyDigest
++ *      returns null, writes nothing (no empty digest).
++ *   9. listPublishedDailyDigestCoverageDates returns the projected coverageDate.
++ *  10. refreshPublishedDailyDigest with no digest row → deleteMany no-op (does
++ *      not throw, leaves no stale row).
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateDailyDigest,
++  generateExplanation,
++  getPrisma,
++  getPublishedDailyDigest,
++  listPendingCandidates,
++  listPublishedDailyDigestCoverageDates,
++  newTraceId,
++  refreshPublishedDailyDigest,
++  resetPrisma,
++  StubDigestAdapter,
++  STUB_DIGEST_CONCLUSION,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++interface Assertion {
++  name: string;
++  ok: boolean;
++  detail?: string;
++}
++
++// Fixed base time so all seeded records land on the same UTC day
++// deterministically. The coverageDate is derived from this day.
++const BASE_MS = Date.UTC(2024, 0, 1); // 2024-01-01 UTC
++const HOUR = 60 * 60 * 1000;
++
++async function main(): Promise<void> {
++  // Resolve infra (Block-If: PG must be reachable). No Redis needed — the
++  // derivation is pure logic + a DB append. The daily-digest worker exists
++  // (epic-listed job category) but this verify calls generateDailyDigest
++  // directly.
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  const assertions: Assertion[] = [];
++
++  try {
++    await resetState(prisma);
++
++    // --- Seed: one source + 2 archived records (same UTC day) → clusterEvents
++    // → 1+ candidates → approve them so they're published + eligible ---
++    // Two records whose titles are strict subsets of one another so they merge
++    // into ONE candidate via overlap-coefficient (each scores 1.0 against the
++    // accumulated signature). Both have publishedAt on BASE_MS day so
++    // latestEvidenceAt lands on that UTC day.
++    const source = await prisma.evidenceSource.create({
++      data: {
++        id: newTraceId(),
++        name: "verify-digest-source",
++        kind: "rss",
++        feedUrl: "file:///unused",
++        enabled: true,
++      },
++    });
++
++    // Coverage date = the UTC day of BASE_MS (2024-01-01).
++    const coverageDate = new Date(BASE_MS);
++
++    // Record A: publishedAt = BASE_MS (same UTC day as coverageDate).
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺",
++      summary: "全球芯片供应链短缺",
++      url: "https://verify.test/芯片-1",
++      publishedAt: new Date(BASE_MS),
++    });
++    // Record B: publishedAt = BASE_MS + 2h (same UTC day).
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺持续蔓延",
++      summary: "芯片供应链紧张覆盖多个行业",
++      url: "https://verify.test/芯片-2",
++      publishedAt: new Date(BASE_MS + 2 * HOUR),
++    });
++
++    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
++    assertions.push({
++      name: "seed: cluster produced 1 candidate from 2 overlapping records",
++      ok: clusterResult.newCandidates === 1,
++      detail: `newCandidates=${clusterResult.newCandidates}`,
++    });
++
++    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++    if (pending.length !== 1) {
++      throw new Error(
++        `[verify-digest] expected 1 candidate, got ${pending.length}`,
++      );
++    }
++    const candidate = pending[0]!;
++
++    // --- Publish the candidate (digest eligibility = published) ---
++    await generateExplanation({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++    });
++    await decideReview({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      outcome: "approve",
++      reviewer: "verify-digest",
++      note: "publish for digest verify",
++    });
++
++    // --- 1 + 2: generateDailyDigest appends one row, projects, read ---
++    // The StubDigestAdapter returns a fixed non-empty conclusion per passed
++    // hotEventId. generateDailyDigest validates, assembles entries, and appends.
++    const adapter = new StubDigestAdapter();
++    const genTrace = newTraceId();
++    const gen1 = await generateDailyDigest({
++      prisma,
++      traceId: genTrace,
++      coverageDate,
++      adapter,
++    });
++    assertions.push({
++      name: "generateDailyDigest returns non-null",
++      ok: gen1 !== null,
++      detail: gen1 === null ? "(null result)" : "(non-null)",
++    });
++
++    if (gen1 !== null) {
++      assertions.push({
++        name: "entries has >=1 item with non-empty hotEventId/title/conclusion",
++        ok:
++          gen1.entries.length >= 1 &&
++          gen1.entries.every(
++            (e) =>
++              e.hotEventId.trim() !== "" &&
++              e.title.trim() !== "" &&
++              e.conclusion.trim() !== "",
++          ),
++        detail: `entries=${gen1.entries.length}`,
++      });
++      assertions.push({
++        name: "generateDailyDigest result carries source=template + traceId",
++        ok: gen1.source === "template" && gen1.traceId === genTrace,
++        detail: `source=${gen1.source}`,
++      });
++      assertions.push({
++        name: "each entry conclusion = STUB_DIGEST_CONCLUSION (deterministic)",
++        ok: gen1.entries.every((e) => e.conclusion === STUB_DIGEST_CONCLUSION),
++      });
++      // NFR: no investment-advice wording in any conclusion.
++      assertions.push({
++        name: "NFR: no buy/sell/target-price/position wording in any entry conclusion",
++        ok: gen1.entries.every((e) => noInvestAdvice(e.conclusion)),
++        detail: "(checked 买卖/目标价/持仓/买入/卖出/增持/减持 keywords)",
++      });
++    }
++
++    const rowsAfter1 = await prisma.dailyDigest.count({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "daily_digests row appended (count=1, source=template)",
++      ok: rowsAfter1 === 1,
++      detail: `count=${rowsAfter1}`,
++    });
++
++    const row1 = await prisma.dailyDigest.findFirst({
++      where: { coverageDate },
++      orderBy: { createdAt: "asc" },
++    });
++    assertions.push({
++      name: "appended row: source=template, traceId carried",
++      ok: row1 !== null && row1!.source === "template" && row1!.traceId === genTrace,
++    });
++
++    // Refresh the public projection so the digest flows into
++    // published_daily_digests.
++    await refreshPublishedDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++
++    const publishedRow = await prisma.publishedDailyDigest.findUnique({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "published_daily_digests row projected after refresh",
++      ok: publishedRow !== null && publishedRow!.source === "template",
++      detail:
++        publishedRow === null ? "(no row)" : `source=${publishedRow!.source}`,
++    });
++
++    const digest = await getPublishedDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    assertions.push({
++      name: "getPublishedDailyDigest non-null after projection (entries carry through)",
++      ok:
++        digest !== null &&
++        digest!.entries.length >= 1 &&
++        digest!.entries.every(
++          (e) =>
++            e.hotEventId.trim() !== "" &&
++            e.title.trim() !== "" &&
++            e.conclusion.trim() !== "",
++        ),
++      detail:
++        digest === null
++          ? "(null digest)"
++          : `entries=${digest!.entries.length}`,
++    });
++
++    // --- 3: AD-5 append-only — calling AGAIN appends a SECOND row ---
++    await sleep(20);
++    const gen2 = await generateDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++      adapter,
++    });
++    const rowsAfter2 = await prisma.dailyDigest.count({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "AD-5 append-only: second call appends a second row (first untouched)",
++      ok: rowsAfter2 === 2 && gen2 !== null,
++      detail: `count=${rowsAfter2}`,
++    });
++
++    // Refresh projects the LATEST digest (generatedAt = gen2.createdAt, entries
++    // = gen2 entries).
++    await refreshPublishedDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    const digestAfterGen2 = await getPublishedDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    assertions.push({
++      name: "refresh projects the LATEST digest (generatedAt = gen2.createdAt)",
++      ok:
++        gen2 !== null &&
++        digestAfterGen2 !== null &&
++        digestAfterGen2!.generatedAt.getTime() === gen2.createdAt.getTime(),
++      detail:
++        gen2 === null || digestAfterGen2 === null
++          ? "(gen2 or projection null)"
++          : `projected generatedAt=${digestAfterGen2!.generatedAt.toISOString()} vs gen2=${gen2.createdAt.toISOString()}`,
++    });
++
++    // --- 4: adapter missing → returns null, writes nothing ---
++    // Use a coverageDate with no existing digest to keep counts clean.
++    const emptyCoverageDate = new Date(BASE_MS + 30 * 24 * 60 * 60 * 1000); // ~a month later
++    const noAdapter = await generateDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate: emptyCoverageDate,
++      // adapter omitted → V1 prod path (daily-digest worker resolves none) →
++      // returns null.
++    });
++    assertions.push({
++      name: "adapter missing: generateDailyDigest returns null",
++      ok: noAdapter === null,
++    });
++    const noAdapterRows = await prisma.dailyDigest.count({
++      where: { coverageDate: emptyCoverageDate },
++    });
++    assertions.push({
++      name: "adapter missing: no daily_digests row written",
++      ok: noAdapterRows === 0,
++      detail: `count=${noAdapterRows}`,
++    });
++
++    // --- 5: adapter returns [] → returns null, writes nothing ---
++    // (The eligible set for emptyCoverageDate is empty, so we need to also
++    // verify the empty-adapter path. Use the main coverageDate which has
++    // eligible events but an adapter that returns [].)
++    const emptyAdapter: {
++      fetchConclusions: () => Promise<never[]>;
++    } = {
++      fetchConclusions: async () => [],
++    };
++    const emptyResult = await generateDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate, // has eligible events
++      adapter: emptyAdapter as never,
++    });
++    assertions.push({
++      name: "adapter returns []: generateDailyDigest returns null",
++      ok: emptyResult === null,
++    });
++
++    // --- 6: AC2 — empty / advisory conclusion OR non-eligible hotEventId → THROWS --
++    // Empty conclusion.
++    const emptyConclAdapter: {
++      fetchConclusions: () => Promise<
++        { hotEventId: string; conclusion: string }[]
++      >;
++    } = {
++      fetchConclusions: async () => [
++        { hotEventId: candidate.id, conclusion: "" },
++      ],
++    };
++    let threwEmpty = false;
++    try {
++      await generateDailyDigest({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: emptyConclAdapter as never,
++      });
++    } catch {
++      threwEmpty = true;
++    }
++    assertions.push({
++      name: "AC2: empty conclusion → generateDailyDigest throws (fail-fast)",
++      ok: threwEmpty,
++    });
++
++    // Advisory conclusion (contains a buy keyword).
++    const advisoryAdapter: {
++      fetchConclusions: () => Promise<
++        { hotEventId: string; conclusion: string }[]
++      >;
++    } = {
++      fetchConclusions: async () => [
++        { hotEventId: candidate.id, conclusion: "建议买入相关概念股" },
++      ],
++    };
++    let threwAdvisory = false;
++    try {
++      await generateDailyDigest({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: advisoryAdapter as never,
++      });
++    } catch {
++      threwAdvisory = true;
++    }
++    assertions.push({
++      name: "AC2: advisory conclusion → generateDailyDigest throws (fail-fast)",
++      ok: threwAdvisory,
++    });
++
++    // Non-eligible hotEventId (an id not in the eligible set).
++    const nonEligibleAdapter: {
++      fetchConclusions: () => Promise<
++        { hotEventId: string; conclusion: string }[]
++      >;
++    } = {
++      fetchConclusions: async () => [
++        {
++          hotEventId: "00000000-0000-0000-0000-000000000000",
++          conclusion: "该事件不在当日范围内。",
++        },
++      ],
++    };
++    let threwNonEligible = false;
++    try {
++      await generateDailyDigest({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: nonEligibleAdapter as never,
++      });
++    } catch {
++      threwNonEligible = true;
++    }
++    assertions.push({
++      name: "AC2: non-eligible hotEventId → generateDailyDigest throws (fail-fast)",
++      ok: threwNonEligible,
++    });
++
++    // --- 7: NFR already asserted inline above per-entry; re-check the projected row --
++    const projectedRow = await prisma.publishedDailyDigest.findUnique({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "NFR: projected digest entries have no investment-advice keywords",
++      ok:
++        projectedRow !== null &&
++        (projectedRow!.items as Array<{ conclusion: string }>).every((e) =>
++          noInvestAdvice(e.conclusion),
++        ),
++    });
++
++    // --- 8: coverageDate with NO eligible published events → null, no write ---
++    // emptyCoverageDate has no published events on that day. Already asserted
++    // no rows written in step 4 (adapter missing); now assert it also returns
++    // null WITH an adapter (no eligible events → no digest).
++    const noEligible = await generateDailyDigest({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate: emptyCoverageDate,
++      adapter,
++    });
++    assertions.push({
++      name: "coverageDate with no eligible events: returns null (no empty digest)",
++      ok: noEligible === null,
++    });
++    const noEligibleRows = await prisma.dailyDigest.count({
++      where: { coverageDate: emptyCoverageDate },
++    });
++    assertions.push({
++      name: "coverageDate with no eligible events: no daily_digests row written",
++      ok: noEligibleRows === 0,
++      detail: `count=${noEligibleRows}`,
++    });
++
++    // --- 9: listPublishedDailyDigestCoverageDates returns the projected coverageDate ---
++    const coverageDates = await listPublishedDailyDigestCoverageDates({
++      prisma,
++      traceId: newTraceId(),
++    });
++    const hasCoverageDate = coverageDates.some(
++      (r) => r.coverageDate.getTime() === coverageDate.getTime(),
++    );
++    assertions.push({
++      name: "listPublishedDailyDigestCoverageDates returns the projected coverageDate",
++      ok: hasCoverageDate,
++      detail: `dates=${coverageDates.map((r) => r.coverageDate.toISOString().slice(0, 10)).join(",")}`,
++    });
++
++    // --- 10: refreshPublishedDailyDigest with no digest row → deleteMany no-op ---
++    // emptyCoverageDate has no daily_digests row. refresh should not throw and
++    // should leave no published row.
++    let refreshNoOpThrew = false;
++    try {
++      await refreshPublishedDailyDigest({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate: emptyCoverageDate,
++      });
++    } catch {
++      refreshNoOpThrew = true;
++    }
++    const noOpPublishedRow = await prisma.publishedDailyDigest.findUnique({
++      where: { coverageDate: emptyCoverageDate },
++    });
++    assertions.push({
++      name: "refreshPublishedDailyDigest with no digest row: no throw, no stale row (deleteMany no-op)",
++      ok: !refreshNoOpThrew && noOpPublishedRow === null,
++    });
++  } finally {
++    await cleanup(prisma);
++    resetPrisma();
++  }
++
++  report(assertions);
++}
++
++// --- helpers -----------------------------------------------------------------
++
++/**
++ * The investment-advice keywords the derivation must NEVER emit (NFR: the
++ * product must not imply investment advice). Mirrors the digest-service
++ * noInvestAdvice check; duplicated here so this verify script does not depend on
++ * the internal helper export for its own assertion text.
++ */
++const ADVICE_KEYWORDS = ["买入", "卖出", "目标价", "持仓", "增持", "减持", "建议买", "建议卖"];
++
++function noInvestAdvice(text: string): boolean {
++  return !ADVICE_KEYWORDS.some((k) => text.includes(k));
++}
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((resolve) => setTimeout(resolve, ms));
++}
++
++async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  // Order matters for FK constraints. The new 2.4 tables (daily_digests +
++  // published_daily_digests) have NO FK to hot_events (the digest is
++  // coverageDate-keyed, hotEventId is a data-only link), so they are independent
++  // of the hot_events clear order — but we clear them at the top to keep the
++  // reset ordering uniform with verify-themes/verify-associations. The other
++  // published_* + write tables reference hot_events (Cascade FKs) but we clear
++  // them explicitly before hot_events to keep reset ordering uniform.
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  await resetState(prisma);
++}
++
++// --- reporting ---------------------------------------------------------------
++
++function report(assertions: Assertion[]): void {
++  console.log("");
++  console.log("=== digest verification ===");
++  for (const a of assertions) {
++    const mark = a.ok ? "PASS" : "FAIL";
++    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
++  }
++  const failed = assertions.filter((a) => !a.ok);
++  console.log("");
++  if (failed.length === 0) {
++    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
++    process.exit(0);
++  } else {
++    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
++    process.exit(1);
++  }
++}
++
++void main().catch((error) => {
++  console.error("[verify-digest] fatal", error);
++  process.exit(1);
++});
+diff --git a/packages/core/prisma/migrations/20260710165125_daily_digest_read_models/migration.sql b/packages/core/prisma/migrations/20260710165125_daily_digest_read_models/migration.sql
+new file mode 100644
+index 0000000..d0985bf
+--- /dev/null
++++ b/packages/core/prisma/migrations/20260710165125_daily_digest_read_models/migration.sql
+@@ -0,0 +1,29 @@
++-- CreateTable
++CREATE TABLE "daily_digests" (
++    "id" TEXT NOT NULL,
++    "coverage_date" TIMESTAMP(3) NOT NULL,
++    "items" JSONB NOT NULL,
++    "source" TEXT NOT NULL,
++    "trace_id" TEXT,
++    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "daily_digests_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "published_daily_digests" (
++    "coverage_date" TIMESTAMP(3) NOT NULL,
++    "items" JSONB NOT NULL,
++    "source" TEXT NOT NULL,
++    "generated_at" TIMESTAMP(3) NOT NULL,
++    "trace_id" TEXT,
++    "updated_at" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "published_daily_digests_pkey" PRIMARY KEY ("coverage_date")
++);
++
++-- CreateIndex
++CREATE INDEX "daily_digests_coverage_date_idx" ON "daily_digests"("coverage_date");
++
++-- CreateIndex
++CREATE INDEX "daily_digests_created_at_idx" ON "daily_digests"("created_at");
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index e2ba613..ab24829 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -585,3 +585,78 @@ model PublishedHotEventTheme {
+ 
+   @@map("published_hot_event_themes")
+ }
++
++// The append-only write table for a daily digest (AD-2, Story 2.4). The digest
++// module is the sole writer. One row per generation; every successful
++// generateDailyDigest call APPENDS a new row (AD-5: never update or delete prior
++// rows — the full digest history is the version series). publish-orchestrator
++// projects the LATEST row for a coverageDate (createdAt desc, id desc tiebreaker)
++// into published_daily_digests.
++//
++// `coverage_date` is the trading day this digest covers (V1: the UTC day of the
++// member events' latestEvidenceAt — a real trading calendar is deferred). It is
++// NOT unique: multiple generations for the same coverageDate append multiple
++// rows; the public projection takes the latest.
++//
++// `items` is a Json column holding DailyDigestEntry[] ({hotEventId,title,
++// conclusion,latestEvidenceAt,evidenceCount}). These are display-only editorial
++// entries: the /daily page reads the whole array to render one clickable row
++// per event. A normalized child table would be over-engineering for a
++// display-only, variable-cardinality set that is always read whole (ponytail:
++// no child table for a consumerless per-entry SQL query — mirrors the 2.2/2.3
++// items-Json decision). The digest aggregate is keyed by coverageDate (NOT
++// hotEventId), so it has NO FK to hot_events — hotEventId is a data-only
++// foreign-key-style link (epic: "cross-page navigation is not a module ...
++// foreign-key-style links between them (DAILY_DIGEST → HOT_EVENT)"). This means
++// a hotEvent takedown does NOT cascade-clear the digest (the digest is a
++// versioned point-in-time artifact; the link honestly 404s, staleness recompute
++// is deferred).
++//
++// NFR: conclusions are explanatory, never advisory — describe the day's key
++// events, NEVER buy/sell/target-price/position wording. generateDailyDigest
++// validates each conclusion via noInvestAdvice (throws on a keyword hit, AC2
++// fail-fast).
++model DailyDigest {
++  id           String   @id // UUIDv7, assigned in application code (newTraceId)
++  coverageDate DateTime @map("coverage_date")
++  items        Json // DailyDigestEntry[] ({hotEventId,title,conclusion,latestEvidenceAt,evidenceCount}); display-only
++  source       String // DigestSource union value ("template"; future llm/provider id)
++  traceId      String?  @map("trace_id")
++  createdAt    DateTime @default(now()) @map("created_at")
++
++  // No FK to hot_events — the digest is a coverageDate-keyed aggregate, not a
++  // hotEvent-owned sub-aggregate. hotEventId in each entry is a data-only link.
++  @@index([coverageDate])
++  @@index([createdAt])
++  @@map("daily_digests")
++}
++
++// The public read model for a daily digest (AD-3, Story 2.4). The publish-
++// orchestrator module is the sole writer. Row existence = a currently-published
++// digest for that coverageDate: refreshPublishedDailyDigest upserts the row
++// (projecting the latest DailyDigest for the coverageDate), or deleteMany's it
++// when no DailyDigest row exists. There is intentionally NO status column — row
++// existence is the visibility contract (same pattern as the other published_*
++// read models). coverageDate is the PK (one projected digest per coverageDate).
++//
++// Unlike the published_hot_event_* read models, this table has NO FK to
++// hot_events — the digest is a coverageDate-keyed aggregate (mirroring the
++// write table's no-FK decision). `source` records the provenance of the
++// projected digest (operator audit), and `generated_at` records when that
++// digest was generated (so the public surface can show "日报生成于 <time>"). A
++// row may be ABSENT for a coverageDate if generateDailyDigest has not produced
++// a digest (V1 worker resolves no adapter → skip → never produced) — the /daily
++// page renders an honest degraded state in that case (AC3, never fabricates a
++// digest).
++model PublishedDailyDigest {
++  coverageDate DateTime @id @map("coverage_date")
++  items        Json // DailyDigestEntry[] ({hotEventId,title,conclusion,latestEvidenceAt,evidenceCount}); display-only
++  source       String // DigestSource union value
++  generatedAt  DateTime @map("generated_at")
++  traceId      String?  @map("trace_id")
++  updatedAt    DateTime @updatedAt @map("updated_at")
++
++  // No FK to hot_events — coverageDate-keyed aggregate, not hotEvent-owned.
++
++  @@map("published_daily_digests")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 6da3981..0a2a9de 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -129,13 +129,19 @@ export type {
+ // Story 2.2 — published_hot_event_associations projection + detail.associations field +
+ // listPublishedAssociations feed-filter query;
+ // Story 2.3 — published_hot_event_themes projection + detail.themes field +
+-// listPublishedThemeMemberships theme-page query).
++// listPublishedThemeMemberships theme-page query;
++// Story 2.4 — published_daily_digests projection (sibling refreshPublishedDailyDigest,
++// coverageDate-keyed) + getPublishedDailyDigest / listPublishedDailyDigestCoverageDates
++// /daily-page queries).
+ export {
+   refreshPublishedReadModel,
+   listPublishedHotEvents,
+   getPublishedHotEventDetail,
+   listPublishedAssociations,
+   listPublishedThemeMemberships,
++  refreshPublishedDailyDigest,
++  getPublishedDailyDigest,
++  listPublishedDailyDigestCoverageDates,
+ } from "./modules/publish-orchestrator/publish-service.js";
+ export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
+ export type {
+@@ -155,6 +161,11 @@ export type {
+   PublishedHotEventTheme,
+   PublishedThemeMembershipRow,
+   ListPublishedThemeMembershipsOptions,
++  DailyDigestEntry,
++  PublishedDailyDigest,
++  RefreshPublishedDailyDigestOptions,
++  GetPublishedDailyDigestOptions,
++  ListPublishedDailyDigestCoverageDatesOptions,
+ } from "./modules/publish-orchestrator/types.js";
+ 
+ // explanation module (Story 1.8 — deterministic three-partition generation +
+@@ -243,3 +254,27 @@ export type {
+   GetLatestThemeSetOptions,
+   ThemeSetRecord,
+ } from "./modules/theme-linking/index.js";
++
++// digest module (Story 2.4 — DigestAdapter port AD-7 + StubDigestAdapter
++// test-only + generateDailyDigest append-only AD-2 + noInvestAdvice / coverage
++// helpers; coverageDate-keyed aggregate, no FK to hot_events; daily-digest
++// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only).
++export {
++  generateDailyDigest,
++  getLatestDigest,
++  noInvestAdvice,
++  filterByCoverageDay,
++  StubDigestAdapter,
++  STUB_DIGEST_CONCLUSION,
++} from "./modules/digest/index.js";
++export { DigestSource } from "./modules/digest/index.js";
++export type {
++  DigestSource as DigestSourceType,
++  DigestConclusion,
++  DailyDigestEntry as DigestDailyDigestEntry,
++  DigestAdapter,
++  GenerateDailyDigestOptions,
++  GenerateDailyDigestResult,
++  GetLatestDigestOptions,
++  DigestRecord,
++} from "./modules/digest/index.js";
+diff --git a/packages/core/src/modules/digest/digest-adapter.ts b/packages/core/src/modules/digest/digest-adapter.ts
+new file mode 100644
+index 0000000..829f85e
+--- /dev/null
++++ b/packages/core/src/modules/digest/digest-adapter.ts
+@@ -0,0 +1,27 @@
++/**
++ * DigestAdapter port — the boundary domain modules use to reach external digest
++ * knowledge sources (LLM summarizers, extractive summarization providers)
++ * (AD-7).
++ *
++ * The digest sub-domain depends only on this interface; concrete adapters are
++ * resolved and constructed at the call site. In V1 the daily-digest worker
++ * resolves NO adapter (real digest LLM/summarizer provider procurement is
++ * deferred) → generateDailyDigest returns null and writes nothing → prod
++ * degrades honestly (AC3). The only concrete implementation today is
++ * StubDigestAdapter, which is test-only (verify/e2e import it from core and
++ * pass it to generateDailyDigest directly; it is NOT imported by apps/worker
++ * runtime code — the worker resolves adapter = undefined).
++ *
++ * This mirrors theme-adapter.ts (ThemeAdapter) + association-adapter.ts
++ * (AssociationAdapter) + market-reaction/adapter.ts (MarketDataAdapter) +
++ * source-ingest/adapter.ts's in-module port convention (describe-by-purpose: the
++ * port lives in the module it serves, not in a separate contracts dir). Story
++ * 2.4 introduces the digest module alongside the existing Epic-2 modules — same
++ * shape, same conventions.
++ */
++
++// The interface is defined in types.ts (single source of truth, alongside the
++// other digest domain types) and re-exported here as the port's home.
++// Importing code reaches the port via either ./types.js or ./digest-adapter.js
++// — both resolve to the same interface.
++export type { DigestAdapter } from "./types.js";
+diff --git a/packages/core/src/modules/digest/digest-service.ts b/packages/core/src/modules/digest/digest-service.ts
+new file mode 100644
+index 0000000..3d0abf2
+--- /dev/null
++++ b/packages/core/src/modules/digest/digest-service.ts
+@@ -0,0 +1,300 @@
++/**
++ * digest-service — derive a daily digest from an adapter's output and append a
++ * daily_digests row (AD-2/AD-5 append-only).
++ *
++ * Story 2.4. This module owns the daily_digests table (AD-2 append-only). It
++ * derives DailyDigestEntry[] for one coverageDate from:
++ *   1. the day's eligible published events (latestEvidenceAt UTC day =
++ *      coverageDate, JS-filtered from listPublishedHotEvents — same window
++ *      filter pattern as 1.7/2.2/2.3);
++ *   2. a DigestAdapter's per-event conclusions.
++ *
++ *   - generateDailyDigest: select eligible events → read adapter conclusions →
++ *     validate each conclusion (non-empty, no advice keywords, hotEventId ∈
++ *     eligible; throw on violation — AC2 fail-fast, never silently truncate) →
++ *     assemble entries (sorted evidenceCount DESC for stable display) → APPEND
++ *     one daily_digests row (never update/delete prior rows — AD-5). Returns
++ *     null when coverageDate has no eligible published events, adapter is
++ *     missing, returns null, or returns [] (no honest derivation possible;
++ *     never writes a fabricated digest). source="template" in V1.
++ *   - getLatestDigest: createdAt desc + id desc first row for a coverageDate,
++ *     or null. publish-orchestrator reads this at projection time.
++ *   - noInvestAdvice: pure function (text → bool), testable without a DB.
++ *
++ * This module never writes published_* (publish-orchestrator owns those
++ * projections) and never writes hot_events (event-assembly owns those). It only
++ * appends daily_digests.
++ *
++ * The derivation is pure logic + a DB append (no BullMQ, no SDK), so verify/seed
++ * scripts can call it directly without Redis — same convention as
++ * generateThemes / generateMarketReaction / generateExplanation / clusterEvents.
++ * The daily-digest worker calls this with adapter = undefined in V1 prod
++ * (procurement deferred) → honest degradation.
++ */
++
++import type { Prisma } from "../../../generated/client.js";
++import { newTraceId } from "../../shared/ids.js";
++import {
++  listPublishedHotEvents,
++} from "../publish-orchestrator/publish-service.js";
++import type { PublishedHotEventSummary } from "../publish-orchestrator/types.js";
++import { DigestSource } from "./types.js";
++import type {
++  DailyDigestEntry,
++  DigestConclusion,
++  DigestRecord,
++  GenerateDailyDigestOptions,
++  GenerateDailyDigestResult,
++  GetLatestDigestOptions,
++} from "./types.js";
++
++/**
++ * Generate a daily digest for the given coverageDate from the adapter's output,
++ * then APPEND one daily_digests row (source="template"). Returns null and
++ * writes nothing when:
++ *   - the coverageDate has NO eligible published events (no event whose
++ *     latestEvidenceAt UTC day = coverageDate) — never writes an empty digest, OR
++ *   - adapter is undefined (V1 prod: daily-digest worker resolves none), OR
++ *   - adapter.fetchConclusions returns null, OR
++ *   - adapter.fetchConclusions returns an empty array.
++ *
++ * Honest degradation (NFR: never fake data): no eligible events / no adapter /
++ * no data → no digest → the public /daily page shows the degraded state (AC3).
++ * Never fabricates a digest from nothing.
++ *
++ * AC2 non-advisory + identity: every adapter-returned conclusion MUST be
++ * non-empty AND free of investment-advice keywords AND its hotEventId MUST be a
++ * member of the eligible set. A conclusion violating any of these is rejected —
++ * generateDailyDigest THROWS (fail-fast). It never silently truncates/rewrites
++ * a conclusion, because that would make the NFR "never advisory" decorative.
++ *
++ * Append-only (AD-5): every successful call inserts a NEW row. Prior rows are
++ * never updated or deleted — the full digest history for a coverageDate is the
++ * version series. publish-orchestrator projects the LATEST row (createdAt desc,
++ * id desc tiebreaker) into the public read model.
++ *
++ * NFR: the conclusion describes the day's key event and NEVER contains
++ * buy/sell/target-price/position wording (explanatory, not advisory).
++ */
++export async function generateDailyDigest(
++  options: GenerateDailyDigestOptions,
++): Promise<GenerateDailyDigestResult | null> {
++  const { prisma, traceId, coverageDate, adapter } = options;
++
++  // 1. Select eligible events: published hot events whose latestEvidenceAt UTC
++  // day = coverageDate UTC day. JS filter on listPublishedHotEvents output
++  // (same window-filter pattern as 1.7/2.2/2.3). listPublishedHotEvents stays
++  // filter-free (no signature change).
++  const allPublished = await listPublishedHotEvents({ prisma, traceId });
++  const eligible = filterByCoverageDay(allPublished, coverageDate);
++
++  // No eligible events → no digest (never fabricate an empty digest).
++  if (eligible.length === 0) return null;
++
++  // 2. No adapter → honest degradation (V1 prod: daily-digest worker resolves
++  // none). Never fabricate.
++  if (adapter === undefined) return null;
++
++  const hotEventIds = eligible.map((e) => e.hotEventId);
++  const rawConclusions = await adapter.fetchConclusions({
++    coverageDate,
++    hotEventIds,
++  });
++  if (rawConclusions === null) return null;
++  if (rawConclusions.length === 0) return null;
++
++  // 3. Build a hotEventId → PublishedHotEventSummary lookup for entry assembly
++  // + eligible-membership validation.
++  const eligibleById = new Map<string, PublishedHotEventSummary>();
++  for (const e of eligible) {
++    eligibleById.set(e.hotEventId, e);
++  }
++
++  // 4. Validate each conclusion (AC2 + NFR + eligible membership) and assemble
++  // entries. Throw on any violation (fail-fast, never silently truncate).
++  const entries = assembleEntries(rawConclusions, eligibleById);
++
++  // If the adapter returned conclusions but none matched eligible events (all
++  // filtered out as non-eligible), there is nothing to write → degrade. (The
++  // throw in assembleEntries handles hotEventId ∉ eligible; this empty check is
++  // a defensive belt for a zero-entry result after validation.)
++  if (entries.length === 0) return null;
++
++  // 5. APPEND a new digest row (source="template"). Never update or delete
++  // prior rows (AD-5). The items Json column accepts the typed array via a cast
++  // to Prisma.InputJsonValue (Prisma's Json envelope does not infer the element
++  // type; the cast is the documented boundary between TS types and the Json
++  // column — same role as in theme-service.ts / association-service.ts).
++  const created = await prisma.dailyDigest.create({
++    data: {
++      id: newTraceId(),
++      coverageDate,
++      items: entries as unknown as Prisma.InputJsonValue,
++      source: DigestSource.Template,
++      traceId,
++    },
++    select: {
++      id: true,
++      coverageDate: true,
++      items: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  return {
++    dailyDigestId: created.id,
++    coverageDate: created.coverageDate,
++    entries: created.items as unknown as DailyDigestEntry[],
++    source: created.source as DigestSource,
++    createdAt: created.createdAt,
++    traceId,
++  };
++}
++
++/**
++ * Return the latest daily_digests row for a coverageDate (createdAt desc, id
++ * desc tiebreaker — UUIDv7 ids embed a monotonic timestamp so two digests
++ * sharing the same createdAt millisecond resolve deterministically to the newer
++ * one), or null if none exist. publish-orchestrator uses this at projection
++ * time to surface the current digest into the public read model.
++ */
++export async function getLatestDigest(
++  options: GetLatestDigestOptions,
++): Promise<DigestRecord | null> {
++  const { prisma, coverageDate } = options;
++
++  const latest = await prisma.dailyDigest.findFirst({
++    where: { coverageDate },
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      id: true,
++      coverageDate: true,
++      items: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) return null;
++  return {
++    id: latest.id,
++    coverageDate: latest.coverageDate,
++    entries: latest.items as unknown as DailyDigestEntry[],
++    source: latest.source as DigestSource,
++    createdAt: latest.createdAt,
++  };
++}
++
++// --- deterministic helpers ---------------------------------------------------
++
++/**
++ * The investment-advice keywords the digest conclusion must NEVER contain (NFR:
++ * the product must not imply investment advice). The check is conservative —
++ * these are the common buy/sell/target-price/position terms. A digest
++ * conclusion is descriptive (the day's key event summary), never advisory.
++ *
++ * Mirrors the noInvestAdvice check used by verify-themes / verify-associations;
++ * centralized here so generateDailyDigest enforces it at write time (AC2
++ * fail-fast at the generator, not just at verify).
++ */
++const ADVICE_KEYWORDS = [
++  "买入",
++  "卖出",
++  "目标价",
++  "持仓",
++  "增持",
++  "减持",
++  "建议买",
++  "建议卖",
++];
++
++/**
++ * Pure function: returns true iff the text is free of investment-advice
++ * keywords. Same input → identical output (deterministic, testable without DB).
++ */
++export function noInvestAdvice(text: string): boolean {
++  return !ADVICE_KEYWORDS.some((k) => text.includes(k));
++}
++
++/**
++ * Filter the published hot events down to those whose latestEvidenceAt UTC day
++ * matches the coverageDate UTC day. Pure function (same input → identical
++ * output). Mirrors the 1.7 filterByWindow + 2.2/2.3 JS-filter pattern.
++ *
++ * "coverageDate UTC day" = the YYYY-MM-DD of coverageDate interpreted as UTC.
++ * "latestEvidenceAt UTC day" = the YYYY-MM-DD of the event's latestEvidenceAt
++ * (stored UTC). A match means the event's most recent evidence falls on the
++ * coverage day — the day-scoping rule for "this event was hot on this day".
++ */
++export function filterByCoverageDay(
++  events: PublishedHotEventSummary[],
++  coverageDate: Date,
++): PublishedHotEventSummary[] {
++  const covY = coverageDate.getUTCFullYear();
++  const covM = coverageDate.getUTCMonth();
++  const covD = coverageDate.getUTCDate();
++  return events.filter((e) => {
++    const t = e.latestEvidenceAt;
++    return (
++      t.getUTCFullYear() === covY &&
++      t.getUTCMonth() === covM &&
++      t.getUTCDate() === covD
++    );
++  });
++}
++
++/**
++ * Validate each adapter conclusion (AC2 + NFR + eligible membership) and
++ * assemble DailyDigestEntry[]. Throw on any violation (fail-fast). The entries
++ * are sorted by evidenceCount DESC (strongest signal first) with a hotEventId
++ * DESC tiebreaker for stable display order across re-generations.
++ *
++ * Pure function (same input → identical output), testable without DB.
++ */
++function assembleEntries(
++  conclusions: DigestConclusion[],
++  eligibleById: Map<string, PublishedHotEventSummary>,
++): DailyDigestEntry[] {
++  const entries: DailyDigestEntry[] = [];
++  for (const c of conclusions) {
++    // AC2: conclusion must be non-empty.
++    if (c.conclusion === undefined || c.conclusion === null || c.conclusion.trim() === "") {
++      throw new Error(
++        `[digest] adapter returned a conclusion that is empty (hotEventId=${c.hotEventId}); AC2 requires a non-empty conclusion on every entry`,
++      );
++    }
++    // NFR: conclusion must be free of investment-advice keywords.
++    if (!noInvestAdvice(c.conclusion)) {
++      throw new Error(
++        `[digest] adapter returned a conclusion containing investment-advice keywords (hotEventId=${c.hotEventId}); NFR forbids buy/sell/target-price/position wording in digest conclusions`,
++      );
++    }
++    // AC2: hotEventId must be a member of the eligible set (published +
++    // latestEvidenceAt UTC day = coverageDate). A conclusion for a non-eligible
++    // event is rejected — never silently dropped (the adapter contract is to
++    // return conclusions ONLY for the passed eligible hotEventIds).
++    const summary = eligibleById.get(c.hotEventId);
++    if (summary === undefined) {
++      throw new Error(
++        `[digest] adapter returned a conclusion for hotEventId=${c.hotEventId} which is not in the eligible set (published + latestEvidenceAt UTC day = coverageDate); AC2 requires conclusions only for eligible events`,
++      );
++    }
++    const iso = summary.latestEvidenceAt.toISOString();
++    entries.push({
++      hotEventId: summary.hotEventId,
++      title: summary.title,
++      conclusion: c.conclusion,
++      latestEvidenceAt: iso,
++      evidenceCount: summary.evidenceCount,
++    });
++  }
++  // Sort by evidenceCount DESC (strongest signal first), tiebreaker hotEventId
++  // DESC for deterministic stable order across re-generations.
++  entries.sort((a, b) => {
++    const byCount = b.evidenceCount - a.evidenceCount;
++    if (byCount !== 0) return byCount;
++    return a.hotEventId < b.hotEventId ? 1 : a.hotEventId > b.hotEventId ? -1 : 0;
++  });
++  return entries;
++}
+diff --git a/packages/core/src/modules/digest/index.ts b/packages/core/src/modules/digest/index.ts
+new file mode 100644
+index 0000000..9c24d07
+--- /dev/null
++++ b/packages/core/src/modules/digest/index.ts
+@@ -0,0 +1,44 @@
++/**
++ * digest module barrel — Story 2.4 (daily digest generation + reading).
++ *
++ * Owns the daily_digests table (AD-2 append-only, one row per generation,
++ * coverageDate-keyed). Exposes the digest generator, the latest-digest read
++ * query, the DigestAdapter port, and the test-only stub. The Prisma client
++ * lives one level up and is re-exported from the package barrel.
++ *
++ * This module never writes published_* (publish-orchestrator owns the public
++ * projection published_daily_digests) or hot_events (event-assembly owns those).
++ * It only appends daily_digests; publish-orchestrator reads the latest at
++ * projection time and writes the public read model.
++ *
++ * Story 2.4 adds a daily-digest worker (epic lists daily digest as a job
++ * category). The worker resolves adapter = undefined (procurement deferred) so
++ * generateDailyDigest returns null and prod degrades honestly. The worker does
++ * NOT import StubDigestAdapter; verify/e2e pass it to generateDailyDigest
++ * directly.
++ *
++ * Unlike the other Epic-2 modules, the digest is keyed by coverageDate (not
++ * hotEventId) — it aggregates the day's eligible published events into one
++ * versioned artifact. publish-orchestrator therefore has a SIBLING function
++ * refreshPublishedDailyDigest (not a new branch in refreshPublishedReadModel)
++ * to project the coverageDate-keyed read model.
++ */
++
++export {
++  generateDailyDigest,
++  getLatestDigest,
++  noInvestAdvice,
++  filterByCoverageDay,
++} from "./digest-service.js";
++export { StubDigestAdapter, STUB_DIGEST_CONCLUSION } from "./stub-digest-adapter.js";
++export { DigestSource } from "./types.js";
++export type {
++  DigestSource as DigestSourceType,
++  DigestConclusion,
++  DailyDigestEntry,
++  DigestAdapter,
++  GenerateDailyDigestOptions,
++  GenerateDailyDigestResult,
++  GetLatestDigestOptions,
++  DigestRecord,
++} from "./types.js";
+diff --git a/packages/core/src/modules/digest/stub-digest-adapter.ts b/packages/core/src/modules/digest/stub-digest-adapter.ts
+new file mode 100644
+index 0000000..f357224
+--- /dev/null
++++ b/packages/core/src/modules/digest/stub-digest-adapter.ts
+@@ -0,0 +1,55 @@
++/**
++ * StubDigestAdapter — a deterministic test-only DigestAdapter (AD-7).
++ *
++ * TEST-ONLY: this adapter is NOT wired in the worker/prod runtime. It returns
++ * fixture conclusions (a fixed non-empty conclusion per passed hotEventId).
++ * Putting fixture conclusions on a public daily page without a real LLM
++ * summarizer would mislead readers — a violation of the NFR "absence shown as
++ * absence, never fabricated completeness" (see spec Design Notes).
++ *
++ * V1 has a daily-digest worker (epic lists daily digest as a BullMQ job
++ * category) but the worker resolves adapter = undefined (procurement deferred)
++ * → generateDailyDigest returns null → prod degrades honestly (AC3). This stub
++ * exists solely so verify/e2e can call generateDailyDigest directly and
++ * exercise the happy path (proving the pipeline is correct). apps/worker does
++ * NOT import it.
++ *
++ * The fixture is deterministic: every call returns the SAME conclusion for each
++ * passed hotEventId (one fixed string, no per-event variation) so verify/e2e
++ * assertions on the projected entries are deterministic across runs. The
++ * conclusion carries no investment-advice keywords (NFR).
++ */
++
++import type { DigestConclusion, DigestAdapter } from "./types.js";
++
++/**
++ * The fixed conclusion the stub reports for every event. Exported so verify/e2e
++ * can assert the projected daily-digest entries carry exactly this conclusion
++ * (deterministic across runs). Non-empty and free of investment-advice wording.
++ */
++export const STUB_DIGEST_CONCLUSION = "当日重点事件，证据链已归档。";
++
++/**
++ * Deterministic stub digest adapter. Returns a fixed non-null DigestConclusion[]
++ * on every call — one conclusion per passed hotEventId, all carrying the same
++ * STUB_DIGEST_CONCLUSION. See the module doc for why this is test-only.
++ *
++ * Returns null when no hotEventIds are passed (the caller writes nothing and
++ * degrades honestly — mirrors the real adapter contract: no events → no
++ * conclusions → no digest).
++ */
++export class StubDigestAdapter implements DigestAdapter {
++  async fetchConclusions(args: {
++    coverageDate: Date;
++    hotEventIds: string[];
++  }): Promise<DigestConclusion[] | null> {
++    // No events → no conclusions (caller degrades honestly).
++    if (args.hotEventIds.length === 0) return null;
++    // Return a fresh array each call so callers cannot mutate the shared
++    // fixture constant (defensive copy).
++    return args.hotEventIds.map((hotEventId) => ({
++      hotEventId,
++      conclusion: STUB_DIGEST_CONCLUSION,
++    }));
++  }
++}
+diff --git a/packages/core/src/modules/digest/types.ts b/packages/core/src/modules/digest/types.ts
+new file mode 100644
+index 0000000..d6ecd38
+--- /dev/null
++++ b/packages/core/src/modules/digest/types.ts
+@@ -0,0 +1,196 @@
++/**
++ * digest domain types — Story 2.4.
++ *
++ * The digest module owns daily_digests (AD-2 append-only write table, one row
++ * per generation, keyed by coverageDate NOT hotEventId). It derives a
++ * DailyDigestEntry[] (one per published hot event whose latestEvidenceAt UTC day
++ * = coverageDate) from a DigestAdapter's output — each entry carries the
++ * event's identity (hotEventId, title), a NON-EMPTY conclusion (the day's brief
++ * per-event summary, derived from the adapter), and evidence metadata
++ * (latestEvidenceAt, evidenceCount). The public read model is owned by
++ * publish-orchestrator (published_daily_digests).
++ *
++ * V1 has NO real digest LLM/summarizer provider (procurement deferred). The
++ * daily-digest worker (epic lists daily digest as one of three Epic-2 BullMQ
++ * job categories: market-signal 2-1 / theme-backfill 2-3 / daily-digest 2-4)
++ * resolves adapter = undefined → generateDailyDigest returns null → prod
++ * degrades honestly (AC3). StubDigestAdapter is test-only (verify/e2e call
++ * generateDailyDigest directly with it to exercise the happy path). apps/worker
++ * does NOT import the stub.
++ *
++ * NFR: digest conclusions are explanatory, never advisory. A conclusion
++ * describes the day's key event and NEVER contains buy/sell/target-price/
++ * position wording. generateDailyDigest validates each conclusion via
++ * noInvestAdvice (throws on a keyword hit, AC2 fail-fast — never silently
++ * truncates/rewrites).
++ *
++ * `items` is a variable-cardinality, display-only set that is always read whole
++ * (/daily renders all entries as clickable rows). It is stored as a Prisma Json
++ * column holding DailyDigestEntry[] rather than a normalized child table
++ * (ponytail: no child table for a consumerless per-entry SQL query — mirrors
++ * the 2.2/2.3 items-Json decision). The digest has NO FK to hot_events —
++ * hotEventId in each entry is a data-only foreign-key-style link (epic:
++ * "cross-page navigation is not a module").
++ */
++
++import type { PrismaClient } from "../../../generated/client.js";
++import type { PublishedHotEventSummary } from "../publish-orchestrator/types.js";
++
++/**
++ * The provenance of a daily digest. Stored on every daily_digests row. The
++ * public read model carries this through as `source`.
++ *
++ *   - template: V1 deterministic fixture-backed derivation
++ *     (StubDigestAdapter, test-only). When a real LLM summarizer/provider lands,
++ *     source becomes the provider id (e.g. "openai:v1").
++ *
++ * V1 worker resolves NO adapter (real digest LLM/summarizer provider
++ * procurement is deferred), so no row with source="template" is ever written in
++ * prod by the worker — only by verify/e2e direct calls. The worker exists (epic
++ * lists daily-digest as a job category) but its adapter resolves to undefined →
++ * generateDailyDigest returns null → honest degradation.
++ */
++export const DigestSource = {
++  Template: "template",
++} as const;
++
++export type DigestSource = (typeof DigestSource)[keyof typeof DigestSource];
++
++/**
++ * One unit of adapter output — the brief conclusion for one hot event in the
++ * day's digest. The adapter resolves the event's relevant summary and returns
++ * it with a NON-EMPTY conclusion. generateDailyDigest validates each conclusion
++ * is non-empty + free of investment-advice keywords (AC2, throws on violation).
++ *
++ *   - hotEventId: the event this conclusion pertains to. MUST be a member of
++ *     the eligible (published, latestEvidenceAt UTC day = coverageDate) set.
++ *     generateDailyDigest rejects conclusions for hotEventIds outside the
++ *     eligible set (AC2 fail-fast).
++ *   - conclusion: NON-EMPTY brief summary. Descriptive, never advisory.
++ */
++export interface DigestConclusion {
++  hotEventId: string;
++  conclusion: string;
++}
++
++/**
++ * The DigestAdapter port (AD-7). All digest knowledge sources (LLM summarizers,
++ * extractive summarization providers) enter exclusively through this interface;
++ * domain modules never import a third-party SDK. V1 has no concrete
++ * implementation wired in prod (procurement deferred) — the daily-digest worker
++ * resolves `adapter = undefined` so generateDailyDigest returns null and prod
++ * degrades honestly (AC3). verify/e2e pass StubDigestAdapter directly to
++ * generateDailyDigest. The only concrete implementation today is
++ * StubDigestAdapter (test-only).
++ *
++ * Defined in digest-adapter.ts and re-exported here for the package barrel.
++ */
++export interface DigestAdapter {
++  /**
++   * Fetch the per-event brief conclusions for the given coverage date.
++   * Implementations resolve each eligible hot event's relevant summary and
++   * return them with a NON-EMPTY conclusion on each item (AC2). Return null or
++   * an empty array when no conclusions are available (the caller writes nothing
++   * and degrades honestly). Each returned item MUST have a non-empty conclusion
++   * free of investment-advice keywords — items with empty/advisory conclusions
++   * are rejected by generateDailyDigest (it throws, never silently truncates).
++   *
++   * The adapter receives the full eligible hotEventId list so it can produce a
++   * conclusion per event (V1 stub returns one fixed conclusion for every
++   * passed id; a real LLM would summarize each event's evidence).
++   */
++  fetchConclusions(args: {
++    coverageDate: Date;
++    hotEventIds: string[];
++  }): Promise<DigestConclusion[] | null>;
++}
++
++/**
++ * One daily-digest entry — the display-only projection the /daily page renders
++ * as one clickable row per event. Each entry carries:
++ *
++ *   - hotEventId: data-only foreign-key-style link to /events/{hotEventId}
++ *     (FR10 daily→detail jump). Not a DB FK — the digest is coverageDate-keyed.
++ *   - title: the event's title at digest generation time (carried from the
++ *     eligible published summary). Descriptive, never advisory.
++ *   - conclusion: NON-EMPTY brief summary (from the adapter). AC2: descriptive,
++ *     never advisory (no buy/sell/target-price/position).
++ *   - latestEvidenceAt: ISO 8601 string of the event's most recent evidence
++ *     time (carried from the eligible published summary for display).
++ *   - evidenceCount: number of supporting evidence records (multi-source signal
++ *     for display).
++ *
++ * Entries are sorted by evidenceCount DESC at generation time so the /daily
++ * page renders the strongest-signal events first (stable order, deterministic).
++ */
++export interface DailyDigestEntry {
++  hotEventId: string;
++  title: string;
++  conclusion: string;
++  latestEvidenceAt: string; // ISO 8601
++  evidenceCount: number;
++}
++
++/**
++ * Options for generateDailyDigest. `{ prisma, traceId, coverageDate, adapter? }`
++ * mirrors the established command pattern (generateThemes,
++ * generateMarketReaction) plus an optional adapter, but keyed by coverageDate
++ * (the day the digest covers) rather than hotEventId (the digest aggregates
++ * multiple events). When adapter is omitted, returns null, or returns null/[],
++ * the function returns null and writes nothing (honest degradation — never
++ * fabricates a digest from no data). Otherwise it selects the day's eligible
++ * (published + latestEvidenceAt UTC day = coverageDate) events, validates each
++ * adapter conclusion (non-empty + no advice keywords + hotEventId ∈ eligible),
++ * and APPENDS one daily_digests row (source="template").
++ */
++export interface GenerateDailyDigestOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++  adapter?: DigestAdapter;
++}
++
++/**
++ * The result of a successful generation: the newly-appended digest's id + the
++ * coverageDate + the entries + provenance + createdAt. Callers
++ * (publish-orchestrator projection, verify/seed) consume the entries directly.
++ */
++export interface GenerateDailyDigestResult {
++  dailyDigestId: string;
++  coverageDate: Date;
++  entries: DailyDigestEntry[];
++  source: DigestSource;
++  createdAt: Date;
++  traceId: string;
++}
++
++/**
++ * Options for getLatestDigest — returns the most recent daily_digests row for a
++ * coverageDate (createdAt desc, id desc tiebreaker) or null if none exist.
++ * publish-orchestrator uses this at projection time.
++ */
++export interface GetLatestDigestOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++}
++
++/**
++ * One daily-digest row projected for read. Mirrors the daily_digests columns
++ * the public projection + operator audit need (no write paths here).
++ */
++export interface DigestRecord {
++  id: string;
++  coverageDate: Date;
++  entries: DailyDigestEntry[];
++  source: DigestSource;
++  createdAt: Date;
++}
++
++/**
++ * Re-export so digest-service can import the eligible-event summary type from
++ * one place. The digest's eligible set = published hot events whose
++ * latestEvidenceAt UTC day = coverageDate (JS filter on
++ * listPublishedHotEvents output, same window-filter pattern as 1.7/2.2/2.3).
++ */
++export type { PublishedHotEventSummary };
+diff --git a/packages/core/src/modules/publish-orchestrator/index.ts b/packages/core/src/modules/publish-orchestrator/index.ts
+index 21ed023..a64d98c 100644
+--- a/packages/core/src/modules/publish-orchestrator/index.ts
++++ b/packages/core/src/modules/publish-orchestrator/index.ts
+@@ -22,6 +22,9 @@ export {
+   getPublishedHotEventDetail,
+   listPublishedAssociations,
+   listPublishedThemeMemberships,
++  refreshPublishedDailyDigest,
++  getPublishedDailyDigest,
++  listPublishedDailyDigestCoverageDates,
+ } from "./publish-service.js";
+ export type { RefreshPublishedReadModelOptions } from "./publish-service.js";
+ export type {
+@@ -41,4 +44,9 @@ export type {
+   PublishedHotEventTheme,
+   PublishedThemeMembershipRow,
+   ListPublishedThemeMembershipsOptions,
++  DailyDigestEntry,
++  PublishedDailyDigest,
++  RefreshPublishedDailyDigestOptions,
++  GetPublishedDailyDigestOptions,
++  ListPublishedDailyDigestCoverageDatesOptions,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index 13ee065..dd68944 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -14,6 +14,16 @@
+  *   - published_hot_event_associations (Story 2.2): the projected latest
+  *     EventAssociationSet for the detail page's association block + the feed's
+  *     association-dimension filter.
++ *   - published_hot_event_themes (Story 2.3): the projected latest EventThemeSet
++ *     for the detail page's theme block + the /topics theme-page membership map.
++ *
++ * Story 2.4 adds a coverageDate-keyed read model alongside the hotEventId-keyed
++ * ones:
++ *   - published_daily_digests (Story 2.4): the projected latest DailyDigest for
++ *     one coverageDate. Row existence = a published digest for that day. This
++ *     projection is driven by a SIBLING function refreshPublishedDailyDigest
++ *     (not a branch inside refreshPublishedReadModel) because the digest is
++ *     coverageDate-keyed (aggregates multiple events), not hotEventId-keyed.
+  *
+  * refreshPublishedReadModel is called inside decideReview's transaction (and by
+  * the market-reaction worker after it appends a snapshot):
+@@ -34,12 +44,21 @@
+  *     when no published_hot_events row exists (unpublished id → notFound()).
+  *   - listPublishedAssociations (Story 2.2): the hotEventId→items map the feed
+  *     uses for the association-dimension JS filter.
++ *   - listPublishedThemeMemberships (Story 2.3): the hotEventId→ThemeRef[] map
++ *     the /topics directory + /topics/[slug] page use.
++ *   - getPublishedDailyDigest (Story 2.4): the /daily page's digest for one
++ *     coverageDate (or null → degrade).
++ *   - listPublishedDailyDigestCoverageDates (Story 2.4): the distinct
++ *     coverageDates that have a published digest (the /daily page's default-
++ *     view resolver).
+  *
+  * This module never writes hot_events, review_decisions, publication_decisions,
+  * explanation_versions, market_reaction_snapshots, evidence_records, or
+  * evidence_sources. It reads explanation_versions (latest version),
+  * market_reaction_snapshots (latest snapshot), and the evidence link chain only
+- * inside the publish projection, then writes only the published_* tables.
++ * inside the publish projection, then writes only the published_* tables. The
++ * daily-digest projection reads daily_digests (latest row per coverageDate) and
++ * writes published_daily_digests — it never reads hot_events / evidence_*.
+  */
+ 
+ import type { Prisma, PrismaClient } from "../../../generated/client.js";
+@@ -48,15 +67,20 @@ import type { PublishAction } from "../review-workflow/types.js";
+ import { EvidenceLinkStatus } from "./types.js";
+ import type {
+   AssociationItem,
++  DailyDigestEntry,
++  GetPublishedDailyDigestOptions,
+   GetPublishedHotEventDetailOptions,
+   ListPublishedAssociationsOptions,
++  ListPublishedDailyDigestCoverageDatesOptions,
+   ListPublishedHotEventsOptions,
+   ListPublishedThemeMembershipsOptions,
+   PublishedAssociationRow,
++  PublishedDailyDigest,
+   PublishedEvidenceRow,
+   PublishedHotEventDetail,
+   PublishedHotEventSummary,
+   PublishedThemeMembershipRow,
++  RefreshPublishedDailyDigestOptions,
+   ThemeRef,
+ } from "./types.js";
+ 
+@@ -831,3 +855,145 @@ export async function listPublishedThemeMemberships(
+     items: r.items as unknown as ThemeRef[],
+   }));
+ }
++
++// --- Story 2.4: daily-digest projection + reads -------------------------------
++
++/**
++ * Refresh the published daily-digest read model for one coverageDate (Story
++ * 2.4). This is a SIBLING function to refreshPublishedReadModel, NOT a new
++ * branch inside it. Reason: refreshPublishedReadModel is hotEventId-keyed
++ * (projects one hot event's published_* tables on publish/takedown), whereas
++ * the daily digest is coverageDate-keyed (aggregates multiple events into one
++ * versioned artifact). Mixing the two keys in one function would conflate two
++ * distinct aggregate contracts (see spec Design Notes). Same module
++ * (publish-orchestrator, AD-3's single write-owner), different aggregate key,
++ * independent function.
++ *
++ * Reads the latest daily_digests row for the coverageDate (createdAt desc, id
++ * desc tiebreaker) → upsert published_daily_digests (items Json). If no
++ * daily_digests row exists (generateDailyDigest has not run / returned null /
++ * V1 prod adapter resolves none), deleteMany that coverageDate's row so the
++ * /daily page renders the honest degraded state rather than a stale prior
++ * projection. Idempotent.
++ *
++ * Unlike the hotEventId-keyed projections, the digest has NO FK to hot_events —
++ * hotEventId in each entry is a data-only link. A hotEvent takedown does NOT
++ * trigger this refresh (the digest is a versioned point-in-time artifact; the
++ * link honestly 404s, staleness recompute is deferred).
++ *
++ * This query only reads daily_digests and writes published_daily_digests. It
++ * never reads hot_events / evidence_* / published_hot_event_* (AD-3: the digest
++ * read model is the sole public surface for /daily).
++ */
++export async function refreshPublishedDailyDigest(
++  options: RefreshPublishedDailyDigestOptions,
++): Promise<void> {
++  const { prisma, traceId, coverageDate } = options;
++
++  const latest = await prisma.dailyDigest.findFirst({
++    where: { coverageDate },
++    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
++    // embed a monotonic timestamp) — same convention as the hotEventId-keyed
++    // projections.
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      items: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) {
++    // No digest row: clear any stale projection so the /daily page shows the
++    // degraded state (no fabricated digest).
++    await prisma.publishedDailyDigest.deleteMany({
++      where: { coverageDate },
++    });
++    return;
++  }
++
++  await prisma.publishedDailyDigest.upsert({
++    where: { coverageDate },
++    create: {
++      coverageDate,
++      // The items Json column already holds the typed array
++      // (DailyDigestEntry[]) from the source daily_digests row; re-project it
++      // verbatim. Cast through InputJsonValue (Prisma's Json envelope does not
++      // carry the element type across the read→write boundary).
++      items: latest.items as unknown as Prisma.InputJsonValue,
++      source: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++    update: {
++      items: latest.items as unknown as Prisma.InputJsonValue,
++      source: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++  });
++}
++
++/**
++ * Read the public daily digest for one coverageDate — Story 2.4.
++ *
++ * This is the public read query the /daily page consumes (AD-3: public reads
++ * only published_* read models). It returns the projected digest for that
++ * coverageDate, or null when no published_daily_digests row exists (digest not
++ * generated / adapter unavailable in V1 prod / coverageDate has no eligible
++ * events) — the /daily page then renders the honest degraded state (AC3).
++ *
++ * This query only SELECTs published_daily_digests. It NEVER reads daily_digests
++ * / hot_events / evidence_* (AD-3). Row existence = a published digest for that
++ * coverageDate (no status column).
++ */
++export async function getPublishedDailyDigest(
++  options: GetPublishedDailyDigestOptions,
++): Promise<PublishedDailyDigest | null> {
++  const { prisma, coverageDate } = options;
++
++  const row = await prisma.publishedDailyDigest.findUnique({
++    where: { coverageDate },
++    select: {
++      coverageDate: true,
++      items: true,
++      source: true,
++      generatedAt: true,
++    },
++  });
++
++  if (row === null) return null;
++  return {
++    coverageDate: row.coverageDate,
++    entries: row.items as unknown as DailyDigestEntry[],
++    source: row.source,
++    generatedAt: row.generatedAt,
++  };
++}
++
++/**
++ * List the distinct coverageDates that have a published daily digest — Story
++ * 2.4. The /daily page uses the first row (max coverageDate) as the default
++ * view when no ?date= query param is present (the "latest digest").
++ *
++ * Returns `{ coverageDate }` for every published_daily_digests row, ordered by
++ * coverageDate DESC so the first row is the latest. It only SELECTs
++ * published_daily_digests — never daily_digests / hot_events / evidence_*
++ * (AD-3).
++ *
++ * Note: coverageDate is the PK of published_daily_digests, so findMany +
++  orderBy coverageDate DESC already returns distinct coverageDates (one row per
++  coverageDate). No SQL DISTINCT needed.
++ */
++export async function listPublishedDailyDigestCoverageDates(
++  options: ListPublishedDailyDigestCoverageDatesOptions,
++): Promise<{ coverageDate: Date }[]> {
++  const { prisma } = options;
++
++  const rows = await prisma.publishedDailyDigest.findMany({
++    select: { coverageDate: true },
++    orderBy: { coverageDate: "desc" },
++  });
++
++  return rows;
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index 55419a1..4434320 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -322,3 +322,99 @@ export interface ListPublishedThemeMembershipsOptions {
+   prisma: PrismaClient;
+   traceId: string;
+ }
++
++// --- Story 2.4: public daily-digest read types --------------------------------
++
++/**
++ * One daily-digest entry projected for public read — mirrors the
++ * DailyDigestEntry the digest module stores in the Json `items` column. The
++ * /daily page renders each entry as a clickable row linking to
++ * `/events/{hotEventId}` (FR10, the daily→detail jump). hotEventId is a
++ * data-only foreign-key-style link (the digest has NO FK to hot_events — it is
++ * a coverageDate-keyed aggregate).
++ *
++ *   - hotEventId: data-only link to /events/{hotEventId}. If the event is later
++ *     taken down, the link honestly 404s (AD-8) — the digest is a versioned
++ *     point-in-time artifact and does NOT auto-recompute (staleness recompute
++ *     deferred).
++ *   - title: the event's title at digest generation time. Descriptive, never
++ *     advisory.
++ *   - conclusion: NON-EMPTY brief summary (from the adapter). AC2: descriptive,
++ *     never advisory (no buy/sell/target-price/position).
++ *   - latestEvidenceAt: ISO 8601 string of the event's most recent evidence
++ *     time (for display — when did this event last update).
++ *   - evidenceCount: number of supporting evidence records (multi-source signal
++ *     for display).
++ */
++export interface DailyDigestEntry {
++  hotEventId: string;
++  title: string;
++  conclusion: string;
++  latestEvidenceAt: string; // ISO 8601
++  evidenceCount: number;
++}
++
++/**
++ * The projected public daily digest for one coverageDate (Story 2.4). Mirrors
++ * published_daily_digests. `entries` is the Json column value typed as
++ * DailyDigestEntry[].
++ *
++ * Row existence = a currently-published digest for that coverageDate (no status
++ * column). Absent when generateDailyDigest has not produced a digest (V1 prod:
++ * daily-digest worker resolves no adapter → skip → never produced, OR the
++ * coverageDate has no eligible published events) — the /daily page shows the
++ * honest degraded state ("该覆盖日期的日报尚未生成。" + current coverage scope,
++ * AC3). Absent does NOT block the existing feed/detail/theme rendering.
++ */
++export interface PublishedDailyDigest {
++  coverageDate: Date;
++  entries: DailyDigestEntry[];
++  source: string;
++  generatedAt: Date;
++}
++
++/**
++ * One row of listPublishedDailyDigestCoverageDates — the coverageDate values
++ * for which a published_daily_digests row exists. The /daily page uses this to
++ * resolve the "latest digest" (the max coverageDate) when no ?date= query param
++ * is present.
++ */
++export interface DigestCoverageDateRow {
++  coverageDate: Date;
++}
++
++/**
++ * Options for refreshPublishedDailyDigest. `{ prisma, traceId, coverageDate }`
++ * — coverageDate-keyed (NOT hotEventId-keyed like refreshPublishedReadModel).
++ * This is a SIBLING function to refreshPublishedReadModel, not a new branch:
++ * the digest is a coverageDate-keyed aggregate (multiple events per digest),
++ * so its projection key differs from the hotEventId-keyed published_hot_event_*
++ * projections. See spec Design Notes for why a sibling function was chosen over
++ * overloading refreshPublishedReadModel's contract.
++ */
++export interface RefreshPublishedDailyDigestOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++}
++
++/**
++ * Options for getPublishedDailyDigest. `{ prisma, traceId, coverageDate }` —
++ * returns the published digest for that coverageDate, or null when none exists
++ * (the /daily page degrades honestly).
++ */
++export interface GetPublishedDailyDigestOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++}
++
++/**
++ * Options for listPublishedDailyDigestCoverageDates. `{ prisma, traceId }` —
++ * returns the distinct coverageDates that have a published digest, descending.
++ * The /daily page uses the first row (latest coverageDate) as the default view.
++ */
++export interface ListPublishedDailyDigestCoverageDatesOptions {
++  prisma: PrismaClient;
++  traceId: string;
++}

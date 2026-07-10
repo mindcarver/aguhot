@@ -426,3 +426,78 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 主题页 `/topics/[slug]` 成员行仅显 title + latestEvidenceAt + 来源数，未显 source name / 原始链接——完整 traceability 经成员链「一跳」到详情页才有
   evidence: Story 2.3 step-04 intent-alignment 审计：epic-2-context「Public content surfaced via daily/theme paths must retain evidence source, source name, time, and original link; traceability propagates into every Epic 2 surface」。主题页成员行渲染 title + `latestEvidenceAt` + 来源数（evidenceCount），但不显 source name 与原始链接——完整证据 traceability 经成员链 `/events/{id}` 跳到详情页（证据时间线）才有。审计判定「navigational-index 读法下合规」（主题页是导航索引、traceability 一跳可达），但「每条主题路径自带 source name/link」的字面读法未满足。
   resolution: 已于 Story 2.3 登记为 traceability 丰富化 defer——待真实主题页需要就地核验来源时，在成员行加 source name + 原始链接（读 `published_hot_event_evidence` 首条/代表性来源），避免读者必须跳详情才能溯源。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 真实日报 LLM 摘要 provider + SDK 接入未落地——V1 `StubDigestAdapter` 仅 verify/e2e 用、不接 worker/prod
+  evidence: Story 2.4 的 `DigestAdapter` 端口（`packages/core/src/modules/digest/digest-adapter.ts`）已落地（AD-7），但 V1 无真实日报 LLM/摘要 provider（采购 defer）。`StubDigestAdapter`（`packages/core/src/modules/digest/stub-digest-adapter.ts`）返回确定性 fixture conclusion（`STUB_DIGEST_CONCLUSION = "当日重点事件，证据链已归档。"`），仅 verify/e2e 直调 `generateDailyDigest` 走通 happy path；fixture 结论上公开日报页而无真实生成依据会误导读者（违反 NFR「absence as absence, never fabricated completeness」），故 prod 不接线。daily-digest worker 运行时 adapter 解析为 `undefined`（`// ponytail: real provider wired when procured`）→ `generateDailyDigest` 返回 null → prod 诚实降级（AC3）。真实 provider 落地时 worker 解析它、`DailyDigest.source` 由 "template" 翻为 provider id。
+  resolution: 已于 Story 2.4 登记为 defer——真实日报 LLM/摘要 provider 采购后，在 worker 装配层解析 concrete `DigestAdapter`（`apps/worker/src/queues/daily-digest-queue.ts` 的 `adapter` 变量改从 provider 构造），`source` 翻为 provider id，/daily 页日报自动流入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: daily-digest worker cron / 自动编排 / publish→digest 自动触发 / 「每日定点」/ job 链式未落地——worker V1 仅占位（adapter 缺失→skip），触发/cron defer
+  evidence: Story 2.4 的 `registerDailyDigestWorker`（`apps/worker/src/queues/daily-digest-queue.ts`）解析 `coverageDate = new Date(data.coverageDate)`（从 job data），但 V1 运行时 adapter 解析为 `undefined` → `{generated:0, considered:1, skipped:1}`。worker 无 BullMQ repeat job / cron / job 链式触发（沿用 1-5/1-8/2-1/2-3「job 独立、幂等、chaining/cron 未落地」）。`enqueueDailyDigest` 存在但无调用方（无 publish→digest 钩子、无定时 cron、无「每日定点自动跑」、无运营命令）。这意味着 prod 永远无日报生成（除非手动 enqueue 或 verify/seed 直调）——V1 诚实下限（无真实 LLM 时降级是正确行为），但触发缺口是功能 defer。
+  resolution: 已于 Story 2.4 登记为 defer——真实 LLM + 运营负载出现时，引入 publish→digest 钩子、BullMQ repeat job（`Queue.upsertJobScheduler`，如交易日收盘后触发）、或运营命令触发 `enqueueDailyDigest`。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 日报编辑 / 版本对比 / 回滚 / 多版本展示未做——V1 日报只追加（append-only set 取最新），编辑 UI / 版本 diff defer
+  evidence: Story 2.4 `DailyDigest` 是 append-only（AD-5，每次 `generateDailyDigest` append 一行、永不 update/delete），公开投影取最新行。无「编辑日报文案」「版本差异 diff」「回滚到上一版」「展示多版本」UI（运营修订日报文案归未来日报治理）。V1 日报内容 = 最新 set 的 entries。
+  resolution: 已于 Story 2.4 登记为 defer——待真实运营需要人工修订日报/版本对比/回滚时，先定义日报编辑语义（谁可编、编辑哪些字段、版本链展示），再扩 `DailyDigest` 或引入日报修订记录。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 日报邮件推送 / 订阅 / Webhook 未做——V1 日报仅 Web 页阅读
+  evidence: Story 2.4 `/daily` 是 Web 页（请求期读 published_daily_digests）。无邮件推送日报、无订阅机制、无 Webhook 通知。epic「日报」核心是 Web 页阅读 + daily→detail 跳转，推送/订阅属独立 concern（依赖 user-profile 模块 + 通知系统，均未建）。defer。
+  resolution: 已于 Story 2.4 登记为推送/订阅 defer——待 user-profile + 通知系统落地后，引入日报邮件推送 / 订阅 / Webhook（作为独立 concern，不改 /daily Web 页）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 跨页返回路径上下文恢复（scroll 位 / filter 态 / 阅读上下文）归 2.5——本 story 仅做基本导航（daily→detail 链 + 日报页「← 返回首页」链 + 浏览器原生 back，深度一层）
+  evidence: Story 2.4 `/daily` 提供「← 返回首页」链回 `/`，日报每条事件链 `/events/{hotEventId}`（daily→detail）。但从日报进入详情再返回时，filter 态 + scroll 位不恢复（浏览器原生 back 回退到日报页顶部，非原 scroll 位）。完整 UX-DR12（返回恢复 filter 态 + scroll 位）是 2.5 闭环 capstone 职责，2.4 提供日报页/跳转 surface 但不独占返回契约。epic-2-context 明示「Story 2.4 depends on Story 2.5's return-path contract」。
+  resolution: 已于 Story 2.4 登记为 2.5 范围——Epic 2.5 跨首页/主题/日报/详情统一返回契约（referrer 或 return-to query param + scroll/filter 恢复）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 日报内事件分页 / sort toggle 未做——V1 单页全量按证据数降序，分页/sort defer
+  evidence: Story 2.4 `/daily` 固定按 evidenceCount DESC（entries 在生成时已排序）+ hotEventId DESC tiebreaker。首页 feed 按 hotness（evidenceCount/latestEvidenceAt desc）——两者目的不同故排序策略分离。日报页无降序 toggle、无分页（V1 单日事件数极小）。降序/排序 toggle / 分页 defer。
+  resolution: 已于 Story 2.4 登记为 defer——待真实单日事件数增长至单页过长时，加排序 toggle（证据数/时间）+ 分页（或无限滚动）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 日报生成进度 WebSocket/SSE 实时推送未做——V1 靠读模型刷新 + 主动刷新，实时推送 epic defer
+  evidence: Story 2.4 `/daily` 是 force-dynamic 请求期读读模型，无 WebSocket/SSE 实时推送。日报生成进度（adapter 运行中、即将完成）需用户刷新页面才可见。epic-2-context + 架构 spine 把 WebSocket/SSE 实时推送列为 defer（V1 靠读模型刷新 + 主动轮询）。
+  resolution: 已于 Story 2.4 登记为 epic defer——WebSocket/SSE 实时推送随 epic 整体 defer，待实时性需求出现时引入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 日报内事件被 takedown 后日报 staleness 自动重算未做——日报为 versioned 制品，链诚实 404；重算（append 新行剔除已 takedown 事件）由下次 generateDailyDigest 触发
+  evidence: Story 2.4 `daily_digests`/`published_daily_digests` 无 FK 到 hot_events——日报不「拥有」事件，hotEventId 是 data-only 外键式链接。这意味着事件 takedown 不级联清日报（日报是 versioned 时间点制品）。日报已含事件 X 且 X 随后被 `decideReview(takedown)` 时，日报读模型不自动重算（versioned 制品），链 `/events/{X}` 诚实 404（AD-8 不泄漏）。重算（append 新行、自然剔除已 takedown 事件）由下次 `generateDailyDigest` 触发（V1 显式调/cron defer）。staleness 自动检测/重算 defer。
+  resolution: 已于 Story 2.4 登记为 staleness 重算 defer——待真实运营需要日报自动反映 takedown 时，引入 staleness 检测（定期比对日报成员 vs 当前已发布集）+ 自动重算触发（或定时 cron 重生成日报）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 日报 `published_daily_digests` 全表读 scale ceiling——`listPublishedDailyDigestCoverageDates` 返回全部行 + web 层取首个，已发布集增长后有瓶颈
+  evidence: Story 2.4 `listPublishedDailyDigestCoverageDates`（`publish-service.ts`）做 `prisma.publishedDailyDigest.findMany`（无 where），返回全部已发布日报行（仅 coverageDate），web 层 `/daily` 页取首个（最新 coverageDate）作为默认视图。V1 已发布日报体量极小（每天最多一行）；增长后（数千+天）全表读会成瓶颈，需改 SQL `ORDER BY coverage_date DESC LIMIT 1`（/daily 默认视图）或分页（历史日报浏览）。
+  resolution: 已于 Story 2.4 登记为 scale ceiling——待已发布日报体量增长至全表读有可测延迟时，将默认视图查询改为 `findMany({ orderBy: { coverageDate: "desc" }, take: 1 })` 或加分页。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: `items` Json 列的查询性上限（同 2.2/2.3）——当前整体读、永不按单项 SQL 查询；未来按事件/日期聚合或索引需重构
+  evidence: Story 2.4 `DailyDigest.items` / `PublishedDailyDigest.items` 是 Prisma `Json` 列存 `DailyDigestEntry[]`。整体读（/daily 页渲染所有 entries），永不按单项做 SQL 查询。未来若需按 hotEventId 做 SQL 聚合（如「该事件出现在哪些日报中」）或单项更新，需重构为规范化子表。沿用 2.2/2.3 items Json 决策。
+  resolution: 已于 Story 2.4 登记为查询性上限——待真实需要按 hotEventId SQL 聚合或单项更新时，重构为子表（schema migration + 投影/读取扩展）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: daily-digest worker 为未测运行时——镜像 theme-backfill/market-reaction 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
+  evidence: Story 2.4 的 `verify:digest`（`apps/worker/src/verify-digest.ts`）直调 `generateDailyDigest` + `refreshPublishedDailyDigest`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerDailyDigestWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、coverageDate 解析、shutdown 关闭均无集成测试覆盖（镜像 theme-backfill/market-reaction/explain 同款未测运行时 defer）。
+  resolution: 已于 Story 2.4 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB digest/projection）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 历史相似日报相似度判断未做——日报是按日的聚合，非跨日相似度推理；相似度推理 defer
+  evidence: Story 2.4 日报按 coverageDate 聚合当日已发布事件，非从历史日报做相似度推理。epic「absence as absence, never fabricated」——「历史相似日报」相似度判断是独立 concern（需相似度模型/embedding），非日报生成。相似度判断 defer（沿用 2.3 主题相似度 defer 同型）。
+  resolution: 已于 Story 2.4 登记为相似度推理 defer——待真实需要「历史相似日报」推荐时，引入相似度模型（embedding/相似度计算）作为独立 concern，与日报生成分离。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: 「当日事件归属」用 `latestEvidenceAt` UTC 日而非真实交易历——V1 无交易历模块/SDK，真实交易历（盘中/盘后、节假日、时区）落地后替换
+  evidence: Story 2.4 `generateDailyDigest` 的 eligible 过滤用 `latestEvidenceAt` 的 UTC 日作为 coverage 归属（JS 过滤 `listPublishedHotEvents` 输出）。epic-2-context 强调「trading-day scoping」对日报关键，但 V1 无交易历模块/SDK（采购 defer，与 MarketDataAdapter provider 同期 defer）。`latestEvidenceAt` 表达「该事件最近活跃于何日」——比 `publishedAt`（首次发布时间）更贴合「当日热点复盘」语义。V1 用 UTC 日作为 ceiling，真实交易历（含盘中/盘后、节假日、时区）落地后替换。
+  resolution: 已于 Story 2.4 登记为交易历 ceiling defer——真实交易历模块落地后（与 MarketDataAdapter provider 同期），把 `filterByCoverageDay` 的 UTC 日归因替换为交易历 scoping（交易日开收盘、节假日、时区）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: coverageDate 未规范化到 UTC 日起点 + worker 输入未校验——非午夜 coverageDate 会破坏 PK 等值读；worker `new Date(data.coverageDate)` 对畸形串静默成 Invalid Date
+  evidence: Story 2.4 `coverage_date` 是 `DateTime`（毫秒精度），`getPublishedDailyDigest`/`refreshPublishedDailyDigest` 均用 PK 等值 `where:{coverageDate}`。`/daily` 页 `parseCoverageDate` 把 `?date=YYYY-MM-DD` 解析为 UTC 午夜，worker `enqueueDailyDigest` 用 `coverageDate.toISOString()` 序列化、worker 用 `new Date(data.coverageDate)` 反序列化（保留原 instant）。若调用方传入非午夜 coverageDate（如运营传 `new Date()` 14:32），写入行的 instant 非午夜，页面的午夜解析在该日 `?date=` 命不中→降级；且 worker 对畸形 coverageDate 串反序列化得 Invalid Date，Prisma 查询期才抛（仅 worker try/catch 捕获，无 operator 可读上下文）。V1 无 enqueue 调用方（worker 运行时 defer）、verify/seed 均用 `Date.UTC(...)` 午夜日期，故纯 latent。
+  resolution: 已于 Story 2.4 登记为 latent defer——待 worker/cron/运营 enqueue 落地时，在 `generateDailyDigest` 入口把 coverageDate 规范化到 UTC 日起点（截断时分秒），并在 worker 对 `data.coverageDate` 做格式校验（`/^\d{4}-\d{2}-\d{2}$/` + `Date.parse` 有效性），畸形则显式抛带上下文的错误。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-daily-digest-generation-and-reading.md`
+  summary: `ADVICE_KEYWORDS` 同义词不全——缺 加仓/减仓/建仓/清仓/止损/止盈/荐股 等；V1 stub 不触发，真实 LLM 落地后建议词可能漏检
+  evidence: Story 2.4 `digest-service.ts` 的 `ADVICE_KEYWORDS`（`noInvestAdvice`）列 买入/卖出/目标价/持仓/增持/减持/建议买/建议卖，缺常见同义词（加仓/减仓/建仓/清仓/止损/止盈/荐股/抄底/逃顶）。V1 `StubDigestAdapter` 返回固定安全 conclusion，永不触发检查；真实 LLM provider 落地后，结论含「加仓」「止损」等会漏过 NFR 检查流入公开 /daily 页。检查列表跨 4 文件镜像（digest-service + verify-digest + verify-themes + verify-associations），加词需同步。
+  resolution: 已于 Story 2.4 登记为 LLM 策略 defer——待真实日报 LLM provider 落地、有真实结论语料后，统一建议词策略（扩同义词清单或改用分类器），并把 4 文件的镜像清单收敛为单一来源（避免漂移）。

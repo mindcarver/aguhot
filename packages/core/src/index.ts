@@ -129,13 +129,19 @@ export type {
 // Story 2.2 — published_hot_event_associations projection + detail.associations field +
 // listPublishedAssociations feed-filter query;
 // Story 2.3 — published_hot_event_themes projection + detail.themes field +
-// listPublishedThemeMemberships theme-page query).
+// listPublishedThemeMemberships theme-page query;
+// Story 2.4 — published_daily_digests projection (sibling refreshPublishedDailyDigest,
+// coverageDate-keyed) + getPublishedDailyDigest / listPublishedDailyDigestCoverageDates
+// /daily-page queries).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
   getPublishedHotEventDetail,
   listPublishedAssociations,
   listPublishedThemeMemberships,
+  refreshPublishedDailyDigest,
+  getPublishedDailyDigest,
+  listPublishedDailyDigestCoverageDates,
 } from "./modules/publish-orchestrator/publish-service.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
 export type {
@@ -155,6 +161,11 @@ export type {
   PublishedHotEventTheme,
   PublishedThemeMembershipRow,
   ListPublishedThemeMembershipsOptions,
+  DailyDigestEntry,
+  PublishedDailyDigest,
+  RefreshPublishedDailyDigestOptions,
+  GetPublishedDailyDigestOptions,
+  ListPublishedDailyDigestCoverageDatesOptions,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
@@ -243,3 +254,27 @@ export type {
   GetLatestThemeSetOptions,
   ThemeSetRecord,
 } from "./modules/theme-linking/index.js";
+
+// digest module (Story 2.4 — DigestAdapter port AD-7 + StubDigestAdapter
+// test-only + generateDailyDigest append-only AD-2 + noInvestAdvice / coverage
+// helpers; coverageDate-keyed aggregate, no FK to hot_events; daily-digest
+// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only).
+export {
+  generateDailyDigest,
+  getLatestDigest,
+  noInvestAdvice,
+  filterByCoverageDay,
+  StubDigestAdapter,
+  STUB_DIGEST_CONCLUSION,
+} from "./modules/digest/index.js";
+export { DigestSource } from "./modules/digest/index.js";
+export type {
+  DigestSource as DigestSourceType,
+  DigestConclusion,
+  DailyDigestEntry as DigestDailyDigestEntry,
+  DigestAdapter,
+  GenerateDailyDigestOptions,
+  GenerateDailyDigestResult,
+  GetLatestDigestOptions,
+  DigestRecord,
+} from "./modules/digest/index.js";
