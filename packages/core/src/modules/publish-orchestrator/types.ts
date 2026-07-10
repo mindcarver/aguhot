@@ -112,6 +112,10 @@ export interface GetPublishedHotEventDetailOptions {
  *   - explanation: the three partitions + provenance + generatedAt, or null
  *     when the explain job has not produced a version yet (honest degraded
  *     state — never a fabricated explanation).
+ *   - reaction: the two market-reaction signals + tradingSession + provenance +
+ *     generatedAt, or null when the market-reaction worker has not produced a
+ *     snapshot yet (V1 prod: adapter resolves to none → honest degraded state,
+ *     never a fabricated reaction). Story 2.1.
  *   - evidence: the chronological timeline rows (may be empty if projection
  *     happened before any evidence was linked; rare but honest).
  */
@@ -137,5 +141,31 @@ export interface PublishedHotEventDetail {
     source: string;
     generatedAt: Date;
   } | null;
+  /**
+   * The market-reaction block (Story 2.1). Null when no snapshot was projected
+   * (worker has not produced one / adapter unavailable / takedown cleared the
+   * projection). The detail page renders the honest degraded state in that case.
+   */
+  reaction: PublishedHotEventReaction | null;
   evidence: PublishedEvidenceRow[];
+}
+
+/**
+ * The projected public market-reaction block for one published hot event
+ * (Story 2.1). Mirrors published_hot_event_reactions. The two signal dimensions
+ * (priceVolume + sectorLimitUp) each map directly to a ReactionChip's
+ * {tone, value}. tradingSession is the shared time context (epic: every signal
+ * carries an explicit trading-session time context).
+ *
+ * Row existence = currently published reaction (no status column). Absent when
+ * the worker has not produced a snapshot (V1 prod degrades honestly) — the
+ * detail page shows the "市场反应数据暂不可用" degraded state.
+ */
+export interface PublishedHotEventReaction {
+  priceVolume: { tone: string; value: string };
+  sectorLimitUp: { tone: string; value: string };
+  limitUpCount: number;
+  tradingSession: Date;
+  source: string;
+  generatedAt: Date;
 }

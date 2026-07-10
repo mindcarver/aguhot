@@ -163,3 +163,27 @@ export type {
   SaveExplanationOptions,
   SaveExplanationResult,
 } from "./modules/explanation/types.js";
+
+// market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
+// StubMarketDataAdapter test-only + generateMarketReaction append-only AD-2 +
+// deriveSignals pure two-dimension derivation; V1 worker resolves no adapter →
+// prod degrades honestly, stub is verify/e2e-only).
+export {
+  generateMarketReaction,
+  getLatestMarketReaction,
+  deriveSignals,
+  StubMarketDataAdapter,
+} from "./modules/market-reaction/index.js";
+export { ReactionTone, ReactionSource, ReactionDimension } from "./modules/market-reaction/index.js";
+export type {
+  ReactionTone as ReactionToneType,
+  ReactionSource as ReactionSourceType,
+  ReactionDimension as ReactionDimensionType,
+  ReactionSignal,
+  MarketDataSnapshot,
+  MarketDataAdapter,
+  GenerateMarketReactionOptions,
+  GenerateMarketReactionResult,
+  GetLatestMarketReactionOptions,
+  MarketReactionSnapshotRecord,
+} from "./modules/market-reaction/index.js";

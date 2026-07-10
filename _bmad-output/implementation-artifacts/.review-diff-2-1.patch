@@ -1,0 +1,2231 @@
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index 4347ab4..b99febd 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -216,3 +216,43 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   summary: 真实 LLM 沿用 1.8 defer——1.10 不接真实 LLM，LLMAdapter port 仍不预建
+   evidence: Story 1.10 合并/拆分/重发布不涉及解释生成（解释沿用 1.8 `generateExplanation` 确定性派生 + 1.9 `saveExplanation` 运营手输）。`LLMAdapter` port 沿用 1.8/1.9 defer（当前唯一 explanation 实现是确定性派生 + 人工手输，无第三方 SDK，预建 port 属「单一实现接口」反模式）。真实 LLM 生成（source="ai"）+ port 抽取待真实 LLM 引入。
+   resolution: 已于 Story 1.10 沿用 1.8 defer——真实 LLM 引入时在 worker 层抽 `LLMAdapter` port。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: 真实行情 provider + SDK 接入未落地——V1 worker 运行时 adapter 解析为 none，prod 诚实降级；`MarketDataAdapter` 端口已建（epic-2-context 列为 fixed），concrete 实现是 defer 的真实 provider
++  evidence: Story 2.1 的 `MarketDataAdapter` 端口（`packages/core/src/modules/market-reaction/adapter.ts`）已落地（epic-2-context 明确「all market-data sources enter exclusively through this port」为 fixed 架构决策），但 V1 无真实行情 provider（采购 defer）。worker 运行时 `apps/worker/src/queues/market-reaction-queue.ts` 把 adapter 解析为 `undefined`（`// ponytail: real provider wired when procured`）→ `generateMarketReaction` 返回 null → 不写 snapshot → prod 详情页显「市场反应数据暂不可用。」降级（AC3）。`StubMarketDataAdapter` 是确定性 fixture（priceVolumeChangePercent=3.42、sector={半导体,2.1}、limitUpCount=5），仅 verify/e2e 直调 `generateMarketReaction` 走通 happy path；fixture 市场数据上公开财经页会误导读者（违反 NFR「absence shown as absence, never fabricated completeness」），故 prod 不接线。真实 provider 落地时 worker 解析它、信号流入、`MarketReactionSnapshot.source` 由 "template" 翻为 provider id。
++  resolution: 已于 Story 2.1 登记为 defer——真实行情 provider 采购后，在 worker 装配层解析 concrete `MarketDataAdapter`（`apps/worker/src/queues/market-reaction-queue.ts` 的 `adapter` 变量改从 provider 构造），`source` 翻为 provider id，详情页信号自动流入。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: 日内轮询 cadence / cron 未落地——market-reaction worker V1 仅处理「已发布且无 snapshot」的初始生成，不轮询更新
++  evidence: Story 2.1 的 `registerMarketReactionWorker` 查 `publicationStatus:"published"` 且 `marketReactionSnapshots:{none:{}}` 的事件（初始生成），不设 BullMQ repeat job / cron。`MarketReactionSnapshot` 表已是 append-only 时间序列（日内多次轮询追加多行、公开投影取最新），schema 结构未来无需改——但 worker 的「每 N 分钟/每交易日轮询已发布事件刷新 snapshot」cadence 未接。沿用 1-5/1-8「job 独立、幂等、chaining/cron 未落地」惯例。
++  resolution: 已于 Story 2.1 登记为 defer——真实运营负载 + provider 落地后，引入 BullMQ `Queue.upsertJobScheduler` repeat job（如交易日收盘后刷新），worker 改为处理「已发布且最新 snapshot 早于 X」的事件。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: cluster→explain→market 自动编排未落地——三 job 独立、幂等，market 不由 explain/publish 完成自动触发
++  evidence: `apps/worker/src/index.ts` 注册 source-ingest + event-cluster + explain + market-reaction 四个 worker，四者无任何触发关系：ingest 完成不自动入队 cluster，cluster 完成不自动入队 explain，explain/publish 完成不自动入队 market-reaction。当前需手动 `enqueueMarketReaction`（或 verify/seed 直调 `generateMarketReaction`）。这是有意为之的解耦（沿用 1-5/1-8「job 独立、幂等、chaining/cron 未落地」）。生产管道需要编排（ingest→cluster→explain→approve→market）。
++  resolution: 已于 Story 2.1 登记为 defer——真实运营负载与编排需求出现时引入 repeat job 或 completed 事件链触发，属 epic defer。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: market-reaction 绕过 review 闸门直发未做——V1 市场反应必须经 publish-orchestrator 投影，不自动绕过 decideReview
++  evidence: Story 2.1 的 `market-reaction` worker 只 append `market_reaction_snapshots`（AD-2 单一写拥有者），公开投影由 `publish-orchestrator` 的 `refreshPublishedReadModel(publish)` 完成（AD-3 唯一拥有者）。worker 在 append 后调 `refreshPublishedReadModel(publish)` 触发投影——但这不绕过 review 闸门（事件必须先经 decideReview(approve) 才能 published，worker 仅处理 published 事件）。架构 spine AD「是否对低风险事件自动发布」+ epic-2-context「whether market-reaction/theme updates can bypass the review gate for speed」明示此为 defer。
++  resolution: 已于 Story 2.1 登记为 defer——若未来需市场反应「抢速度」绕过闸门（如重大行情秒级刷新），需先定义绕过策略与审计边界（epic spine 未决项）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: sector 名 / 个股真实映射依赖 Epic 2.2 概念/行业/个股关联——V1 sector 名来自 StubMarketDataAdapter fixture，非真实板块/个股映射
++  evidence: Story 2.1 的 `StubMarketDataAdapter.fetchSnapshot` 返回固定 sector={name:"半导体", changePercent:2.1}（fixture），`generateMarketReaction.deriveSignals` 把它格式化进 sectorLimitUp chip value。真实 sector 名 + 个股映射需要先有 2.2 的 concept/industry/stock 关联结果（event→sector/stock 映射），adapter 才能据之查对应板块行情。`MarketDataAdapter.fetchSnapshot({hotEventId})` 的 V1 签名假定 adapter 内部解析 event→ticker/sector，但真实解析逻辑依赖 2.2 关联表（deferred）。
++  resolution: 已于 Story 2.1 登记为 Epic 2.2 依赖——2.2 concept/industry/stock 关联落地后，真实 provider adapter 据关联表查板块/个股行情，sector 名由真实映射驱动。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: 扁平 2-dimension 列模型的扩展性上限——未来更多维度（如资金流向）需重构为 JSON signals 数组或子表
++  evidence: Story 2.1 的 `MarketReactionSnapshot` 用扁平列（priceVolumeTone/Value + sectorLimitUpTone/Value + limitUpCount）映射 V1 AC 恰好两类信号。`deriveSignals` 返回恰好 `{priceVolume, sectorLimitUp, limitUpCount}`。加第 3 维度（如资金流向 northbound flow）需改 schema（加列）或重构为 JSON signals 数组/子表。V1 AC 只要求两类，扁平列最简、强类型、可查询、直映射 ReactionChip——但不为尚不存在的第 3 维度预建多态结构（ponytail）。
++  resolution: 已于 Story 2.1 登记为扩展性上限——未来需第 3+ 维度时，重构为 JSON signals 数组或子表（schema migration + deriveSignals 扩展 + 详情页渲染扩展）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: StubMarketDataAdapter 仅测试、非 prod 的诚实下限——fixture 市场数据上公开财经页会误导读者，故 prod 降级、stub 仅 verify/e2e
++  evidence: Story 2.1 的 `StubMarketDataAdapter`（`packages/core/src/modules/market-reaction/stub-adapter.ts`）返回确定性 fixture（priceVolumeChangePercent=3.42 等固定值）。区别于 1.8 explain 的 template（从真实证据诚实派生、可在 prod 跑、公开页挂 AiLabel），市场反应 stub 是 fixture 百分比——把 fixture「+3.42%」上公开财经页会让读者误以为是真实行情反应（违反 NFR「absence shown as absence, never fabricated completeness」）。故 V1 worker 运行时 adapter 解析为 none、prod 诚实降级；stub 仅 verify/e2e 直调 `generateMarketReaction` 走通 happy path（证明管道正确）。stub 不被 `apps/worker` import（头注释标明 test-only）。
++  resolution: 已于 Story 2.1 登记为诚实下限——真实 provider 落地前，prod 永远降级（AC3）；stub 永远仅测试，不上公开面。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
++  summary: market-reaction worker 为未测运行时——镜像 event-cluster/explain 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
++  evidence: Story 2.1 的 `verify:market-reaction`（`apps/worker/src/verify-market-reaction.ts`）直调 `generateMarketReaction` + `refreshPublishedReadModel`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerMarketReactionWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、per-event try/catch 隔离、shutdown 关闭均无集成测试覆盖（镜像 event-cluster/explain 同款未测运行时 defer）。`pnpm -r typecheck/lint` 全绿仍可放行 worker 运行时回归。
++  resolution: 已于 Story 2.1 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB snapshot/projection）。
+diff --git a/apps/web/app/(public)/events/[hotEventId]/page.tsx b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+index d4e522c..4c3a513 100644
+--- a/apps/web/app/(public)/events/[hotEventId]/page.tsx
++++ b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+@@ -2,7 +2,7 @@ import type { Metadata } from "next";
+ import Link from "next/link";
+ import { notFound } from "next/navigation";
+ 
+-import { AiLabel, TagChip } from "@/components/chips";
++import { AiLabel, ReactionChip, TagChip } from "@/components/chips";
+ import { getPrisma, getPublishedHotEventDetail, newTraceId } from "@aguhot/core";
+ 
+ export const metadata: Metadata = {
+@@ -10,12 +10,14 @@ export const metadata: Metadata = {
+ };
+ 
+ /**
+- * Public hot-event detail page — Story 1.8.
++ * Public hot-event detail page — Story 1.8 (detail + explanation + evidence
++ * timeline) + Story 2.1 (market-reaction block).
+  *
+  * This is the first public DETAIL route to READ the published read models
+  * (published_hot_events + published_hot_event_explanations +
+- * published_hot_event_evidence), via getPublishedHotEventDetail. It completes
+- * the "read the summary and evidence timeline" half of the epic's detail AC.
++ * published_hot_event_evidence + published_hot_event_reactions), via
++ * getPublishedHotEventDetail. It completes the "read the summary, market
++ * reaction, and evidence timeline" half of the epic's detail AC.
+  *
+  * Why force-dynamic + @aguhot/core import is safe for the build:
+  *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
+@@ -35,6 +37,13 @@ export const metadata: Metadata = {
+  *   The system-derived explanation partitions carry the uniform <AiLabel/> (AC3,
+  *   same component as the operator console — public/operator identical).
+  *
++ * Market-reaction block (Story 2.1, AC2/AC3): two <ReactionChip/>s (price/
++ * volume + sector/limit-up) plus a shared tradingSession time context when a
++ * snapshot was projected; an honest "市场反应数据暂不可用。" degraded line when no
++ * snapshot exists (V1 prod: adapter resolves to none → prod degrades honestly).
++ * UX-DR7: reaction enters ONLY as chips, never a full red/green card. NFR:
++ * values are descriptive, never advisory.
++ *
+  * Evidence timeline (AC2): one row per source, chronological (publishedAt ASC,
+  * nulls last — the projection already assigned `position` in that order). Each
+  * row shows source name, time (font-mono), summary, and either "原文链接 ↗"
+@@ -84,6 +93,9 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+   const isAiSourced =
+     detail.explanation !== null && detail.explanation.source !== "human";
+   const hasTags = detail.tags.length > 0;
++  // Story 2.1: the market-reaction block. Null when the worker has not produced
++  // a snapshot (V1 prod: adapter resolves to none) → honest degraded state (AC3).
++  const reaction = detail.reaction;
+ 
+   return (
+     <div className="mx-auto max-w-3xl px-6 py-12">
+@@ -166,6 +178,38 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+         )}
+       </section>
+ 
++      {/* Market reaction (Story 2.1, AC2/AC3). Two signal chips + a shared
++          tradingSession time context when a snapshot was projected; an honest
++          degraded line when no snapshot exists (V1 prod: adapter resolves to
++          none). UX-DR7: reaction enters the UI ONLY as chips (never a full red/
++          green card), and every chip pairs color with a text label (a11y floor).
++          NFR: values are descriptive (change percent / sector / limit-up count),
++          never advisory. */}
++      <section className="mt-6 space-y-3 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
++        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
++          市场反应
++        </h2>
++        {reaction !== null ? (
++          <div className="space-y-3">
++            <div className="flex flex-wrap items-center gap-2">
++              <ReactionChip
++                tone={reaction.priceVolume.tone as "up" | "down" | "flat"}
++                value={reaction.priceVolume.value}
++              />
++              <ReactionChip
++                tone={reaction.sectorLimitUp.tone as "up" | "down" | "flat"}
++                value={reaction.sectorLimitUp.value}
++              />
++            </div>
++            <p className="font-mono text-xs text-ink-tertiary">
++              交易时段 {formatDateTime(reaction.tradingSession)}
++            </p>
++          </div>
++        ) : (
++          <p className="text-base text-ink-tertiary">市场反应数据暂不可用。</p>
++        )}
++      </section>
++
+       {/* Evidence timeline (AC2). One row per source, chronological. */}
+       <section className="mt-10 space-y-4">
+         <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 6e2fed5..1cb3004 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -9,17 +9,19 @@
+     "start": "next start",
+     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+     "lint": "eslint .",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction\"",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+     "e2e:revision": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @revision",
+     "e2e:merge-split": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @merge-split",
++    "e2e:market-reaction": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @market-reaction",
+     "seed:console": "tsx e2e/seed-console.ts",
+     "seed:feed": "tsx e2e/seed-feed.ts",
+     "seed:detail": "tsx e2e/seed-detail.ts",
+     "seed:revision": "tsx e2e/seed-revision.ts",
+-    "seed:merge-split": "tsx e2e/seed-merge-split.ts"
++    "seed:merge-split": "tsx e2e/seed-merge-split.ts",
++    "seed:market-reaction": "tsx e2e/seed-market-reaction.ts"
+   },
+   "dependencies": {
+     "@aguhot/config": "workspace:*",
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index 7b3e417..0e436cc 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -10,6 +10,7 @@
+     "verify:cluster": "tsx src/verify-cluster.ts",
+     "verify:publish": "tsx src/verify-publish.ts",
+     "verify:explain": "tsx src/verify-explain.ts",
++    "verify:market-reaction": "tsx src/verify-market-reaction.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "typecheck": "tsc --noEmit",
+diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+index f9119f1..f785137 100644
+--- a/apps/worker/src/index.ts
++++ b/apps/worker/src/index.ts
+@@ -1,17 +1,18 @@
+ /**
+- * @aguhot/worker — ingest / normalize / cluster / explain / publish runtime.
++ * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction runtime.
+  *
+  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
+- * cluster worker. Story 1.8 adds the explain worker alongside them: validate
+- * required env (DB + Redis), connect Redis, register all three workers, and
+- * wire graceful shutdown (close all three). The web request path never imports
+- * this module — heavy work is async (AD-4).
++ * cluster worker. Story 1.8 added the explain worker. Story 2.1 adds the
++ * market-reaction worker alongside them: validate required env (DB + Redis),
++ * connect Redis, register all four workers, and wire graceful shutdown (close
++ * all four). The web request path never imports this module — heavy work is
++ * async (AD-4).
+  *
+- * The three workers are independent and idempotent: ingest does not trigger a
+- * cluster job automatically, and cluster does not trigger an explain job
+- * automatically (the jobs are decoupled; pipeline chaining/cron orchestration is
+- * deferred — see deferred-work.md). Each can run in isolation against the shared
+- * DB/Redis.
++ * The four workers are independent and idempotent: ingest does not trigger a
++ * cluster job automatically, cluster does not trigger an explain job, and
++ * explain does not trigger a market-reaction job automatically (the jobs are
++ * decoupled; pipeline chaining/cron orchestration is deferred — see deferred-
++ * work.md). Each can run in isolation against the shared DB/Redis.
+  */
+ 
+ import { requireEnv } from "@aguhot/config";
+@@ -19,6 +20,7 @@ import { requireEnv } from "@aguhot/config";
+ import { closeRedis, getRedis } from "./queues/connection.js";
+ import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
+ import { registerExplainWorker } from "./queues/explain-queue.js";
++import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
+ import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
+ 
+ async function main(): Promise<void> {
+@@ -33,8 +35,9 @@ async function main(): Promise<void> {
+   const sourceIngestWorker = registerSourceIngestWorker();
+   const eventClusterWorker = registerEventClusterWorker();
+   const explainWorker = registerExplainWorker();
++  const marketReactionWorker = registerMarketReactionWorker();
+ 
+-  console.log("[worker] source-ingest + event-cluster + explain workers registered and running");
++  console.log("[worker] source-ingest + event-cluster + explain + market-reaction workers registered and running");
+ 
+   const shutdown = async (signal: string): Promise<void> => {
+     console.log(`[worker] received ${signal}, shutting down`);
+@@ -42,6 +45,7 @@ async function main(): Promise<void> {
+       sourceIngestWorker.close(),
+       eventClusterWorker.close(),
+       explainWorker.close(),
++      marketReactionWorker.close(),
+     ]);
+     await closeRedis();
+     process.exit(0);
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index 3704e34..f1129c0 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -137,6 +137,15 @@ model HotEvent {
+   // effective title/tags at projection time. It does NOT change event-assembly's
+   // write-ownership of hot_event_revisions.
+   revisions            HotEventRevision[]
++  // Read-only reverse relations to the market-reaction read models (Story 2.1).
++  // The market-reaction module owns market_reaction_snapshots (AD-2 append-only
++  // write table); publish-orchestrator owns published_hot_event_reactions (AD-3
++  // public projection). These navigations let publish-orchestrator read the
++  // latest snapshot at projection time and let the market-reaction worker query
++  // published events without a snapshot via `marketReactionSnapshots: { none: {} }`.
++  // They do NOT change the respective modules' write-ownership (AD-2).
++  marketReactionSnapshots MarketReactionSnapshot[]
++  publishedReaction       PublishedHotEventReaction?
+ 
+   @@index([publicationStatus])
+   @@map("hot_events")
+@@ -371,3 +380,80 @@ model HotEventRevision {
+   @@index([createdAt])
+   @@map("hot_event_revisions")
+ }
++
++// An append-only market-reaction snapshot for a HotEvent (AD-2/AD-5, Story 2.1).
++// The market-reaction module is the sole writer of this table. Each row records
++// ONE market snapshot's TWO signal dimensions — price/volume (priceVolumeTone +
++// priceVolumeValue) and sector/limit-up (sectorLimitUpTone + sectorLimitUpValue
++// + limitUpCount) — plus a tradingSession time context shared by both signals
++// (epic: every signal carries an explicit trading-session time context). Rows are
++// NEVER updated or deleted: every generation appends a new row, so the table is a
++// time series of snapshots for the event (HOT_EVENT ||--o{ REACTION_SNAPSHOT).
++// The public read model projects the LATEST row (createdAt desc, id desc tiebreak)
++// into published_hot_event_reactions; the market-reaction worker V1 only generates
++// the initial snapshot for a published event with no snapshot.
++//
++// FK onDelete: Cascade so a HotEvent deletion cleans up its snapshot history.
++// `source` distinguishes provenance ("template" V1 deterministic fixture-backed
++// derivation; future provider id when a real market-data adapter is wired). V1
++// worker runtime resolves NO adapter → no snapshot is written → prod degrades
++// honestly (AC3); StubMarketDataAdapter is test-only (verify/e2e).
++//
++// NFR: signals are explanatory, never advisory — tone/value describe observed
++// market facts (change percent, sector name, limit-up count) and NEVER contain
++// buy/sell/target-price/position wording.
++//
++// The flat 2-dimension column layout (not a JSON signals array) mirrors V1 AC
++// (exactly two required dimensions) and maps directly to ReactionChip's
++// {tone, value}. Adding a future third dimension (e.g. capital flow) is a
++// schema migration (deferred).
++model MarketReactionSnapshot {
++  id                   String   @id // UUIDv7, assigned in application code (newTraceId)
++  hotEventId           String   @map("hot_event_id")
++  priceVolumeTone      String   @map("price_volume_tone") // ReactionTone union value ("up"|"down"|"flat")
++  priceVolumeValue     String   @map("price_volume_value")
++  sectorLimitUpTone    String   @map("sector_limit_up_tone") // ReactionTone union value
++  sectorLimitUpValue   String   @map("sector_limit_up_value")
++  limitUpCount         Int      @map("limit_up_count")
++  tradingSession       DateTime @map("trading_session")
++  source               String // ReactionSource union value ("template"; future provider id)
++  traceId              String?  @map("trace_id")
++  createdAt            DateTime @default(now()) @map("created_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@index([hotEventId])
++  @@index([createdAt])
++  @@map("market_reaction_snapshots")
++}
++
++// The public read model for a published hot-event market reaction (AD-3, Story
++// 2.1). The publish-orchestrator module is the sole writer. Row existence =
++// currently published reaction: publish/republish upserts the row (projecting
++// the latest MarketReactionSnapshot), takedown deletes it. There is intentionally
++// NO status column — row existence is the visibility contract (same pattern as
++// the other published_* read models). FK onDelete: Cascade so a HotEvent deletion
++// cleans up the projection. `reaction_source` records the provenance of the
++// projected snapshot (operator audit), and `generated_at` records when that
++// snapshot was generated (so the public surface can show the trading-session
++// context). A row may be ABSENT while the event is published if the market-
++// reaction worker has not produced a snapshot yet (V1 prod: adapter resolves to
++// none → never produced) — the detail page renders an honest degraded state in
++// that case (AC3, never fabricates a reaction).
++model PublishedHotEventReaction {
++  hotEventId          String   @id @map("hot_event_id")
++  priceVolumeTone     String   @map("price_volume_tone") // ReactionTone union value
++  priceVolumeValue    String   @map("price_volume_value")
++  sectorLimitUpTone   String   @map("sector_limit_up_tone") // ReactionTone union value
++  sectorLimitUpValue  String   @map("sector_limit_up_value")
++  limitUpCount        Int      @map("limit_up_count")
++  tradingSession      DateTime @map("trading_session")
++  reactionSource      String   @map("reaction_source") // ReactionSource union value
++  generatedAt         DateTime @map("generated_at")
++  traceId             String?  @map("trace_id")
++  updatedAt           DateTime @updatedAt @map("updated_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@map("published_hot_event_reactions")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 0da64d3..b028360 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -163,3 +163,27 @@ export type {
+   SaveExplanationOptions,
+   SaveExplanationResult,
+ } from "./modules/explanation/types.js";
++
++// market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
++// StubMarketDataAdapter test-only + generateMarketReaction append-only AD-2 +
++// deriveSignals pure two-dimension derivation; V1 worker resolves no adapter →
++// prod degrades honestly, stub is verify/e2e-only).
++export {
++  generateMarketReaction,
++  getLatestMarketReaction,
++  deriveSignals,
++  StubMarketDataAdapter,
++} from "./modules/market-reaction/index.js";
++export { ReactionTone, ReactionSource, ReactionDimension } from "./modules/market-reaction/index.js";
++export type {
++  ReactionTone as ReactionToneType,
++  ReactionSource as ReactionSourceType,
++  ReactionDimension as ReactionDimensionType,
++  ReactionSignal,
++  MarketDataSnapshot,
++  MarketDataAdapter,
++  GenerateMarketReactionOptions,
++  GenerateMarketReactionResult,
++  GetLatestMarketReactionOptions,
++  MarketReactionSnapshotRecord,
++} from "./modules/market-reaction/index.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index e32ad33..0dfb337 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -9,13 +9,17 @@
+  *   - published_hot_event_evidence (Story 1.8): the projected evidence timeline
+  *     rows (so the public detail page never reads evidence_records /
+  *     hot_event_evidence / evidence_sources directly).
++ *   - published_hot_event_reactions (Story 2.1): the projected latest
++ *     MarketReactionSnapshot for the detail page's market-reaction block.
+  *
+- * refreshPublishedReadModel is called inside decideReview's transaction:
++ * refreshPublishedReadModel is called inside decideReview's transaction (and by
++ * the market-reaction worker after it appends a snapshot):
+  *   - publish: upsert published_hot_events + project explanation (latest
+  *     ExplanationVersion → upsert, or deleteMany if none) + rewrite evidence
+  *     timeline (deleteMany then re-insert from member records, link_status
+- *     derived from url). Atomic with the status transition.
+- *   - takedown: delete all three tables for the hotEventId (row-gone =
++ *     derived from url) + project market reaction (latest MarketReactionSnapshot
++ *     → upsert, or deleteMany if none). Atomic with the status transition.
++ *   - takedown: delete all four tables for the hotEventId (row-gone =
+  *     public-invisible). Idempotent.
+  *   - none: no-op.
+  *
+@@ -25,9 +29,10 @@
+  *     when no published_hot_events row exists (unpublished id → notFound()).
+  *
+  * This module never writes hot_events, review_decisions, publication_decisions,
+- * explanation_versions, evidence_records, or evidence_sources. It reads
+- * explanation_versions (latest version) and the evidence link chain only inside
+- * the publish projection, then writes only the published_* tables.
++ * explanation_versions, market_reaction_snapshots, evidence_records, or
++ * evidence_sources. It reads explanation_versions (latest version),
++ * market_reaction_snapshots (latest snapshot), and the evidence link chain only
++ * inside the publish projection, then writes only the published_* tables.
+  */
+ 
+ import type { PrismaClient } from "../../../generated/client.js";
+@@ -75,16 +80,20 @@ export async function refreshPublishedReadModel(
+   if (action === "none") return;
+ 
+   if (action === "takedown") {
+-    // Idempotent delete across all three published_* tables. Order does not
++    // Idempotent delete across all four published_* tables. Order does not
+     // matter (no inter-table FKs among the published_* models), but we delete
+-    // the evidence + explanation rows alongside the summary row so "row exists
+-    // = currently published" holds for all three read models uniformly.
++    // the evidence + explanation + reaction rows alongside the summary row so
++    // "row exists = currently published" holds for all four read models
++    // uniformly. Story 2.1 added published_hot_event_reactions to this batch.
+     await prisma.publishedHotEventEvidence.deleteMany({
+       where: { hotEventId },
+     });
+     await prisma.publishedHotEventExplanation.deleteMany({
+       where: { hotEventId },
+     });
++    await prisma.publishedHotEventReaction.deleteMany({
++      where: { hotEventId },
++    });
+     await prisma.publishedHotEvent.deleteMany({
+       where: { hotEventId },
+     });
+@@ -168,6 +177,9 @@ export async function refreshPublishedReadModel(
+ 
+   // 3. Evidence timeline projection (published_hot_event_evidence).
+   await projectEvidenceTimeline(prisma, traceId, hotEventId);
++
++  // 4. Market-reaction projection (published_hot_event_reactions, Story 2.1).
++  await projectMarketReaction(prisma, traceId, hotEventId);
+ }
+ 
+ /**
+@@ -310,6 +322,76 @@ async function projectEvidenceTimeline(
+   }
+ }
+ 
++/**
++ * Project the latest MarketReactionSnapshot into published_hot_event_reactions
++ * (Story 2.1). If a snapshot exists, upsert the row (1:1 per hotEventId). If no
++ * snapshot exists (market-reaction worker has not run, or V1 prod adapter
++ * resolves to none), deleteMany that hotEventId's reaction row so the detail
++ * page renders the honest degraded state (reaction: null) rather than a stale
++ * prior projection. Called inside the publish transaction and by the market-
++ * reaction worker after it appends a snapshot.
++ *
++ * Mirrors projectExplanation: read latest → upsert or deleteMany.
++ */
++async function projectMarketReaction(
++  prisma: PrismaClient,
++  traceId: string,
++  hotEventId: string,
++): Promise<void> {
++  const latest = await prisma.marketReactionSnapshot.findFirst({
++    where: { hotEventId },
++    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
++    // embed a monotonic timestamp) — same convention as projectExplanation.
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      priceVolumeTone: true,
++      priceVolumeValue: true,
++      sectorLimitUpTone: true,
++      sectorLimitUpValue: true,
++      limitUpCount: true,
++      tradingSession: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) {
++    // No snapshot yet: clear any stale projection so the detail page shows the
++    // degraded state (no fabricated reaction).
++    await prisma.publishedHotEventReaction.deleteMany({
++      where: { hotEventId },
++    });
++    return;
++  }
++
++  await prisma.publishedHotEventReaction.upsert({
++    where: { hotEventId },
++    create: {
++      hotEventId,
++      priceVolumeTone: latest.priceVolumeTone,
++      priceVolumeValue: latest.priceVolumeValue,
++      sectorLimitUpTone: latest.sectorLimitUpTone,
++      sectorLimitUpValue: latest.sectorLimitUpValue,
++      limitUpCount: latest.limitUpCount,
++      tradingSession: latest.tradingSession,
++      reactionSource: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++    update: {
++      priceVolumeTone: latest.priceVolumeTone,
++      priceVolumeValue: latest.priceVolumeValue,
++      sectorLimitUpTone: latest.sectorLimitUpTone,
++      sectorLimitUpValue: latest.sectorLimitUpValue,
++      limitUpCount: latest.limitUpCount,
++      tradingSession: latest.tradingSession,
++      reactionSource: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++  });
++}
++
+ /**
+  * List all currently-published hot events for the public feed — Story 1.7.
+  *
+@@ -356,15 +438,17 @@ export async function listPublishedHotEvents(
+  * This is the first public DETAIL consumer of the published read models (AD-3:
+  * public reads only published_* read models). It assembles the summary row
+  * (published_hot_events), the explanation block (published_hot_event_explanations,
+- * nullable), and the evidence timeline (published_hot_event_evidence, ordered by
+- * position). It returns null when the summary row does not exist — the detail
++ * nullable), the market-reaction block (published_hot_event_reactions, nullable,
++ * Story 2.1), and the evidence timeline (published_hot_event_evidence, ordered
++ * by position). It returns null when the summary row does not exist — the detail
+  * page then calls notFound() (404) so unpublished ids do not leak (AD-8: no
+  * candidate/rejected/taken_down title or content surfaces).
+  *
+  * This query only SELECTs published_hot_events + published_hot_event_explanations
+- * + published_hot_event_evidence. It NEVER reads hot_events, evidence_records,
+- * evidence_sources, hot_event_evidence, explanation_versions, review_decisions,
+- * or publication_decisions — the read models are the sole public surface (AD-3).
++ * + published_hot_event_reactions + published_hot_event_evidence. It NEVER reads
++ * hot_events, evidence_records, evidence_sources, hot_event_evidence,
++ * explanation_versions, market_reaction_snapshots, review_decisions, or
++ * publication_decisions — the read models are the sole public surface (AD-3).
+  * Row existence = currently published; there is no status column and no WHERE
+  * filter to forget.
+  */
+@@ -420,6 +504,23 @@ export async function getPublishedHotEventDetail(
+     },
+   });
+ 
++  // Market-reaction block (nullable, Story 2.1). Absent when the market-reaction
++  // worker has not produced a snapshot yet (V1 prod: adapter resolves to none) →
++  // the detail page renders the honest degraded state.
++  const reactionRow = await prisma.publishedHotEventReaction.findUnique({
++    where: { hotEventId },
++    select: {
++      priceVolumeTone: true,
++      priceVolumeValue: true,
++      sectorLimitUpTone: true,
++      sectorLimitUpValue: true,
++      limitUpCount: true,
++      tradingSession: true,
++      reactionSource: true,
++      generatedAt: true,
++    },
++  });
++
+   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
+     id: r.id,
+     hotEventId: r.hotEventId,
+@@ -448,6 +549,23 @@ export async function getPublishedHotEventDetail(
+             source: explanationRow.explanationSource,
+             generatedAt: explanationRow.generatedAt,
+           },
++    reaction:
++      reactionRow === null
++        ? null
++        : {
++            priceVolume: {
++              tone: reactionRow.priceVolumeTone,
++              value: reactionRow.priceVolumeValue,
++            },
++            sectorLimitUp: {
++              tone: reactionRow.sectorLimitUpTone,
++              value: reactionRow.sectorLimitUpValue,
++            },
++            limitUpCount: reactionRow.limitUpCount,
++            tradingSession: reactionRow.tradingSession,
++            source: reactionRow.reactionSource,
++            generatedAt: reactionRow.generatedAt,
++          },
+     evidence,
+   };
+ }
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index 873efc1..8d0ef5b 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -112,6 +112,10 @@ export interface GetPublishedHotEventDetailOptions {
+  *   - explanation: the three partitions + provenance + generatedAt, or null
+  *     when the explain job has not produced a version yet (honest degraded
+  *     state — never a fabricated explanation).
++ *   - reaction: the two market-reaction signals + tradingSession + provenance +
++ *     generatedAt, or null when the market-reaction worker has not produced a
++ *     snapshot yet (V1 prod: adapter resolves to none → honest degraded state,
++ *     never a fabricated reaction). Story 2.1.
+  *   - evidence: the chronological timeline rows (may be empty if projection
+  *     happened before any evidence was linked; rare but honest).
+  */
+@@ -137,5 +141,31 @@ export interface PublishedHotEventDetail {
+     source: string;
+     generatedAt: Date;
+   } | null;
++  /**
++   * The market-reaction block (Story 2.1). Null when no snapshot was projected
++   * (worker has not produced one / adapter unavailable / takedown cleared the
++   * projection). The detail page renders the honest degraded state in that case.
++   */
++  reaction: PublishedHotEventReaction | null;
+   evidence: PublishedEvidenceRow[];
+ }
++
++/**
++ * The projected public market-reaction block for one published hot event
++ * (Story 2.1). Mirrors published_hot_event_reactions. The two signal dimensions
++ * (priceVolume + sectorLimitUp) each map directly to a ReactionChip's
++ * {tone, value}. tradingSession is the shared time context (epic: every signal
++ * carries an explicit trading-session time context).
++ *
++ * Row existence = currently published reaction (no status column). Absent when
++ * the worker has not produced a snapshot (V1 prod degrades honestly) — the
++ * detail page shows the "市场反应数据暂不可用" degraded state.
++ */
++export interface PublishedHotEventReaction {
++  priceVolume: { tone: string; value: string };
++  sectorLimitUp: { tone: string; value: string };
++  limitUpCount: number;
++  tradingSession: Date;
++  source: string;
++  generatedAt: Date;
++}
+
+=== NEW FILE: apps/web/e2e/market-reaction.spec.ts ===
+
+import { expect, test } from "@playwright/test";
+
+import { seedMarketReactionEvents } from "./seed-market-reaction";
+
+/**
+ * Public hot-event detail market-reaction e2e — Story 2.1. Tagged @market-reaction
+ * so it runs only under `pnpm --filter web e2e:market-reaction` (DB-backed +
+ * seed) and does NOT run under the public `pnpm --filter web e2e` (whose
+ * --grep-invert excludes @console, @feed, @detail, @revision, @merge-split, AND
+ * @market-reaction).
+ *
+ * The beforeAll imports and runs seedMarketReactionEvents() (the same function
+ * `pnpm --filter web seed:market-reaction` runs) to capture the dynamic
+ * withReaction + withoutReaction hotEventIds.
+ *
+ * Requires request-time DATABASE_URL: the detail route is force-dynamic (Story
+ * 1.8) and reads the published read models via getPrisma at request time.
+ *
+ * Covers:
+ *   - AC2: /events/{withReactionId} is 200, the "市场反应" heading renders, the
+ *     two reaction chips are visible (涨 label + value), and the tradingSession
+ *     time context renders.
+ *   - AC3: /events/{withoutReactionId} is 200, the "市场反应" block renders the
+ *     honest "市场反应数据暂不可用。" degraded line, and NO reaction chips appear.
+ *   - NFR5 no-regression: the existing three partitions (发生了什么 / 为什么
+ *     重要 / 当前仍不确定什么) + evidence timeline still render for both events.
+ */
+
+test.describe("市场反应信号展示 (Story 2.1) @market-reaction", () => {
+  // Serial mode: beforeAll seeds the DB exactly once and the tests share the
+  // captured ids. Without this, fullyParallel would run beforeAll per worker
+  // and the concurrent seeds would race on the same DB.
+  test.describe.configure({ mode: "serial" });
+
+  let withReaction: { hotEventId: string; title: string };
+  let withoutReaction: { hotEventId: string; title: string };
+
+  test.beforeAll(async () => {
+    const seeded = await seedMarketReactionEvents();
+    withReaction = { hotEventId: seeded.withReactionHotEventId, title: seeded.withReactionTitle };
+    withoutReaction = {
+      hotEventId: seeded.withoutReactionHotEventId,
+      title: seeded.withoutReactionTitle,
+    };
+  });
+
+  test("AC2 已发布+reaction：市场反应区块显两类 chip + tradingSession 时间语境", async ({ page }) => {
+    const response = await page.goto(`/events/${withReaction.hotEventId}`);
+    expect(response, "with-reaction detail should respond").not.toBeNull();
+    expect(response!.status(), "with-reaction detail status should be 200").toBe(200);
+
+    // The market-reaction heading renders.
+    await expect(
+      page.getByRole("heading", { level: 2, name: "市场反应" }),
+    ).toBeVisible();
+
+    // The reaction section.
+    const reactionSection = page.locator("section", { hasText: "市场反应" }).first();
+
+    // AC2: both reaction chips carry the 涨 label (the stub fixture is all-up).
+    // The ReactionChip renders the label inside a <span> + the value in a
+    // font-mono <span>. We assert the 涨 labels are present (one per chip).
+    // The price/volume chip value is "+3.42%" and the sector/limit-up chip value
+    // contains "半导体" + "涨停 5 家" (from the stub fixture).
+    await expect(reactionSection.getByText("涨").first()).toBeVisible();
+    await expect(reactionSection.getByText(/\+3\.42%/)).toBeVisible();
+    await expect(reactionSection.getByText(/半导体/)).toBeVisible();
+    await expect(reactionSection.getByText(/涨停/)).toBeVisible();
+
+    // The tradingSession time context renders (prefixed by 交易时段).
+    await expect(reactionSection.getByText(/交易时段/)).toBeVisible();
+
+    // The degraded line must NOT appear (a reaction was projected).
+    await expect(reactionSection.getByText("市场反应数据暂不可用。")).toHaveCount(0);
+  });
+
+  test("AC3 已发布无 reaction：市场反应区块显降级文案、无 chip", async ({ page }) => {
+    const response = await page.goto(`/events/${withoutReaction.hotEventId}`);
+    expect(response, "without-reaction detail should respond").not.toBeNull();
+    expect(response!.status(), "without-reaction detail status should be 200").toBe(200);
+
+    // The market-reaction heading still renders (the block is present, just
+    // degraded — NFR5: absence is shown as absence, never silent omission).
+    await expect(
+      page.getByRole("heading", { level: 2, name: "市场反应" }),
+    ).toBeVisible();
+
+    const reactionSection = page.locator("section", { hasText: "市场反应" }).first();
+
+    // AC3: the honest degraded line renders.
+    await expect(reactionSection.getByText("市场反应数据暂不可用。")).toBeVisible();
+
+    // AC3: NO reaction chips appear (the 涨/跌/平 labels must not render in the
+    // degraded block — they only exist inside ReactionChip).
+    await expect(reactionSection.getByText("涨")).toHaveCount(0);
+    await expect(reactionSection.getByText("跌")).toHaveCount(0);
+    await expect(reactionSection.getByText("平")).toHaveCount(0);
+  });
+
+  test("NFR5 不回归：既有三分区 + 证据时间线在两个事件上均照常渲染", async ({ page }) => {
+    // with-reaction event: three partitions + evidence timeline intact.
+    await page.goto(`/events/${withReaction.hotEventId}`);
+    await expect(
+      page.getByRole("heading", { level: 2, name: "发生了什么" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "为什么重要" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "当前仍不确定什么" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "证据时间线" }),
+    ).toBeVisible();
+
+    // without-reaction event: three partitions + evidence timeline intact.
+    await page.goto(`/events/${withoutReaction.hotEventId}`);
+    await expect(
+      page.getByRole("heading", { level: 2, name: "发生了什么" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "为什么重要" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "当前仍不确定什么" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: "证据时间线" }),
+    ).toBeVisible();
+  });
+});
+
+=== NEW FILE: apps/web/e2e/seed-market-reaction.ts ===
+
+/**
+ * Seed script for the @market-reaction e2e — Story 2.1.
+ *
+ * Run with: pnpm --filter web seed:market-reaction
+ *           (tsx e2e/seed-market-reaction.ts)
+ *
+ * Self-contained: produces TWO published events to cover the two I/O matrix rows
+ * for the market-reaction block:
+ *   - 新能源 (2 evidence rows) → PUBLISHED WITH a generated market-reaction
+ *     snapshot (StubMarketDataAdapter, test-only) → exercises AC2 (two reaction
+ *     chips + tradingSession time context visible).
+ *   - 锂矿 (1 evidence row) → PUBLISHED WITHOUT any market-reaction snapshot →
+ *     exercises AC3 (honest degraded state "市场反应数据暂不可用。", no chips).
+ * Returns each hotEventId + title so market-reaction.spec.ts can drive
+ * /events/{id} assertions.
+ *
+ * Requires DATABASE_URL pointing at local PG. Does NOT touch seed-console.ts,
+ * seed-feed.ts, seed-detail.ts, or any other seed (zero-change contract). Clears
+ * the full table set (including the new market-reaction tables) so re-runs are
+ * deterministic.
+ */
+
+import {
+  clusterEvents,
+  decideReview,
+  generateExplanation,
+  generateMarketReaction,
+  getPrisma,
+  listPendingCandidates,
+  newTraceId,
+  resetPrisma,
+  StubMarketDataAdapter,
+} from "@aguhot/core";
+import { resetEnvCache, requireEnv } from "@aguhot/config";
+
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+export async function seedMarketReactionEvents(): Promise<{
+  withReactionHotEventId: string;
+  withReactionTitle: string;
+  withoutReactionHotEventId: string;
+  withoutReactionTitle: string;
+}> {
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  // Clean the full table set (same superset as verify-* scripts + the new 2.1
+  // market-reaction tables, order respects FK constraints). hot_event_revisions
+  // (Story 1.9) has a Restrict FK on hot_events, so it must be cleared before
+  // hot_events. The new 2.1 tables (reactions/snapshots) have Cascade FKs but we
+  // clear them explicitly before hot_events to keep reset ordering uniform.
+  // Deterministic re-runs; does NOT touch seed-console/feed/detail.
+  await prisma.publishedHotEventReaction.deleteMany({});
+  await prisma.marketReactionSnapshot.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+
+  const source = await prisma.evidenceSource.create({
+    data: {
+      id: newTraceId(),
+      name: "market-reaction-e2e-source",
+      kind: "rss",
+      feedUrl: "file:///unused",
+      enabled: true,
+    },
+  });
+
+  // Two distinct-event record groups → 2 candidates. The 新能源 group is a
+  // short-title + long-superset pair (overlap-coefficient = 1.0 → merge) with 2
+  // records. The 锂矿 group stays a single record. Both get published; only
+  // 新能源 gets a market-reaction snapshot.
+  const recentAgo = new Date(Date.now() - 2 * HOUR);
+  const dayAgo = new Date(Date.now() - 1 * DAY);
+
+  await seedRecord(prisma, source.id, {
+    title: "新能源汽车销量",
+    summary: "新能源车销量突破历史峰值",
+    url: `https://verify.test/新能源-销量`,
+    publishedAt: recentAgo,
+  });
+  await seedRecord(prisma, source.id, {
+    title: "新能源汽车销量再创新高",
+    summary: "本月新能源乘用车零售销量同比大增",
+    url: `https://verify.test/新能源-新高`,
+    publishedAt: dayAgo,
+  });
+  await seedRecord(prisma, source.id, {
+    title: "锂矿资源储量公布",
+    summary: "锂矿储量数据公布",
+    url: `https://verify.test/锂矿`,
+    publishedAt: dayAgo,
+  });
+
+  await clusterEvents({ prisma, traceId: newTraceId() });
+
+  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+  if (pending.length < 2) {
+    throw new Error(
+      `[seed-market-reaction] expected >= 2 candidates after cluster, got ${pending.length}`,
+    );
+  }
+
+  const toPublishWithReaction = pending.find((c) => c.title.includes("新能源")) ?? pending[0]!;
+  const toPublishWithoutReaction = pending.find((c) => c.title.includes("锂矿")) ?? pending[1]!;
+
+  // PUBLISHED WITH reaction: generate explanation, approve (flips to published),
+  // then generateMarketReaction with the StubMarketDataAdapter (test-only), then
+  // the publish refresh inside decideReview already projected the explanation +
+  // evidence; we call refreshPublishedReadModel(publish) once more so the newly-
+  // appended snapshot flows into published_hot_event_reactions (mirrors what the
+  // market-reaction worker does after appending).
+  await generateExplanation({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishWithReaction.id,
+  });
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishWithReaction.id,
+    outcome: "approve",
+    reviewer: "market-reaction-e2e-seeder",
+    note: "seed published with reaction for market-reaction e2e",
+  });
+  await generateMarketReaction({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishWithReaction.id,
+    adapter: new StubMarketDataAdapter(),
+  });
+  // Re-refresh to project the appended snapshot into the public read model.
+  // (decideReview's internal refresh ran before the snapshot existed; this second
+  // refresh projects it — same pattern the market-reaction worker uses.)
+  const { refreshPublishedReadModel } = await import("@aguhot/core");
+  await refreshPublishedReadModel({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishWithReaction.id,
+    action: "publish",
+  });
+
+  // PUBLISHED WITHOUT reaction: generate explanation + approve directly (no
+  // generateMarketReaction) → the detail read model has a summary row but NO
+  // reaction projection row, so the detail page renders the degraded state (AC3).
+  await generateExplanation({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishWithoutReaction.id,
+  });
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishWithoutReaction.id,
+    outcome: "approve",
+    reviewer: "market-reaction-e2e-seeder",
+    note: "seed published without reaction for degraded-state e2e",
+  });
+
+  resetPrisma();
+
+  return {
+    withReactionHotEventId: toPublishWithReaction.id,
+    withReactionTitle: toPublishWithReaction.title,
+    withoutReactionHotEventId: toPublishWithoutReaction.id,
+    withoutReactionTitle: toPublishWithoutReaction.title,
+  };
+}
+
+async function seedRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  sourceId: string,
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
+): Promise<void> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const salt = randomUUID();
+  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
+  const contentHash = createHash("sha256").update(material).digest("hex");
+  await prisma.evidenceRecord.create({
+    data: {
+      id: newTraceId(),
+      sourceId,
+      url: data.url,
+      title: data.title,
+      summary: data.summary,
+      publishedAt: data.publishedAt,
+      ingestedAt: new Date(),
+      contentHash,
+      status: "archived",
+      failureReason: null,
+      rawPayload: { seeded: true, salt },
+      traceId: newTraceId(),
+    },
+  });
+}
+
+// Run directly (tsx e2e/seed-market-reaction.ts) — but NOT when imported by the
+// e2e spec (which calls seedMarketReactionEvents() itself in a beforeAll to
+// capture the ids). ESM direct-run detection: only auto-run + exit when this
+// module is the entry.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const result = await seedMarketReactionEvents();
+  console.log(
+    `[seed-market-reaction] withReaction: ${result.withReactionHotEventId} (${result.withReactionTitle}) | withoutReaction: ${result.withoutReactionHotEventId} (${result.withoutReactionTitle})`,
+  );
+  process.exit(0);
+}
+
+=== NEW FILE: apps/worker/src/queues/market-reaction-queue.ts ===
+
+/**
+ * BullMQ market-reaction queue + worker (worker runtime).
+ *
+ * AD-4: market-reaction signal aggregation runs as a BullMQ job, off the web
+ * request path. The worker dynamically imports @aguhot/core's
+ * generateMarketReaction (the single writer of market_reaction_snapshots, AD-2)
+ * and runs one pass over PUBLISHED hot events that have no snapshot yet (market
+ * reaction happens AFTER publication — the market responds to public news).
+ *
+ * This mirrors explain-queue.ts in structure: lazy Queue singleton, enqueue
+ * helper with job-retention caps, and a worker that resolves the Prisma client
+ * via a dynamic import so the worker bundle stays the only place that pulls in
+ * the domain+DB layer.
+ *
+ * Queue name + job name are kebab-case per ARCHITECTURE-SPINE conventions
+ * ("market-reaction"). Like explain, this job is independent and idempotent: it
+ * does NOT chain from explain automatically (cluster→explain→market auto
+ * orchestration / cron is deferred). The worker processes published hot events
+ * that have no market_reaction_snapshot; running it again is safe (a re-run over
+ * an already-snapshotted event appends a fresh row, AD-5 — the intended
+ * idempotent append behavior; V1 only processes the "no snapshot" set).
+ *
+ * V1 HONESTY RULE (load-bearing, see spec Design Notes): the worker runtime
+ * resolves NO adapter (real market-data provider procurement is deferred). With
+ * no adapter, generateMarketReaction returns null and writes nothing, so prod
+ * degrades honestly — the detail page shows "市场反应数据暂不可用" (AC3).
+ * StubMarketDataAdapter is TEST-ONLY (verify/e2e import it from core and pass it
+ * to generateMarketReaction directly); apps/worker MUST NOT import it.
+ *
+ *   // ponytail: real provider wired when procured — V1 no adapter, prod degrades
+ *   // honestly.
+ *
+ * When a real provider lands, the worker will resolve that adapter here (one
+ * line), generateMarketReaction will flow signals through, and source will flip
+ * from "template" to the provider id. The port + append-only write table + read
+ * model are all already in place.
+ */
+
+import { Queue, Worker, type Job } from "bullmq";
+
+import { getRedis } from "./connection.js";
+
+export const MARKET_REACTION_QUEUE_NAME = "market-reaction";
+export const MARKET_REACTION_JOB_NAME = "market-reaction";
+
+export interface MarketReactionJobData {
+  traceId: string;
+}
+
+/**
+ * Lazily-constructed Queue for enqueuing market-reaction jobs. Reused across
+ * enqueue calls in the same process.
+ */
+let queue: Queue | null = null;
+
+export function getMarketReactionQueue(): Queue {
+  if (queue !== null) return queue;
+  queue = new Queue(MARKET_REACTION_QUEUE_NAME, {
+    connection: getRedis(),
+  });
+  return queue;
+}
+
+/**
+ * Enqueue one market-reaction job. Returns the job so callers (e.g. the verify
+ * script) can await its completion.
+ */
+export async function enqueueMarketReaction(traceId: string): Promise<Job> {
+  const q = getMarketReactionQueue();
+  // Prune completed/failed jobs so Redis does not grow unbounded as market-
+  // reaction runs accumulate (keep a short tail for operator inspection).
+  return q.add(MARKET_REACTION_JOB_NAME, { traceId }, {
+    removeOnComplete: 100,
+    removeOnFail: 500,
+  });
+}
+
+/**
+ * Register the market-reaction Worker in this process. The worker resolves the
+ * prisma client, then finds PUBLISHED hot events (publication_status=
+ * "published") that have no market_reaction_snapshot yet. The status filter is
+ * load-bearing (see the spec Design Notes): market reaction summarizes the
+ * market's response to a PUBLIC event, so only published events are eligible —
+ * not candidate/rejected/taken_down.
+ *
+ * V1 worker runtime resolves NO adapter (procurement deferred) → the whole pass
+ * skips (no generateMarketReaction call possible) → returns {generated:0,
+ * skipped} and prod degrades honestly. This is the intended V1 behavior: the
+ * pipeline is correct (verify/e2e prove the happy path with
+ * StubMarketDataAdapter), but the worker cannot produce real signals without a
+ * real provider, so it writes nothing rather than fabricating fixture data.
+ *
+ * When an adapter IS available, the worker calls generateMarketReaction for each
+ * eligible event, then refreshPublishedReadModel(publish) so the new snapshot
+ * flows into published_hot_event_reactions immediately. Per-event try/catch
+ * isolates failures (one bad event does not abort the rest).
+ */
+export function registerMarketReactionWorker(): Worker {
+  const worker = new Worker(
+    MARKET_REACTION_QUEUE_NAME,
+    async (job: Job) => {
+      const {
+        getPrisma,
+        generateMarketReaction,
+        refreshPublishedReadModel,
+      } = await import("@aguhot/core");
+      const prisma = getPrisma();
+      const data = job.data as MarketReactionJobData;
+
+      // Find PUBLISHED hot events with no market-reaction snapshot yet. The
+      // status filter is load-bearing (see the doc comment above + spec Design
+      // Notes): market reaction is a response to a PUBLIC event. A left join via
+      // the reverse relation selects events whose marketReactionSnapshots is
+      // empty.
+      const eligible = await prisma.hotEvent.findMany({
+        where: {
+          publicationStatus: "published",
+          marketReactionSnapshots: { none: {} },
+        },
+        select: { id: true },
+      });
+
+      // V1 HONESTY RULE: no real market-data provider is wired (procurement
+      // deferred). With no adapter, generateMarketReaction cannot run — it would
+      // return null and write nothing. We skip the whole batch and report it as
+      // skipped so the caller knows the pipeline ran but produced no signals
+      // (honest degradation, AC3). StubMarketDataAdapter is test-only and is NOT
+      // imported here.
+      //
+      // ponytail: real provider wired when procured — V1 no adapter, prod
+      // degrades honestly.
+      const adapter = undefined;
+      if (adapter === undefined) {
+        return { generated: 0, skipped: eligible.length };
+      }
+
+      let generated = 0;
+      for (const ev of eligible) {
+        try {
+          const result = await generateMarketReaction({
+            prisma,
+            traceId: data.traceId,
+            hotEventId: ev.id,
+            adapter,
+          });
+          if (result !== null) {
+            generated += 1;
+            // Refresh the public projection so the new snapshot flows into
+            // published_hot_event_reactions immediately (mirrors how decideReview
+            // calls refresh after a status change — the trigger layer refreshes,
+            // the generator only appends).
+            await refreshPublishedReadModel({
+              prisma,
+              traceId: data.traceId,
+              hotEventId: ev.id,
+              action: "publish",
+            });
+          }
+        } catch (error) {
+          // Isolate per-event failures: log and continue so one bad event does
+          // not abort the whole pass.
+          console.error(
+            `[market-reaction-worker] failed for hotEvent ${ev.id}`,
+            error,
+          );
+        }
+      }
+      return { generated, considered: eligible.length };
+    },
+    { connection: getRedis() },
+  );
+  return worker;
+}
+
+=== NEW FILE: apps/worker/src/verify-market-reaction.ts ===
+
+/**
+ * Deterministic integration verification for the market-reaction signal
+ * generation pipeline — Story 2.1.
+ *
+ * Run with: pnpm --filter worker verify:market-reaction (tsx src/verify-market-reaction.ts).
+ *
+ * It exercises generateMarketReaction with the StubMarketDataAdapter (test-only,
+ * imported from core — NOT wired in the worker/prod runtime) against real local
+ * PostgreSQL (NO Redis needed — generateMarketReaction is pure logic + a DB
+ * append, no BullMQ queue, same convention as verify-explain/verify-publish
+ * calling generateExplanation/decideReview directly), then asserts the DB state
+ * — surface-anchored, not mock-based. It prints PASS/FAIL and exits non-zero iff
+ * any assertion fails.
+ *
+ * Flow:
+ *   resetState → seed one source + archived records → clusterEvents (candidate)
+ *   → generateExplanation → decideReview(approve) → published →
+ *   generateMarketReaction({adapter: StubMarketDataAdapter}) → refresh(publish)
+ *   → assert:
+ *
+ * Assertions:
+ *   1. generateMarketReaction appends one snapshot row (source="template",
+ *      traceId), two signal dimensions non-empty (price/volume + sector/limit-up).
+ *   2. After refresh(publish), published_hot_event_reactions projects the
+ *      snapshot; getPublishedHotEventDetail returns non-null `reaction` (two
+ *      signals + tradingSession).
+ *   3. AD-5 append-only: a second generateMarketReaction appends a SECOND row
+ *      (the first untouched); refresh projects the latest (generatedAt = gen2).
+ *   4. adapter missing → generateMarketReaction returns null, writes nothing.
+ *   5. NFR: no investment-advice wording (buy/sell/target-price/position) in any
+ *      signal value.
+ *   6. takedown clears published_hot_event_reactions (4th table) and
+ *      getPublishedHotEventDetail returns null (404, no leak).
+ */
+
+import {
+  clusterEvents,
+  decideReview,
+  generateExplanation,
+  generateMarketReaction,
+  getPrisma,
+  getPublishedHotEventDetail,
+  listPendingCandidates,
+  newTraceId,
+  refreshPublishedReadModel,
+  resetPrisma,
+  StubMarketDataAdapter,
+} from "@aguhot/core";
+import { resetEnvCache, requireEnv } from "@aguhot/config";
+
+interface Assertion {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+// Fixed base time so all seeded records have deterministic publishedAt offsets.
+const BASE_MS = Date.UTC(2024, 0, 1);
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+async function main(): Promise<void> {
+  // Resolve infra (Block-If: PG must be reachable). No Redis needed — the
+  // derivation is pure logic + a DB append, no BullMQ queue.
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  const assertions: Assertion[] = [];
+
+  try {
+    await resetState(prisma);
+
+    // --- Seed: one source + 2 archived records → clusterEvents → 1 candidate --
+    // Two records whose titles are strict subsets of one another so they merge
+    // into ONE candidate via overlap-coefficient (each scores 1.0 against the
+    // accumulated signature). Spread publishedAt so the explain derivation has
+    // a non-trivial coverage span.
+    const source = await prisma.evidenceSource.create({
+      data: {
+        id: newTraceId(),
+        name: "verify-market-reaction-source",
+        kind: "rss",
+        feedUrl: "file:///unused",
+        enabled: true,
+      },
+    });
+
+    await seedRecord(prisma, source.id, {
+      title: "央行降准",
+      summary: "央行宣布降准释放长期资金",
+      url: "https://verify.test/降准-1",
+      publishedAt: new Date(BASE_MS),
+    });
+    await seedRecord(prisma, source.id, {
+      title: "央行宣布降准0.5个百分点",
+      summary: "本次降准为全面降准",
+      url: "https://verify.test/降准-2",
+      publishedAt: new Date(BASE_MS + 1 * DAY),
+    });
+
+    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
+    assertions.push({
+      name: "seed: cluster produced 1 candidate from 2 overlapping records",
+      ok: clusterResult.newCandidates === 1,
+      detail: `newCandidates=${clusterResult.newCandidates}`,
+    });
+
+    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+    if (pending.length !== 1) {
+      throw new Error(
+        `[verify-market-reaction] expected 1 candidate, got ${pending.length}`,
+      );
+    }
+    const candidate = pending[0]!;
+
+    // --- Publish the candidate (market reaction runs AFTER publication) -------
+    // generateExplanation before approve (so the detail read model is complete),
+    // then decideReview(approve) to flip to published.
+    await generateExplanation({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "approve",
+      reviewer: "verify-market-reaction",
+      note: "publish for market-reaction verify",
+    });
+
+    // --- 1 + 2: generateMarketReaction appends one snapshot, projects, detail --
+    // The StubMarketDataAdapter returns a fixed non-null MarketDataSnapshot
+    // (priceVolumeChangePercent=3.42, sector={半导体, 2.1}, limitUpCount=5,
+    // tradingSession=fixed UTC). generateMarketReaction derives two signals and
+    // appends one row.
+    const adapter = new StubMarketDataAdapter();
+    const genTrace = newTraceId();
+    const gen1 = await generateMarketReaction({
+      prisma,
+      traceId: genTrace,
+      hotEventId: candidate.id,
+      adapter,
+    });
+    assertions.push({
+      name: "generateMarketReaction returns non-null",
+      ok: gen1 !== null,
+      detail: gen1 === null ? "(null result)" : "(non-null)",
+    });
+
+    if (gen1 !== null) {
+      assertions.push({
+        name: "two signal dimensions non-empty (priceVolume + sectorLimitUp)",
+        ok: gen1.priceVolume.value.trim() !== "" &&
+            gen1.sectorLimitUp.value.trim() !== "" &&
+            gen1.priceVolume.tone.length > 0 &&
+            gen1.sectorLimitUp.tone.length > 0,
+        detail: `priceVolume=${gen1.priceVolume.tone}/${gen1.priceVolume.value}, sector=${gen1.sectorLimitUp.tone}/${gen1.sectorLimitUp.value}`,
+      });
+      assertions.push({
+        name: "generateMarketReaction result carries source=template + traceId",
+        ok: gen1.source === "template" && gen1.traceId === genTrace,
+        detail: `source=${gen1.source}`,
+      });
+      assertions.push({
+        name: "limitUpCount is carried through (5 from stub fixture)",
+        ok: gen1.limitUpCount === 5,
+        detail: `limitUpCount=${gen1.limitUpCount}`,
+      });
+      assertions.push({
+        name: "tradingSession is carried through (stub fixed session)",
+        ok: gen1.tradingSession.getTime() === new Date(Date.UTC(2024, 5, 3, 3, 0, 0)).getTime(),
+        detail: `tradingSession=${gen1.tradingSession.toISOString()}`,
+      });
+      // NFR: no investment-advice wording.
+      assertions.push({
+        name: "NFR: no buy/sell/target-price/position wording in any signal value",
+        ok: noInvestAdvice(gen1.priceVolume.value) &&
+            noInvestAdvice(gen1.sectorLimitUp.value),
+        detail: "(checked 买卖/目标价/持仓/买入/卖出/增持/减持 keywords)",
+      });
+    }
+
+    const snapshotsAfter1 = await prisma.marketReactionSnapshot.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "market_reaction_snapshots row appended (count=1, source=template)",
+      ok: snapshotsAfter1 === 1,
+      detail: `count=${snapshotsAfter1}`,
+    });
+
+    const row1 = await prisma.marketReactionSnapshot.findFirst({
+      where: { hotEventId: candidate.id },
+      orderBy: { createdAt: "asc" },
+    });
+    assertions.push({
+      name: "appended row: source=template, traceId carried",
+      ok: row1 !== null && row1!.source === "template" && row1!.traceId === genTrace,
+    });
+
+    // Refresh the public projection so the snapshot flows into
+    // published_hot_event_reactions (the worker does this after appending; here
+    // we call it directly — same as decideReview's internals).
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+
+    const reactionRow = await prisma.publishedHotEventReaction.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "published_hot_event_reactions row projected after refresh",
+      ok: reactionRow !== null &&
+          reactionRow!.priceVolumeTone === "up" &&
+          reactionRow!.sectorLimitUpTone === "up" &&
+          reactionRow!.limitUpCount === 5,
+      detail: reactionRow === null
+        ? "(no row)"
+        : `priceVolume=${reactionRow!.priceVolumeTone}/${reactionRow!.priceVolumeValue}`,
+    });
+
+    const detail = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "detail.reaction non-null after projection (two signals + tradingSession)",
+      ok: detail !== null &&
+          detail!.reaction !== null &&
+          detail!.reaction!.priceVolume.value.trim() !== "" &&
+          detail!.reaction!.sectorLimitUp.value.trim() !== "" &&
+          detail!.reaction!.limitUpCount === 5 &&
+          detail!.reaction!.tradingSession.getTime() === new Date(Date.UTC(2024, 5, 3, 3, 0, 0)).getTime(),
+      detail: detail === null || detail!.reaction === null
+        ? "(null detail/reaction)"
+        : `priceVolume=${detail!.reaction!.priceVolume.tone}/${detail!.reaction!.priceVolume.value}`,
+    });
+
+    // --- 3: AD-5 append-only — calling AGAIN appends a SECOND row --
+    await sleep(20);
+    const gen2 = await generateMarketReaction({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      adapter,
+    });
+    const snapshotsAfter2 = await prisma.marketReactionSnapshot.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "AD-5 append-only: second call appends a second row (first untouched)",
+      ok: snapshotsAfter2 === 2 && gen2 !== null,
+      detail: `count=${snapshotsAfter2}`,
+    });
+
+    // Refresh projects the LATEST snapshot (generatedAt = gen2.createdAt).
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+    const detailAfterGen2 = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "refresh projects the LATEST snapshot (generatedAt = gen2.createdAt)",
+      ok: gen2 !== null &&
+          detailAfterGen2 !== null &&
+          detailAfterGen2!.reaction !== null &&
+          detailAfterGen2!.reaction!.generatedAt.getTime() === gen2.createdAt.getTime(),
+      detail:
+        gen2 === null || detailAfterGen2?.reaction === null
+          ? "(gen2 or projection null)"
+          : `projected generatedAt=${detailAfterGen2!.reaction!.generatedAt.toISOString()} vs gen2=${gen2.createdAt.toISOString()}`,
+    });
+
+    // --- 4: adapter missing → returns null, writes nothing --
+    // Create a second published event to test the no-adapter path on a clean
+    // event (so the snapshot count baseline is 0).
+    await seedRecord(prisma, source.id, {
+      title: "美股大跌三大股指重挫",
+      summary: "美股暴跌",
+      url: "https://verify.test/美股",
+      publishedAt: new Date(BASE_MS + 2 * DAY),
+    });
+    await clusterEvents({ prisma, traceId: newTraceId() });
+    const pending2 = await listPendingCandidates({ prisma, traceId: newTraceId() });
+    const usMarket = pending2.find((c) => c.title.includes("美股"))!;
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: usMarket.id,
+      outcome: "approve",
+      reviewer: "verify-market-reaction",
+      note: "publish for no-adapter verify",
+    });
+
+    const noAdapter = await generateMarketReaction({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: usMarket.id,
+      // adapter omitted → V1 worker runtime path → returns null, writes nothing.
+    });
+    const noAdapterSnapshots = await prisma.marketReactionSnapshot.count({
+      where: { hotEventId: usMarket.id },
+    });
+    assertions.push({
+      name: "adapter missing: generateMarketReaction returns null",
+      ok: noAdapter === null,
+    });
+    assertions.push({
+      name: "adapter missing: no market_reaction_snapshots row written",
+      ok: noAdapterSnapshots === 0,
+      detail: `count=${noAdapterSnapshots}`,
+    });
+
+    // --- 5: NFR already asserted inline above per-signal; re-check the projected row --
+    const projectedRow = await prisma.publishedHotEventReaction.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "NFR: projected reaction row has no investment-advice keywords",
+      ok: projectedRow !== null &&
+          noInvestAdvice(projectedRow!.priceVolumeValue) &&
+          noInvestAdvice(projectedRow!.sectorLimitUpValue),
+    });
+
+    // --- 6: takedown clears published_hot_event_reactions (4th table) + detail null --
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "takedown",
+      reviewer: "verify-market-reaction",
+      note: "takedown for reaction-clear verify",
+    });
+    const reactionRowAfterTakedown = await prisma.publishedHotEventReaction.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "takedown cleared published_hot_event_reactions (no stale row)",
+      ok: reactionRowAfterTakedown === null,
+    });
+    const detailAfterTakedown = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "takedown: getPublishedHotEventDetail returns null (no leak, AD-8)",
+      ok: detailAfterTakedown === null,
+    });
+  } finally {
+    await cleanup(prisma);
+    resetPrisma();
+  }
+
+  report(assertions);
+}
+
+// --- helpers -----------------------------------------------------------------
+
+/**
+ * The investment-advice keywords the derivation must NEVER emit (NFR: the
+ * product must not imply investment advice). The check is conservative — these
+ * are the common buy/sell/target-price/position terms. The market-reaction
+ * derivation's vocabulary is descriptive (change percent / sector name /
+ * limit-up count), never advisory.
+ */
+const ADVICE_KEYWORDS = ["买入", "卖出", "目标价", "持仓", "增持", "减持", "建议买", "建议卖"];
+
+function noInvestAdvice(text: string): boolean {
+  return !ADVICE_KEYWORDS.some((k) => text.includes(k));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  // Order matters for FK constraints. published_hot_event_reactions +
+  // market_reaction_snapshots + explanation_versions + published_* new tables
+  // reference hot_events; hot_event_evidence references both. hot_event_revisions
+  // (Story 1.9) has a Restrict FK on hot_events, so it must be cleared before
+  // hot_events. The new 2.1 tables (reactions/snapshots) have Cascade FKs but we
+  // clear them explicitly before hot_events to keep reset ordering uniform with
+  // verify-publish/verify-explain.
+  await prisma.publishedHotEventReaction.deleteMany({});
+  await prisma.marketReactionSnapshot.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+}
+
+async function seedRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  sourceId: string,
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
+): Promise<void> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const salt = randomUUID();
+  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
+  const contentHash = createHash("sha256").update(material).digest("hex");
+  await prisma.evidenceRecord.create({
+    data: {
+      id: newTraceId(),
+      sourceId,
+      url: data.url,
+      title: data.title,
+      summary: data.summary,
+      publishedAt: data.publishedAt,
+      ingestedAt: new Date(),
+      contentHash,
+      status: "archived",
+      failureReason: null,
+      rawPayload: { seeded: true, salt },
+      traceId: newTraceId(),
+    },
+  });
+}
+
+async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  await resetState(prisma);
+}
+
+// --- reporting ---------------------------------------------------------------
+
+function report(assertions: Assertion[]): void {
+  console.log("");
+  console.log("=== market-reaction verification ===");
+  for (const a of assertions) {
+    const mark = a.ok ? "PASS" : "FAIL";
+    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
+  }
+  const failed = assertions.filter((a) => !a.ok);
+  console.log("");
+  if (failed.length === 0) {
+    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
+    process.exit(0);
+  } else {
+    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
+    process.exit(1);
+  }
+}
+
+void main().catch((error) => {
+  console.error("[verify-market-reaction] fatal", error);
+  process.exit(1);
+});
+
+=== NEW FILE: packages/core/prisma/migrations/20260710073000_market_reaction_read_models/migration.sql ===
+
+-- CreateTable
+CREATE TABLE "market_reaction_snapshots" (
+    "id" TEXT NOT NULL,
+    "hot_event_id" TEXT NOT NULL,
+    "price_volume_tone" TEXT NOT NULL,
+    "price_volume_value" TEXT NOT NULL,
+    "sector_limit_up_tone" TEXT NOT NULL,
+    "sector_limit_up_value" TEXT NOT NULL,
+    "limit_up_count" INTEGER NOT NULL,
+    "trading_session" TIMESTAMP(3) NOT NULL,
+    "source" TEXT NOT NULL,
+    "trace_id" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "market_reaction_snapshots_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "published_hot_event_reactions" (
+    "hot_event_id" TEXT NOT NULL,
+    "price_volume_tone" TEXT NOT NULL,
+    "price_volume_value" TEXT NOT NULL,
+    "sector_limit_up_tone" TEXT NOT NULL,
+    "sector_limit_up_value" TEXT NOT NULL,
+    "limit_up_count" INTEGER NOT NULL,
+    "trading_session" TIMESTAMP(3) NOT NULL,
+    "reaction_source" TEXT NOT NULL,
+    "generated_at" TIMESTAMP(3) NOT NULL,
+    "trace_id" TEXT,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "published_hot_event_reactions_pkey" PRIMARY KEY ("hot_event_id")
+);
+
+-- CreateIndex
+CREATE INDEX "market_reaction_snapshots_hot_event_id_idx" ON "market_reaction_snapshots"("hot_event_id");
+
+-- CreateIndex
+CREATE INDEX "market_reaction_snapshots_created_at_idx" ON "market_reaction_snapshots"("created_at");
+
+-- AddForeignKey
+ALTER TABLE "market_reaction_snapshots" ADD CONSTRAINT "market_reaction_snapshots_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "published_hot_event_reactions" ADD CONSTRAINT "published_hot_event_reactions_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+=== NEW FILE: packages/core/src/modules/market-reaction/adapter.ts ===
+
+/**
+ * MarketDataAdapter port — the boundary domain modules use to reach external
+ * market-data (行情) sources (AD-7).
+ *
+ * The market-reaction service depends only on this interface; concrete adapters
+ * are resolved and constructed in the worker assembly layer (real provider,
+ * deferred) or in verify/e2e (StubMarketDataAdapter). Swapping a provider means
+ * pointing the worker at a different adapter implementation —
+ * generateMarketReaction never imports a third-party SDK or wire format.
+ *
+ * V1 worker runtime resolves NO adapter (procurement deferred) →
+ * generateMarketReaction returns null and writes nothing → prod degrades
+ * honestly (AC3). The only concrete implementation today is
+ * StubMarketDataAdapter, which is test-only (verify/e2e import it from core and
+ * pass it to generateMarketReaction directly; it is NOT imported by
+ * apps/worker runtime code).
+ *
+ * This mirrors source-ingest/adapter.ts's in-module port convention
+ * (describe-by-purpose: the port lives in the module it serves, not in a
+ * separate contracts dir).
+ */
+
+// The interface is defined in types.ts (single source of truth, alongside the
+// other market-reaction domain types) and re-exported here as the port's home.
+// Importing code reaches the port via either ./types.js or ./adapter.js — both
+// resolve to the same interface.
+export type { MarketDataAdapter } from "./types.js";
+
+=== NEW FILE: packages/core/src/modules/market-reaction/index.ts ===
+
+/**
+ * market-reaction module barrel — Story 2.1.
+ *
+ * Owns the market_reaction_snapshots table (AD-2 append-only). Exposes the
+ * signal generator + the latest-snapshot read query + the MarketDataAdapter
+ * port + the StubMarketDataAdapter (test-only). The Prisma client lives one
+ * level up and is re-exported from the package barrel.
+ *
+ * This module never writes published_* (publish-orchestrator owns the public
+ * projection) or hot_events (event-assembly owns those). It only appends
+ * market_reaction_snapshots; publish-orchestrator reads the latest at
+ * projection time and writes the public read model.
+ */
+
+export {
+  generateMarketReaction,
+  getLatestMarketReaction,
+  deriveSignals,
+} from "./market-reaction-service.js";
+export { StubMarketDataAdapter } from "./stub-adapter.js";
+export { ReactionTone, ReactionSource, ReactionDimension } from "./types.js";
+export type {
+  ReactionTone as ReactionToneType,
+  ReactionSource as ReactionSourceType,
+  ReactionDimension as ReactionDimensionType,
+  ReactionSignal,
+  MarketDataSnapshot,
+  MarketDataAdapter,
+  GenerateMarketReactionOptions,
+  GenerateMarketReactionResult,
+  GetLatestMarketReactionOptions,
+  MarketReactionSnapshotRecord,
+} from "./types.js";
+
+=== NEW FILE: packages/core/src/modules/market-reaction/market-reaction-service.ts ===
+
+/**
+ * market-reaction-service — derive two reaction signals from a market snapshot
+ * and append a MarketReactionSnapshot row (AD-2/AD-5 append-only).
+ *
+ * Story 2.1. This module owns the market_reaction_snapshots table (AD-2
+ * append-only). It derives TWO signal dimensions — price/volume + sector/limit-up
+ * — from a MarketDataAdapter's output, each carrying a tone (up/down/flat) and a
+ * display value, plus a shared tradingSession time context.
+ *
+ *   - generateMarketReaction: read the adapter → derive signals → APPEND one
+ *     MarketReactionSnapshot (never update/delete prior rows — AD-5). Returns
+ *     null when adapter is missing or returns null (no honest derivation
+ *     possible; never writes a fabricated snapshot). source="template" in V1.
+ *   - getLatestMarketReaction: createdAt desc + id desc first row, or null.
+ *     publish-orchestrator reads this at projection time.
+ *   - deriveSignals: pure function (snapshot → two signals), testable without a
+ *     DB. Same input → identical tone/value (deterministic).
+ *
+ * This module never writes published_* (publish-orchestrator owns those
+ * projections) and never writes hot_events (event-assembly owns those). It only
+ * appends market_reaction_snapshots.
+ *
+ * The derivation is pure logic (no BullMQ, no SDK), so verify/seed scripts can
+ * call it directly without Redis — same convention as generateExplanation /
+ * clusterEvents. The BullMQ `market-reaction` worker (apps/worker) is the prod-
+ * runtime carrier (AD-4) and calls this function via a dynamic import. V1 worker
+ * resolves NO adapter → returns null → no snapshot → prod degrades honestly.
+ */
+
+import { newTraceId } from "../../shared/ids.js";
+import { ReactionSource, ReactionTone } from "./types.js";
+import type {
+  GenerateMarketReactionOptions,
+  GenerateMarketReactionResult,
+  GetLatestMarketReactionOptions,
+  MarketDataSnapshot,
+  MarketReactionSnapshotRecord,
+  ReactionSignal,
+} from "./types.js";
+
+/**
+ * Generate two reaction signals from the adapter's market snapshot, then APPEND
+ * one MarketReactionSnapshot row (source="template"). Returns null and writes
+ * nothing when:
+ *   - adapter is undefined (V1 worker runtime: no provider wired), OR
+ *   - adapter.fetchSnapshot returns null (no market data available).
+ *
+ * Honest degradation (NFR: never fake data): no adapter / no data → no snapshot
+ * → the public detail page shows the "市场反应数据暂不可用" degraded state (AC3).
+ * Never fabricates a snapshot from nothing.
+ *
+ * Append-only (AD-5): every successful call inserts a NEW row. Prior rows are
+ * never updated or deleted — the full snapshot history is the time series.
+ * publish-orchestrator projects the LATEST row (createdAt desc, id desc
+ * tiebreaker) into the public read model.
+ *
+ * NFR: the derived signal values describe observed market facts (change percent,
+ * sector name, limit-up count) and NEVER contain buy/sell/target-price/position
+ * wording (explanatory, not advisory).
+ */
+export async function generateMarketReaction(
+  options: GenerateMarketReactionOptions,
+): Promise<GenerateMarketReactionResult | null> {
+  const { prisma, traceId, hotEventId, adapter } = options;
+
+  // No adapter → honest degradation (V1 worker runtime). Never fabricate.
+  if (adapter === undefined) return null;
+
+  const snapshot = await adapter.fetchSnapshot({ hotEventId });
+  if (snapshot === null) return null;
+
+  const { priceVolume, sectorLimitUp, limitUpCount } = deriveSignals(snapshot);
+
+  // APPEND a new snapshot row (source="template"). Never update or delete prior
+  // rows (AD-5).
+  const created = await prisma.marketReactionSnapshot.create({
+    data: {
+      id: newTraceId(),
+      hotEventId,
+      priceVolumeTone: priceVolume.tone,
+      priceVolumeValue: priceVolume.value,
+      sectorLimitUpTone: sectorLimitUp.tone,
+      sectorLimitUpValue: sectorLimitUp.value,
+      limitUpCount,
+      tradingSession: snapshot.tradingSession,
+      source: ReactionSource.Template,
+      traceId,
+    },
+    select: {
+      id: true,
+      priceVolumeTone: true,
+      priceVolumeValue: true,
+      sectorLimitUpTone: true,
+      sectorLimitUpValue: true,
+      limitUpCount: true,
+      tradingSession: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  return {
+    marketReactionSnapshotId: created.id,
+    hotEventId,
+    priceVolume: {
+      tone: created.priceVolumeTone as ReactionTone,
+      value: created.priceVolumeValue,
+    },
+    sectorLimitUp: {
+      tone: created.sectorLimitUpTone as ReactionTone,
+      value: created.sectorLimitUpValue,
+    },
+    limitUpCount: created.limitUpCount,
+    tradingSession: created.tradingSession,
+    source: created.source as ReactionSource,
+    createdAt: created.createdAt,
+    traceId,
+  };
+}
+
+/**
+ * Return the latest MarketReactionSnapshot for an event (createdAt desc, id desc
+ * tiebreaker — UUIDv7 ids embed a monotonic timestamp so two snapshots sharing
+ * the same createdAt millisecond resolve deterministically to the newer one), or
+ * null if none exist. publish-orchestrator uses this at projection time to
+ * surface the current snapshot into the public read model.
+ */
+export async function getLatestMarketReaction(
+  options: GetLatestMarketReactionOptions,
+): Promise<MarketReactionSnapshotRecord | null> {
+  const { prisma, hotEventId } = options;
+
+  const latest = await prisma.marketReactionSnapshot.findFirst({
+    where: { hotEventId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      hotEventId: true,
+      priceVolumeTone: true,
+      priceVolumeValue: true,
+      sectorLimitUpTone: true,
+      sectorLimitUpValue: true,
+      limitUpCount: true,
+      tradingSession: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) return null;
+  return {
+    id: latest.id,
+    hotEventId: latest.hotEventId,
+    priceVolume: {
+      tone: latest.priceVolumeTone as ReactionTone,
+      value: latest.priceVolumeValue,
+    },
+    sectorLimitUp: {
+      tone: latest.sectorLimitUpTone as ReactionTone,
+      value: latest.sectorLimitUpValue,
+    },
+    limitUpCount: latest.limitUpCount,
+    tradingSession: latest.tradingSession,
+    source: latest.source as ReactionSource,
+    createdAt: latest.createdAt,
+  };
+}
+
+// --- deterministic derivation -----------------------------------------------
+
+/**
+ * The threshold (in absolute percent) above which a signal is "up" or "down"
+ * rather than "flat". Below this the change is treated as negligible (flat) so
+ * we do not over-signal noise. ±0.1% matches typical market convention for
+ * "no meaningful move."
+ */
+const FLAT_THRESHOLD_PERCENT = 0.1;
+
+/**
+ * Derive the two reaction signals from a market snapshot. Pure function: same
+ * snapshot → identical signals. No clocks, no randomness inside the values.
+ *
+ *   - priceVolume (价格/成交): tone from priceVolumeChangePercent sign vs the
+ *     flat threshold; value is a formatted "+X.XX%" / "-X.XX%" / "X.XX%" string.
+ *   - sectorLimitUp (板块/涨停): tone from sector.changePercent sign; value is
+ *     "<sectorName> +X.X% / 涨停 N 家" — a single chip carrying the sector name,
+ *     its change, and the session's limit-up count (the two facts are paired
+ *     because the sector move and limit-up breadth together describe the
+ *     reaction breadth).
+ *
+ * NFR: the value strings describe observed facts only. No buy/sell/target-price
+ * /position wording (explanatory, not advisory).
+ */
+export function deriveSignals(snapshot: MarketDataSnapshot): {
+  priceVolume: ReactionSignal;
+  sectorLimitUp: ReactionSignal;
+  limitUpCount: number;
+} {
+  const priceVolume: ReactionSignal = {
+    tone: toneFromPercent(snapshot.priceVolumeChangePercent),
+    value: formatPercent(snapshot.priceVolumeChangePercent),
+  };
+
+  const sector = snapshot.sector;
+  const sectorLimitUp: ReactionSignal = {
+    tone: toneFromPercent(sector.changePercent),
+    value: `${sector.name} ${formatPercent(sector.changePercent)} / 涨停 ${snapshot.limitUpCount} 家`,
+  };
+
+  return {
+    priceVolume,
+    sectorLimitUp,
+    limitUpCount: snapshot.limitUpCount,
+  };
+}
+
+/**
+ * Map a signed change percent to a reaction tone. Above +threshold → up, below
+ * -threshold → down, in between → flat.
+ */
+function toneFromPercent(percent: number): ReactionTone {
+  if (percent > FLAT_THRESHOLD_PERCENT) return ReactionTone.Up;
+  if (percent < -FLAT_THRESHOLD_PERCENT) return ReactionTone.Down;
+  return ReactionTone.Flat;
+}
+
+/**
+ * Format a signed change percent as a display string. Always includes the sign
+ * for up/down (e.g. "+3.42%", "-1.30%") so the chip's value reads unambiguously
+ * alongside the 涨/跌/平 label. Flat uses the signed form too for consistency
+ * (e.g. "+0.05%"). Two decimal places.
+ */
+function formatPercent(percent: number): string {
+  const sign = percent > 0 ? "+" : "";
+  return `${sign}${percent.toFixed(2)}%`;
+}
+
+=== NEW FILE: packages/core/src/modules/market-reaction/stub-adapter.ts ===
+
+/**
+ * StubMarketDataAdapter — a deterministic test-only MarketDataAdapter (AD-7).
+ *
+ * TEST-ONLY: this adapter is NOT wired in the worker/prod runtime. It returns
+ * fixture market data (fixed percentages + sector + limit-up count). Putting
+ * fixture market numbers on a public financial page would mislead readers into
+ * thinking they are real market reactions — a violation of the NFR "absence
+ * shown as absence, never fabricated completeness" (see spec Design Notes).
+ *
+ * The V1 worker runtime resolves NO adapter (real provider procurement is
+ * deferred) → generateMarketReaction returns null → prod degrades honestly
+ * (AC3). This stub exists solely so verify/e2e can call generateMarketReaction
+ * directly and exercise the happy path (proving the pipeline is correct). When a
+ * real provider lands, the worker will resolve that provider and the stub stays
+ * for tests.
+ *
+ * The fixture is deterministic: every call returns the same MarketDataSnapshot
+ * (fixed tradingSession, change percents, sector, limit-up count) so verify can
+ * assert exact derived tone/value strings.
+ */
+
+import type { MarketDataAdapter, MarketDataSnapshot } from "./types.js";
+
+/**
+ * The fixed trading session the stub reports. A stable past date so
+ * verify/e2e assertions on the projected tradingSession are deterministic
+ * across runs. 2024-06-03T03:00:00Z (a Monday 11:00 CST session).
+ */
+const STUB_TRADING_SESSION = new Date(Date.UTC(2024, 5, 3, 3, 0, 0));
+
+/**
+ * Deterministic stub market-reaction adapter. Returns a fixed non-null
+ * MarketDataSnapshot on every call. See the module doc for why this is
+ * test-only.
+ */
+export class StubMarketDataAdapter implements MarketDataAdapter {
+  async fetchSnapshot(_args: { hotEventId: string }): Promise<MarketDataSnapshot | null> {
+    return {
+      tradingSession: STUB_TRADING_SESSION,
+      priceVolumeChangePercent: 3.42,
+      sector: {
+        name: "半导体",
+        changePercent: 2.1,
+      },
+      limitUpCount: 5,
+    };
+  }
+}
+
+=== NEW FILE: packages/core/src/modules/market-reaction/types.ts ===
+
+/**
+ * market-reaction domain types — Story 2.1.
+ *
+ * The market-reaction module owns MarketReactionSnapshot (AD-2 append-only write
+ * table, one row per market snapshot). It derives TWO signal dimensions from a
+ * MarketDataSnapshot — a price/volume dimension and a sector/limit-up dimension —
+ * each carrying a tone (up/down/flat, reusing the ReactionChip semantics) and a
+ * display value string, plus a shared tradingSession time context. The public
+ * read model is owned by publish-orchestrator (published_hot_event_reactions).
+ *
+ * V1 has no real market-data provider (procurement deferred). The worker runtime
+ * resolves NO adapter → generateMarketReaction returns null and writes nothing →
+ * prod degrades honestly (AC3). StubMarketDataAdapter is test-only (verify/e2e
+ * call generateMarketReaction directly with it to exercise the happy path).
+ *
+ * NFR: signals are explanatory, never advisory. tone/value describe observed
+ * market facts (change percent, sector name, limit-up count) and NEVER contain
+ * buy/sell/target-price/position wording.
+ *
+ * The flat 2-dimension column layout (not a JSON signals array) mirrors V1 AC
+ * (exactly two required dimensions) and maps directly to ReactionChip's
+ * {tone, value}.
+ */
+
+import type { PrismaClient } from "../../../generated/client.js";
+
+/**
+ * The tone of a reaction signal. Reuses the ReactionChip semantics (up/down/flat)
+ * so a snapshot's derived signal maps directly to the chip the detail page
+ * renders. Market semantics follow DESIGN a11y floor: a chip carries BOTH a
+ * Chinese text label (涨/跌/平) AND color — color is never the sole signal.
+ */
+export const ReactionTone = {
+  Up: "up",
+  Down: "down",
+  Flat: "flat",
+} as const;
+
+export type ReactionTone = (typeof ReactionTone)[keyof typeof ReactionTone];
+
+/**
+ * The provenance of a market-reaction snapshot. Stored on every
+ * MarketReactionSnapshot row. The public read model carries this through as
+ * `reactionSource`.
+ *
+ *   - template: V1 deterministic fixture-backed derivation (StubMarketDataAdapter,
+ *     test-only). When a real provider lands, source becomes the provider id.
+ *
+ * V1 worker runtime resolves NO adapter (prod degrades honestly), so no snapshot
+ * with source="template" is ever written by the worker — only by verify/e2e
+ * direct calls.
+ */
+export const ReactionSource = {
+  Template: "template",
+} as const;
+
+export type ReactionSource = (typeof ReactionSource)[keyof typeof ReactionSource];
+
+/**
+ * The two required signal dimensions for a market-reaction snapshot (AC2). V1
+ * flattens these into columns; a future third dimension (e.g. capital flow) is a
+ * schema migration (deferred).
+ */
+export const ReactionDimension = {
+  PriceVolume: "price_volume",
+  SectorLimitUp: "sector_limit_up",
+} as const;
+
+export type ReactionDimension =
+  (typeof ReactionDimension)[keyof typeof ReactionDimension];
+
+/**
+ * One derived reaction signal — a tone + display value. Maps directly to the
+ * ReactionChip's {tone, value} props on the detail page. The value is a display
+ * string (e.g. "+3.42%" or "半导体 +2.1% / 涨停 5 家") — formatted at the
+ * derivation layer, rendered verbatim by the chip.
+ */
+export interface ReactionSignal {
+  tone: ReactionTone;
+  value: string;
+}
+
+/**
+ * A raw market-data snapshot fetched by a MarketDataAdapter. This is the
+ * adapter's normalized output — domain code never sees the provider's native
+ * wire format. The derivation turns this into two ReactionSignals.
+ *
+ *   - tradingSession: the trading session the data reflects (epic: every signal
+ *     carries an explicit trading-session time context).
+ *   - priceVolumeChangePercent: the price/volume change percent (e.g. 3.42).
+ *   - sector: the sector with the strongest reaction (name + change percent).
+ *   - limitUpCount: the count of limit-up (涨停) stocks in the session.
+ */
+export interface MarketDataSnapshot {
+  tradingSession: Date;
+  priceVolumeChangePercent: number;
+  sector: {
+    name: string;
+    changePercent: number;
+  };
+  limitUpCount: number;
+}
+
+/**
+ * Options for generateMarketReaction. `{ prisma, traceId, hotEventId, adapter? }`
+ * mirrors the established command pattern (clusterEvents, generateExplanation)
+ * plus an optional adapter. When adapter is omitted or returns null, the function
+ * returns null and writes nothing (honest degradation — never fabricates a
+ * snapshot from no data). Otherwise it derives the two signals and APPENDS one
+ * MarketReactionSnapshot row (source="template").
+ */
+export interface GenerateMarketReactionOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  adapter?: MarketDataAdapter;
+}
+
+/**
+ * The result of a successful generation: the newly-appended snapshot's id + the
+ * two derived signals + tradingSession + provenance + createdAt. Callers
+ * (publish-orchestrator projection, verify/seed) consume the signals directly.
+ */
+export interface GenerateMarketReactionResult {
+  marketReactionSnapshotId: string;
+  hotEventId: string;
+  priceVolume: ReactionSignal;
+  sectorLimitUp: ReactionSignal;
+  limitUpCount: number;
+  tradingSession: Date;
+  source: ReactionSource;
+  createdAt: Date;
+  traceId: string;
+}
+
+/**
+ * Options for getLatestMarketReaction — returns the most recent
+ * MarketReactionSnapshot for an event (createdAt desc, id desc tiebreaker) or
+ * null if none exist. publish-orchestrator uses this at projection time.
+ */
+export interface GetLatestMarketReactionOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+}
+
+/**
+ * One market-reaction snapshot row projected for read. Mirrors the
+ * MarketReactionSnapshot columns the public projection + operator audit need
+ * (no write paths here).
+ */
+export interface MarketReactionSnapshotRecord {
+  id: string;
+  hotEventId: string;
+  priceVolume: ReactionSignal;
+  sectorLimitUp: ReactionSignal;
+  limitUpCount: number;
+  tradingSession: Date;
+  source: ReactionSource;
+  createdAt: Date;
+}
+
+/**
+ * The MarketDataAdapter port (AD-7). All market-data (行情) sources enter
+ * exclusively through this interface; domain modules never import a third-party
+ * SDK. V1 has no concrete implementation wired in the worker (procurement
+ * deferred) — the worker resolves to none → prod degrades honestly. The only
+ * concrete implementation is StubMarketDataAdapter (test-only, verify/e2e).
+ *
+ * Defined in adapter.ts and re-exported here for the package barrel.
+ */
+export interface MarketDataAdapter {
+  /**
+   * Fetch one market-data snapshot for the given hot event. Implementations
+   * resolve the event's relevant ticker/sector (V1 deferred — real mapping
+   * depends on Epic 2.2 concept/industry/stock associations) and return the
+   * observed market facts. Return null when no market data is available (the
+   * caller writes nothing and degrades honestly).
+   */
+  fetchSnapshot(args: { hotEventId: string }): Promise<MarketDataSnapshot | null>;
+}

@@ -9,13 +9,17 @@
  *   - published_hot_event_evidence (Story 1.8): the projected evidence timeline
  *     rows (so the public detail page never reads evidence_records /
  *     hot_event_evidence / evidence_sources directly).
+ *   - published_hot_event_reactions (Story 2.1): the projected latest
+ *     MarketReactionSnapshot for the detail page's market-reaction block.
  *
- * refreshPublishedReadModel is called inside decideReview's transaction:
+ * refreshPublishedReadModel is called inside decideReview's transaction (and by
+ * the market-reaction worker after it appends a snapshot):
  *   - publish: upsert published_hot_events + project explanation (latest
  *     ExplanationVersion → upsert, or deleteMany if none) + rewrite evidence
  *     timeline (deleteMany then re-insert from member records, link_status
- *     derived from url). Atomic with the status transition.
- *   - takedown: delete all three tables for the hotEventId (row-gone =
+ *     derived from url) + project market reaction (latest MarketReactionSnapshot
+ *     → upsert, or deleteMany if none). Atomic with the status transition.
+ *   - takedown: delete all four tables for the hotEventId (row-gone =
  *     public-invisible). Idempotent.
  *   - none: no-op.
  *
@@ -25,9 +29,10 @@
  *     when no published_hot_events row exists (unpublished id → notFound()).
  *
  * This module never writes hot_events, review_decisions, publication_decisions,
- * explanation_versions, evidence_records, or evidence_sources. It reads
- * explanation_versions (latest version) and the evidence link chain only inside
- * the publish projection, then writes only the published_* tables.
+ * explanation_versions, market_reaction_snapshots, evidence_records, or
+ * evidence_sources. It reads explanation_versions (latest version),
+ * market_reaction_snapshots (latest snapshot), and the evidence link chain only
+ * inside the publish projection, then writes only the published_* tables.
  */
 
 import type { PrismaClient } from "../../../generated/client.js";
@@ -75,14 +80,18 @@ export async function refreshPublishedReadModel(
   if (action === "none") return;
 
   if (action === "takedown") {
-    // Idempotent delete across all three published_* tables. Order does not
+    // Idempotent delete across all four published_* tables. Order does not
     // matter (no inter-table FKs among the published_* models), but we delete
-    // the evidence + explanation rows alongside the summary row so "row exists
-    // = currently published" holds for all three read models uniformly.
+    // the evidence + explanation + reaction rows alongside the summary row so
+    // "row exists = currently published" holds for all four read models
+    // uniformly. Story 2.1 added published_hot_event_reactions to this batch.
     await prisma.publishedHotEventEvidence.deleteMany({
       where: { hotEventId },
     });
     await prisma.publishedHotEventExplanation.deleteMany({
+      where: { hotEventId },
+    });
+    await prisma.publishedHotEventReaction.deleteMany({
       where: { hotEventId },
     });
     await prisma.publishedHotEvent.deleteMany({
@@ -168,6 +177,9 @@ export async function refreshPublishedReadModel(
 
   // 3. Evidence timeline projection (published_hot_event_evidence).
   await projectEvidenceTimeline(prisma, traceId, hotEventId);
+
+  // 4. Market-reaction projection (published_hot_event_reactions, Story 2.1).
+  await projectMarketReaction(prisma, traceId, hotEventId);
 }
 
 /**
@@ -311,6 +323,76 @@ async function projectEvidenceTimeline(
 }
 
 /**
+ * Project the latest MarketReactionSnapshot into published_hot_event_reactions
+ * (Story 2.1). If a snapshot exists, upsert the row (1:1 per hotEventId). If no
+ * snapshot exists (market-reaction worker has not run, or V1 prod adapter
+ * resolves to none), deleteMany that hotEventId's reaction row so the detail
+ * page renders the honest degraded state (reaction: null) rather than a stale
+ * prior projection. Called inside the publish transaction and by the market-
+ * reaction worker after it appends a snapshot.
+ *
+ * Mirrors projectExplanation: read latest → upsert or deleteMany.
+ */
+async function projectMarketReaction(
+  prisma: PrismaClient,
+  traceId: string,
+  hotEventId: string,
+): Promise<void> {
+  const latest = await prisma.marketReactionSnapshot.findFirst({
+    where: { hotEventId },
+    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
+    // embed a monotonic timestamp) — same convention as projectExplanation.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      priceVolumeTone: true,
+      priceVolumeValue: true,
+      sectorLimitUpTone: true,
+      sectorLimitUpValue: true,
+      limitUpCount: true,
+      tradingSession: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    // No snapshot yet: clear any stale projection so the detail page shows the
+    // degraded state (no fabricated reaction).
+    await prisma.publishedHotEventReaction.deleteMany({
+      where: { hotEventId },
+    });
+    return;
+  }
+
+  await prisma.publishedHotEventReaction.upsert({
+    where: { hotEventId },
+    create: {
+      hotEventId,
+      priceVolumeTone: latest.priceVolumeTone,
+      priceVolumeValue: latest.priceVolumeValue,
+      sectorLimitUpTone: latest.sectorLimitUpTone,
+      sectorLimitUpValue: latest.sectorLimitUpValue,
+      limitUpCount: latest.limitUpCount,
+      tradingSession: latest.tradingSession,
+      reactionSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      priceVolumeTone: latest.priceVolumeTone,
+      priceVolumeValue: latest.priceVolumeValue,
+      sectorLimitUpTone: latest.sectorLimitUpTone,
+      sectorLimitUpValue: latest.sectorLimitUpValue,
+      limitUpCount: latest.limitUpCount,
+      tradingSession: latest.tradingSession,
+      reactionSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
  * List all currently-published hot events for the public feed — Story 1.7.
  *
  * This is the first public consumer of the published_hot_events read model (AD-3:
@@ -356,15 +438,17 @@ export async function listPublishedHotEvents(
  * This is the first public DETAIL consumer of the published read models (AD-3:
  * public reads only published_* read models). It assembles the summary row
  * (published_hot_events), the explanation block (published_hot_event_explanations,
- * nullable), and the evidence timeline (published_hot_event_evidence, ordered by
- * position). It returns null when the summary row does not exist — the detail
+ * nullable), the market-reaction block (published_hot_event_reactions, nullable,
+ * Story 2.1), and the evidence timeline (published_hot_event_evidence, ordered
+ * by position). It returns null when the summary row does not exist — the detail
  * page then calls notFound() (404) so unpublished ids do not leak (AD-8: no
  * candidate/rejected/taken_down title or content surfaces).
  *
  * This query only SELECTs published_hot_events + published_hot_event_explanations
- * + published_hot_event_evidence. It NEVER reads hot_events, evidence_records,
- * evidence_sources, hot_event_evidence, explanation_versions, review_decisions,
- * or publication_decisions — the read models are the sole public surface (AD-3).
+ * + published_hot_event_reactions + published_hot_event_evidence. It NEVER reads
+ * hot_events, evidence_records, evidence_sources, hot_event_evidence,
+ * explanation_versions, market_reaction_snapshots, review_decisions, or
+ * publication_decisions — the read models are the sole public surface (AD-3).
  * Row existence = currently published; there is no status column and no WHERE
  * filter to forget.
  */
@@ -420,6 +504,23 @@ export async function getPublishedHotEventDetail(
     },
   });
 
+  // Market-reaction block (nullable, Story 2.1). Absent when the market-reaction
+  // worker has not produced a snapshot yet (V1 prod: adapter resolves to none) →
+  // the detail page renders the honest degraded state.
+  const reactionRow = await prisma.publishedHotEventReaction.findUnique({
+    where: { hotEventId },
+    select: {
+      priceVolumeTone: true,
+      priceVolumeValue: true,
+      sectorLimitUpTone: true,
+      sectorLimitUpValue: true,
+      limitUpCount: true,
+      tradingSession: true,
+      reactionSource: true,
+      generatedAt: true,
+    },
+  });
+
   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
     id: r.id,
     hotEventId: r.hotEventId,
@@ -447,6 +548,23 @@ export async function getPublishedHotEventDetail(
             uncertainties: explanationRow.uncertainties,
             source: explanationRow.explanationSource,
             generatedAt: explanationRow.generatedAt,
+          },
+    reaction:
+      reactionRow === null
+        ? null
+        : {
+            priceVolume: {
+              tone: reactionRow.priceVolumeTone,
+              value: reactionRow.priceVolumeValue,
+            },
+            sectorLimitUp: {
+              tone: reactionRow.sectorLimitUpTone,
+              value: reactionRow.sectorLimitUpValue,
+            },
+            limitUpCount: reactionRow.limitUpCount,
+            tradingSession: reactionRow.tradingSession,
+            source: reactionRow.reactionSource,
+            generatedAt: reactionRow.generatedAt,
           },
     evidence,
   };

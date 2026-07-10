@@ -216,3 +216,43 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 真实 LLM 沿用 1.8 defer——1.10 不接真实 LLM，LLMAdapter port 仍不预建
   evidence: Story 1.10 合并/拆分/重发布不涉及解释生成（解释沿用 1.8 `generateExplanation` 确定性派生 + 1.9 `saveExplanation` 运营手输）。`LLMAdapter` port 沿用 1.8/1.9 defer（当前唯一 explanation 实现是确定性派生 + 人工手输，无第三方 SDK，预建 port 属「单一实现接口」反模式）。真实 LLM 生成（source="ai"）+ port 抽取待真实 LLM 引入。
   resolution: 已于 Story 1.10 沿用 1.8 defer——真实 LLM 引入时在 worker 层抽 `LLMAdapter` port。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: 真实行情 provider + SDK 接入未落地——V1 worker 运行时 adapter 解析为 none，prod 诚实降级；`MarketDataAdapter` 端口已建（epic-2-context 列为 fixed），concrete 实现是 defer 的真实 provider
+  evidence: Story 2.1 的 `MarketDataAdapter` 端口（`packages/core/src/modules/market-reaction/adapter.ts`）已落地（epic-2-context 明确「all market-data sources enter exclusively through this port」为 fixed 架构决策），但 V1 无真实行情 provider（采购 defer）。worker 运行时 `apps/worker/src/queues/market-reaction-queue.ts` 把 adapter 解析为 `undefined`（`// ponytail: real provider wired when procured`）→ `generateMarketReaction` 返回 null → 不写 snapshot → prod 详情页显「市场反应数据暂不可用。」降级（AC3）。`StubMarketDataAdapter` 是确定性 fixture（priceVolumeChangePercent=3.42、sector={半导体,2.1}、limitUpCount=5），仅 verify/e2e 直调 `generateMarketReaction` 走通 happy path；fixture 市场数据上公开财经页会误导读者（违反 NFR「absence shown as absence, never fabricated completeness」），故 prod 不接线。真实 provider 落地时 worker 解析它、信号流入、`MarketReactionSnapshot.source` 由 "template" 翻为 provider id。
+  resolution: 已于 Story 2.1 登记为 defer——真实行情 provider 采购后，在 worker 装配层解析 concrete `MarketDataAdapter`（`apps/worker/src/queues/market-reaction-queue.ts` 的 `adapter` 变量改从 provider 构造），`source` 翻为 provider id，详情页信号自动流入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: 日内轮询 cadence / cron 未落地——market-reaction worker V1 仅处理「已发布且无 snapshot」的初始生成，不轮询更新
+  evidence: Story 2.1 的 `registerMarketReactionWorker` 查 `publicationStatus:"published"` 且 `marketReactionSnapshots:{none:{}}` 的事件（初始生成），不设 BullMQ repeat job / cron。`MarketReactionSnapshot` 表已是 append-only 时间序列（日内多次轮询追加多行、公开投影取最新），schema 结构未来无需改——但 worker 的「每 N 分钟/每交易日轮询已发布事件刷新 snapshot」cadence 未接。沿用 1-5/1-8「job 独立、幂等、chaining/cron 未落地」惯例。
+  resolution: 已于 Story 2.1 登记为 defer——真实运营负载 + provider 落地后，引入 BullMQ `Queue.upsertJobScheduler` repeat job（如交易日收盘后刷新），worker 改为处理「已发布且最新 snapshot 早于 X」的事件。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: cluster→explain→market 自动编排未落地——三 job 独立、幂等，market 不由 explain/publish 完成自动触发
+  evidence: `apps/worker/src/index.ts` 注册 source-ingest + event-cluster + explain + market-reaction 四个 worker，四者无任何触发关系：ingest 完成不自动入队 cluster，cluster 完成不自动入队 explain，explain/publish 完成不自动入队 market-reaction。当前需手动 `enqueueMarketReaction`（或 verify/seed 直调 `generateMarketReaction`）。这是有意为之的解耦（沿用 1-5/1-8「job 独立、幂等、chaining/cron 未落地」）。生产管道需要编排（ingest→cluster→explain→approve→market）。
+  resolution: 已于 Story 2.1 登记为 defer——真实运营负载与编排需求出现时引入 repeat job 或 completed 事件链触发，属 epic defer。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: market-reaction 绕过 review 闸门直发未做——V1 市场反应必须经 publish-orchestrator 投影，不自动绕过 decideReview
+  evidence: Story 2.1 的 `market-reaction` worker 只 append `market_reaction_snapshots`（AD-2 单一写拥有者），公开投影由 `publish-orchestrator` 的 `refreshPublishedReadModel(publish)` 完成（AD-3 唯一拥有者）。worker 在 append 后调 `refreshPublishedReadModel(publish)` 触发投影——但这不绕过 review 闸门（事件必须先经 decideReview(approve) 才能 published，worker 仅处理 published 事件）。架构 spine AD「是否对低风险事件自动发布」+ epic-2-context「whether market-reaction/theme updates can bypass the review gate for speed」明示此为 defer。
+  resolution: 已于 Story 2.1 登记为 defer——若未来需市场反应「抢速度」绕过闸门（如重大行情秒级刷新），需先定义绕过策略与审计边界（epic spine 未决项）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: sector 名 / 个股真实映射依赖 Epic 2.2 概念/行业/个股关联——V1 sector 名来自 StubMarketDataAdapter fixture，非真实板块/个股映射
+  evidence: Story 2.1 的 `StubMarketDataAdapter.fetchSnapshot` 返回固定 sector={name:"半导体", changePercent:2.1}（fixture），`generateMarketReaction.deriveSignals` 把它格式化进 sectorLimitUp chip value。真实 sector 名 + 个股映射需要先有 2.2 的 concept/industry/stock 关联结果（event→sector/stock 映射），adapter 才能据之查对应板块行情。`MarketDataAdapter.fetchSnapshot({hotEventId})` 的 V1 签名假定 adapter 内部解析 event→ticker/sector，但真实解析逻辑依赖 2.2 关联表（deferred）。
+  resolution: 已于 Story 2.1 登记为 Epic 2.2 依赖——2.2 concept/industry/stock 关联落地后，真实 provider adapter 据关联表查板块/个股行情，sector 名由真实映射驱动。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: 扁平 2-dimension 列模型的扩展性上限——未来更多维度（如资金流向）需重构为 JSON signals 数组或子表
+  evidence: Story 2.1 的 `MarketReactionSnapshot` 用扁平列（priceVolumeTone/Value + sectorLimitUpTone/Value + limitUpCount）映射 V1 AC 恰好两类信号。`deriveSignals` 返回恰好 `{priceVolume, sectorLimitUp, limitUpCount}`。加第 3 维度（如资金流向 northbound flow）需改 schema（加列）或重构为 JSON signals 数组/子表。V1 AC 只要求两类，扁平列最简、强类型、可查询、直映射 ReactionChip——但不为尚不存在的第 3 维度预建多态结构（ponytail）。
+  resolution: 已于 Story 2.1 登记为扩展性上限——未来需第 3+ 维度时，重构为 JSON signals 数组或子表（schema migration + deriveSignals 扩展 + 详情页渲染扩展）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: StubMarketDataAdapter 仅测试、非 prod 的诚实下限——fixture 市场数据上公开财经页会误导读者，故 prod 降级、stub 仅 verify/e2e
+  evidence: Story 2.1 的 `StubMarketDataAdapter`（`packages/core/src/modules/market-reaction/stub-adapter.ts`）返回确定性 fixture（priceVolumeChangePercent=3.42 等固定值）。区别于 1.8 explain 的 template（从真实证据诚实派生、可在 prod 跑、公开页挂 AiLabel），市场反应 stub 是 fixture 百分比——把 fixture「+3.42%」上公开财经页会让读者误以为是真实行情反应（违反 NFR「absence shown as absence, never fabricated completeness」）。故 V1 worker 运行时 adapter 解析为 none、prod 诚实降级；stub 仅 verify/e2e 直调 `generateMarketReaction` 走通 happy path（证明管道正确）。stub 不被 `apps/worker` import（头注释标明 test-only）。
+  resolution: 已于 Story 2.1 登记为诚实下限——真实 provider 落地前，prod 永远降级（AC3）；stub 永远仅测试，不上公开面。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-market-reaction-signal-generation-and-display.md`
+  summary: market-reaction worker 为未测运行时——镜像 event-cluster/explain 的 BullMQ worker，无 Redis 集成测试、无 cron/chaining
+  evidence: Story 2.1 的 `verify:market-reaction`（`apps/worker/src/verify-market-reaction.ts`）直调 `generateMarketReaction` + `refreshPublishedReadModel`（纯逻辑+DB append，无 Redis、无 BullMQ），不经过 `registerMarketReactionWorker` 的 Worker 内 `dynamic import("@aguhot/core")` 路径。worker 的 Redis 连接、Job 调度、per-event try/catch 隔离、shutdown 关闭均无集成测试覆盖（镜像 event-cluster/explain 同款未测运行时 defer）。`pnpm -r typecheck/lint` 全绿仍可放行 worker 运行时回归。
+  resolution: 已于 Story 2.1 登记为未测运行时 defer——待平台 CI 门就绪 + service container Redis 接入时，为 worker 运行时加集成测试（enqueue → worker 处理 → 断言 DB snapshot/projection）。

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { AiLabel, TagChip } from "@/components/chips";
+import { AiLabel, ReactionChip, TagChip } from "@/components/chips";
 import { getPrisma, getPublishedHotEventDetail, newTraceId } from "@aguhot/core";
 
 export const metadata: Metadata = {
@@ -10,12 +10,14 @@ export const metadata: Metadata = {
 };
 
 /**
- * Public hot-event detail page — Story 1.8.
+ * Public hot-event detail page — Story 1.8 (detail + explanation + evidence
+ * timeline) + Story 2.1 (market-reaction block).
  *
  * This is the first public DETAIL route to READ the published read models
  * (published_hot_events + published_hot_event_explanations +
- * published_hot_event_evidence), via getPublishedHotEventDetail. It completes
- * the "read the summary and evidence timeline" half of the epic's detail AC.
+ * published_hot_event_evidence + published_hot_event_reactions), via
+ * getPublishedHotEventDetail. It completes the "read the summary, market
+ * reaction, and evidence timeline" half of the epic's detail AC.
  *
  * Why force-dynamic + @aguhot/core import is safe for the build:
  *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
@@ -34,6 +36,13 @@ export const metadata: Metadata = {
  *   - 当前仍不确定什么 (what remains uncertain): same degraded-line rule.
  *   The system-derived explanation partitions carry the uniform <AiLabel/> (AC3,
  *   same component as the operator console — public/operator identical).
+ *
+ * Market-reaction block (Story 2.1, AC2/AC3): two <ReactionChip/>s (price/
+ * volume + sector/limit-up) plus a shared tradingSession time context when a
+ * snapshot was projected; an honest "市场反应数据暂不可用。" degraded line when no
+ * snapshot exists (V1 prod: adapter resolves to none → prod degrades honestly).
+ * UX-DR7: reaction enters ONLY as chips, never a full red/green card. NFR:
+ * values are descriptive, never advisory.
  *
  * Evidence timeline (AC2): one row per source, chronological (publishedAt ASC,
  * nulls last — the projection already assigned `position` in that order). Each
@@ -84,6 +93,9 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
   const isAiSourced =
     detail.explanation !== null && detail.explanation.source !== "human";
   const hasTags = detail.tags.length > 0;
+  // Story 2.1: the market-reaction block. Null when the worker has not produced
+  // a snapshot (V1 prod: adapter resolves to none) → honest degraded state (AC3).
+  const reaction = detail.reaction;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -163,6 +175,38 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
           </p>
         ) : (
           <p className="text-base text-ink-tertiary">系统解释生成中。</p>
+        )}
+      </section>
+
+      {/* Market reaction (Story 2.1, AC2/AC3). Two signal chips + a shared
+          tradingSession time context when a snapshot was projected; an honest
+          degraded line when no snapshot exists (V1 prod: adapter resolves to
+          none). UX-DR7: reaction enters the UI ONLY as chips (never a full red/
+          green card), and every chip pairs color with a text label (a11y floor).
+          NFR: values are descriptive (change percent / sector / limit-up count),
+          never advisory. */}
+      <section className="mt-6 space-y-3 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+          市场反应
+        </h2>
+        {reaction !== null ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <ReactionChip
+                tone={reaction.priceVolume.tone as "up" | "down" | "flat"}
+                value={reaction.priceVolume.value}
+              />
+              <ReactionChip
+                tone={reaction.sectorLimitUp.tone as "up" | "down" | "flat"}
+                value={reaction.sectorLimitUp.value}
+              />
+            </div>
+            <p className="font-mono text-xs text-ink-tertiary">
+              交易时段 {formatDateTime(reaction.tradingSession)}
+            </p>
+          </div>
+        ) : (
+          <p className="text-base text-ink-tertiary">市场反应数据暂不可用。</p>
         )}
       </section>
 

@@ -1,17 +1,18 @@
 /**
- * @aguhot/worker — ingest / normalize / cluster / explain / publish runtime.
+ * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction runtime.
  *
  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
- * cluster worker. Story 1.8 adds the explain worker alongside them: validate
- * required env (DB + Redis), connect Redis, register all three workers, and
- * wire graceful shutdown (close all three). The web request path never imports
- * this module — heavy work is async (AD-4).
+ * cluster worker. Story 1.8 added the explain worker. Story 2.1 adds the
+ * market-reaction worker alongside them: validate required env (DB + Redis),
+ * connect Redis, register all four workers, and wire graceful shutdown (close
+ * all four). The web request path never imports this module — heavy work is
+ * async (AD-4).
  *
- * The three workers are independent and idempotent: ingest does not trigger a
- * cluster job automatically, and cluster does not trigger an explain job
- * automatically (the jobs are decoupled; pipeline chaining/cron orchestration is
- * deferred — see deferred-work.md). Each can run in isolation against the shared
- * DB/Redis.
+ * The four workers are independent and idempotent: ingest does not trigger a
+ * cluster job automatically, cluster does not trigger an explain job, and
+ * explain does not trigger a market-reaction job automatically (the jobs are
+ * decoupled; pipeline chaining/cron orchestration is deferred — see deferred-
+ * work.md). Each can run in isolation against the shared DB/Redis.
  */
 
 import { requireEnv } from "@aguhot/config";
@@ -19,6 +20,7 @@ import { requireEnv } from "@aguhot/config";
 import { closeRedis, getRedis } from "./queues/connection.js";
 import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
 import { registerExplainWorker } from "./queues/explain-queue.js";
+import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
 import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
 
 async function main(): Promise<void> {
@@ -33,8 +35,9 @@ async function main(): Promise<void> {
   const sourceIngestWorker = registerSourceIngestWorker();
   const eventClusterWorker = registerEventClusterWorker();
   const explainWorker = registerExplainWorker();
+  const marketReactionWorker = registerMarketReactionWorker();
 
-  console.log("[worker] source-ingest + event-cluster + explain workers registered and running");
+  console.log("[worker] source-ingest + event-cluster + explain + market-reaction workers registered and running");
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -42,6 +45,7 @@ async function main(): Promise<void> {
       sourceIngestWorker.close(),
       eventClusterWorker.close(),
       explainWorker.close(),
+      marketReactionWorker.close(),
     ]);
     await closeRedis();
     process.exit(0);

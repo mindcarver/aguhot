@@ -137,6 +137,15 @@ model HotEvent {
   // effective title/tags at projection time. It does NOT change event-assembly's
   // write-ownership of hot_event_revisions.
   revisions            HotEventRevision[]
+  // Read-only reverse relations to the market-reaction read models (Story 2.1).
+  // The market-reaction module owns market_reaction_snapshots (AD-2 append-only
+  // write table); publish-orchestrator owns published_hot_event_reactions (AD-3
+  // public projection). These navigations let publish-orchestrator read the
+  // latest snapshot at projection time and let the market-reaction worker query
+  // published events without a snapshot via `marketReactionSnapshots: { none: {} }`.
+  // They do NOT change the respective modules' write-ownership (AD-2).
+  marketReactionSnapshots MarketReactionSnapshot[]
+  publishedReaction       PublishedHotEventReaction?
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -370,4 +379,81 @@ model HotEventRevision {
   @@index([hotEventId])
   @@index([createdAt])
   @@map("hot_event_revisions")
+}
+
+// An append-only market-reaction snapshot for a HotEvent (AD-2/AD-5, Story 2.1).
+// The market-reaction module is the sole writer of this table. Each row records
+// ONE market snapshot's TWO signal dimensions — price/volume (priceVolumeTone +
+// priceVolumeValue) and sector/limit-up (sectorLimitUpTone + sectorLimitUpValue
+// + limitUpCount) — plus a tradingSession time context shared by both signals
+// (epic: every signal carries an explicit trading-session time context). Rows are
+// NEVER updated or deleted: every generation appends a new row, so the table is a
+// time series of snapshots for the event (HOT_EVENT ||--o{ REACTION_SNAPSHOT).
+// The public read model projects the LATEST row (createdAt desc, id desc tiebreak)
+// into published_hot_event_reactions; the market-reaction worker V1 only generates
+// the initial snapshot for a published event with no snapshot.
+//
+// FK onDelete: Cascade so a HotEvent deletion cleans up its snapshot history.
+// `source` distinguishes provenance ("template" V1 deterministic fixture-backed
+// derivation; future provider id when a real market-data adapter is wired). V1
+// worker runtime resolves NO adapter → no snapshot is written → prod degrades
+// honestly (AC3); StubMarketDataAdapter is test-only (verify/e2e).
+//
+// NFR: signals are explanatory, never advisory — tone/value describe observed
+// market facts (change percent, sector name, limit-up count) and NEVER contain
+// buy/sell/target-price/position wording.
+//
+// The flat 2-dimension column layout (not a JSON signals array) mirrors V1 AC
+// (exactly two required dimensions) and maps directly to ReactionChip's
+// {tone, value}. Adding a future third dimension (e.g. capital flow) is a
+// schema migration (deferred).
+model MarketReactionSnapshot {
+  id                   String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId           String   @map("hot_event_id")
+  priceVolumeTone      String   @map("price_volume_tone") // ReactionTone union value ("up"|"down"|"flat")
+  priceVolumeValue     String   @map("price_volume_value")
+  sectorLimitUpTone    String   @map("sector_limit_up_tone") // ReactionTone union value
+  sectorLimitUpValue   String   @map("sector_limit_up_value")
+  limitUpCount         Int      @map("limit_up_count")
+  tradingSession       DateTime @map("trading_session")
+  source               String // ReactionSource union value ("template"; future provider id)
+  traceId              String?  @map("trace_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("market_reaction_snapshots")
+}
+
+// The public read model for a published hot-event market reaction (AD-3, Story
+// 2.1). The publish-orchestrator module is the sole writer. Row existence =
+// currently published reaction: publish/republish upserts the row (projecting
+// the latest MarketReactionSnapshot), takedown deletes it. There is intentionally
+// NO status column — row existence is the visibility contract (same pattern as
+// the other published_* read models). FK onDelete: Cascade so a HotEvent deletion
+// cleans up the projection. `reaction_source` records the provenance of the
+// projected snapshot (operator audit), and `generated_at` records when that
+// snapshot was generated (so the public surface can show the trading-session
+// context). A row may be ABSENT while the event is published if the market-
+// reaction worker has not produced a snapshot yet (V1 prod: adapter resolves to
+// none → never produced) — the detail page renders an honest degraded state in
+// that case (AC3, never fabricates a reaction).
+model PublishedHotEventReaction {
+  hotEventId          String   @id @map("hot_event_id")
+  priceVolumeTone     String   @map("price_volume_tone") // ReactionTone union value
+  priceVolumeValue    String   @map("price_volume_value")
+  sectorLimitUpTone   String   @map("sector_limit_up_tone") // ReactionTone union value
+  sectorLimitUpValue  String   @map("sector_limit_up_value")
+  limitUpCount        Int      @map("limit_up_count")
+  tradingSession      DateTime @map("trading_session")
+  reactionSource      String   @map("reaction_source") // ReactionSource union value
+  generatedAt         DateTime @map("generated_at")
+  traceId             String?  @map("trace_id")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@map("published_hot_event_reactions")
 }
