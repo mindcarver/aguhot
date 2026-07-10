@@ -660,3 +660,71 @@ model PublishedDailyDigest {
 
   @@map("published_daily_digests")
 }
+
+// A lightweight, credential-free user account (Story 3.2 — deferred-login
+// follow action). The user-profile module is the sole writer of this table
+// (AD-2 single ownership boundary). An account is just a stable UUIDv7 id with
+// NO credential columns (no password hash, no OAuth subject, no email) — the
+// "login" action itself creates the account and sets a signed session cookie
+// (see apps/web/lib/session.ts). Real credential auth (password / OAuth /
+// magic-link / email verification + identity provider selection) is deferred to
+// a later epic (registered in deferred-work.md). The upgrade path is additive:
+// add credential columns + verify them in createSession/readSession; the follow
+// domain logic and FollowButton call surface stay unchanged.
+//
+// PK is UUIDv7 assigned in application code (createAccount uses uuidv7()),
+// mirroring the system-wide app-side PK convention (no DB default).
+model UserAccount {
+  id        String   @id // UUIDv7, assigned in application code (createAccount)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  followTargets FollowTarget[]
+
+  @@map("user_accounts")
+}
+
+// A follow target — one row per (userAccount, targetKind, target) the user has
+// followed (Story 3.2). The user-profile module is the sole writer (AD-2).
+//
+// AD-3 + Single ownership boundary: this table has NO FK to hot_events /
+// themes / published_hot_events. A follow row references its target by id
+// STRING ONLY — `target_hot_event_id` points at a published_hot_events.id (not
+// FK-constrained) and `target_theme_slug` is a plain string. This means a taken-
+// down event's follow row stays (3.3 owns the "offline" annotation on the
+// watchlist); 3.2 deliberately does NOT validate target existence against
+// published_* (AC does not require it). The module NEVER reads or writes
+// HotEvent / Theme / published_* aggregates — it only stores/retrieves id
+// strings.
+//
+// Discriminated union at the call surface maps to two nullable columns:
+//   - targetKind="hot_event" → target_hot_event_id set, target_theme_slug NULL.
+//   - targetKind="theme"     → target_theme_slug set, target_hot_event_id NULL.
+// `target_kind` is whitelisted at the application layer (FollowTargetKind
+// const in user-profile/types.ts); it is a String column with a TS union (no
+// Prisma enum, per erasableSyntaxOnly).
+//
+// Two partial @@unique constraints guarantee "one user follows a given target
+// at most once": partial indexes over NULL-able columns do NOT treat multiple
+// NULLs as duplicates (SQL standard), so the hot_event unique applies only to
+// rows with a non-null target_hot_event_id, and the theme unique applies only
+// to rows with a non-null target_theme_slug. followTarget uses upsert against
+// the matching unique, so a repeat follow is idempotent (AC2 / I/O matrix row
+// "重复收藏幂等"); unfollowTarget uses deleteMany (idempotent on already-gone).
+model FollowTarget {
+  id               String   @id // UUIDv7, assigned in application code
+  userAccountId    String   @map("user_account_id")
+  targetKind       String   @map("target_kind") // FollowTargetKind union ("hot_event"|"theme")
+  targetHotEventId String?  @map("target_hot_event_id")
+  targetThemeSlug  String?  @map("target_theme_slug")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  userAccount UserAccount @relation(fields: [userAccountId], references: [id], onDelete: Cascade)
+
+  // Partial uniques: one row per (user, kind, target). See model comment for
+  // why two are needed (nullable target columns + SQL NULL-not-equal-NULL).
+  @@unique([userAccountId, targetKind, targetHotEventId])
+  @@unique([userAccountId, targetKind, targetThemeSlug])
+  @@index([userAccountId])
+  @@map("follow_targets")
+}

@@ -10,6 +10,7 @@
     "db:migrate": "prisma migrate dev",
     "verify:cluster-logic": "tsx src/modules/event-assembly/clustering.selfcheck.ts",
     "verify:review-logic": "tsx src/modules/review-workflow/transitions.selfcheck.ts",
+    "verify:follow-logic": "tsx src/modules/user-profile/follow-service.selfcheck.ts",
     "typecheck": "prisma generate && tsc --noEmit",
     "lint": "eslint src",
     "build": "prisma generate && tsc -p tsconfig.build.json"

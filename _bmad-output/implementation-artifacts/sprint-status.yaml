@@ -69,7 +69,7 @@ development_status:
   epic-2-retrospective: optional
   epic-3: backlog
   3-1-hot-event-and-theme-search: done
-  3-2-delayed-login-follow-action: backlog
+  3-2-delayed-login-follow-action: done
   3-3-watchlist-and-revisit-management: backlog
   3-4-search-results-to-detail-return-loop: backlog
   3-5-semantic-and-keyboard-accessibility-baseline: backlog

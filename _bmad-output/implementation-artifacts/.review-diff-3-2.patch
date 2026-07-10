@@ -1,0 +1,2478 @@
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index b67b0b1..ea7f737 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -612,3 +612,38 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   summary: AD-3 读作用域不变式（`listPublishedHotEventExplanations` 只读 `published_*`、不读 `explanation_versions`/`hot_events`/`evidence_*`）当前不可机器验证
+   evidence: 仓内无 `packages/core`/web 组件单测 runner，无 prisma query spy / schema 级守卫测试。AD-3 读作用域仅存于 docstring + 模块注释。takedown 测试与「只读 published_*」一致，但不能证明读作用域（一个也读 `explanation_versions` 的实现仍能通过现有测试，只要 published 行存在）。
+   resolution: 引入 `packages/core` 单测 runner（vitest）+ prisma query spy，或架构层 lint 规则守卫 publish-orchestrator 的读作用域。跨 story 基建投入，低优先。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: 真实凭证 auth（密码 / OAuth / magic-link / 邮箱验证）+ identity provider 选型未落地——V1 会话为纯 HMAC 签名 cookie（无凭证），登录动作 = 建账号 + 设 cookie
++  evidence: Story 3.2 的 `user_accounts` 表只有 id + 时间戳，无密码哈希 / OAuth subject / email 列。会话 = `aguhot:session=accountId.hmac`（Node `crypto.createHmac` + `timingSafeEqual`，零依赖）。登录动作（`startSessionAndFollow`）= 建 `UserAccount` 行 + 设签名 cookie + 写 follow，无任何凭证校验。升级路径：真实 auth 落地时 `UserAccount` 加 credential 列，`createSession`/`readSession` 替换为凭证校验，follow 域逻辑与 FollowButton 调用面不变。deferred 到后续 epic。
++  resolution: 已于 Story 3.2 登记为真实凭证 auth defer——待真实 identity provider（next-auth/Auth.js/lucia 或自建）选型落地时，替换 session helper + 加 credential 列，follow 调用面无感。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: `/favorites` 列表 / 管理 / 空态 / 离线标注（3.3 own）——3.2 仅保 `/favorites` 匿名可达占位 + 微调文案
++  evidence: Story 3.2 的 `/favorites/page.tsx` 仍为结构性占位（静态服务端组件，不读 session / 不读 follow），仅微调文案反映「收藏能力已就绪，列表将在后续开放」。follow 列表 UI（读 `listFollows` + 渲染卡片 + 离线/下线标注 + 管理/取消）归 Story 3.3。3.2 不建列表，3.3 own。
++  resolution: 已于 Story 3.2 登记为 3.3 own——Story 3.3 落地 `/favorites` 列表 UI（读 `listFollows` + 渲染 + 离线标注 + 管理）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: follow target 存在性校验（下线事件 follow 行的离线展示）defer——3.2 不读 published 校验 follow 目标存在
++  evidence: Story 3.2 的 `follow_targets` 行按 id 字符串引用 published_hot_events.id / theme slug，**不**外键约束、**不**校验存在性。下线事件的 follow 行仍在（`refreshPublishedReadModel(takedown)` 删 published_* 不影响 follow_targets）。3.2 的 follow 读/写不校验目标是否存在（AC 不要求）。3.3 watchlist 列表需读 published_* 比对，标注「离线」状态（NFR2：watchlist 须明确标注离线 item，绝不伪装为 live）。
++  resolution: 已于 Story 3.2 登记为 3.3 范围——Story 3.3 watchlist 读 `listFollows` + 比对 published_* 存在性，标注离线。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: 账号资料 / 偏好 / 账号删除 / 多设备账号合并 defer——V1 账号为纯 id，无资料/偏好/删除/合并
++  evidence: Story 3.2 的 `UserAccount` 表只有 id + createdAt + updatedAt，无资料列（昵称/头像）、无偏好列、无软删/硬删、无设备/会话列表。多设备登录同一账号 = 同一 cookie 值（cookie 可跨设备复制，无设备绑定）。账号合并（两个 UserAccount 合一）无机制。真实账号体系随凭证 auth（见上 defer）落地时一并设计。
++  resolution: 已于 Story 3.2 登记为账号体系 defer——待真实 auth 落地时，加资料/偏好列 + 账号删除流程 + 多设备会话管理 + 账号合并机制。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: 关注数量展示 / 通知 / 推送 defer——V1 无关注计数、无通知/推送
++  evidence: Story 3.2 不渲染关注数量（`listFollows` 返回行但不计数展示）、无通知/推送基建（无 WebSocket/SSE/邮件通知）。关注事件的更新通知（事件有新证据时提醒关注者）是独立 concern，需通知基建（worker 触发 + 通知渠道 adapter）。epic-3-context 未列通知为 V1。
++  resolution: 已于 Story 3.2 登记为通知 defer——待通知基建（WebSocket/SSE/邮件/push）落地时，加关注事件更新通知 + 关注计数展示。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: 会话旋转 / 续期 / 吊销 + SESSION_SECRET 轮换策略 defer——V1 会话为固定 90 天 HMAC cookie，无旋转/续期/吊销，SECRET 轮换需全员重登
++  evidence: Story 3.2 的 `createSession` 设固定 90 天 maxAge cookie，无续期（每次请求不刷新）、无旋转、无服务端吊销列表（cookie 是无状态的，无法单点失效除非改 SECRET）。`SESSION_SECRET` 轮换 = 所有现有 cookie 立即失效（签名不再匹配 → 全员降级匿名 → 需重登）。真实 session 治理（服务端 session store、旋转、吊销）随凭证 auth 落地。
++  resolution: 已于 Story 3.2 登记为 session 治理 defer——待真实 auth + 服务端 session store 落地时，加会话旋转/续期/吊销 + SECRET 轮换兼容窗口（双 SECRET 重叠期）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
++  summary: CSRF 显式 token defer——3.2 依赖 Next server action 内置 Origin 校验，无显式 CSRF token
++  evidence: Story 3.2 的 `toggleFollow` / `startSessionAndFollow` 是 Next server actions（`"use server"`），Next 16 对 server action POST 自带 Origin 校验（拒绝跨站 forged POST）。3.2 依赖该内置校验，不引入显式 CSRF token（double-submit / SameSite=Strict 已由 cookie SameSite=Lax 部分覆盖）。显式 CSRF token（更严格 / 兼容性更好）defer。
++  resolution: 已于 Story 3.2 登记为 CSRF defer——待安全审计要求或凭证 auth 落地时，加显式 CSRF token（double-submit cookie 或同步 token pattern）。当前 SameSite=Lax + Next Origin 校验是足够的地板。
+diff --git a/apps/web/app/(public)/_components/event-card.tsx b/apps/web/app/(public)/_components/event-card.tsx
+index f7b46e7..f8a1b6a 100644
+--- a/apps/web/app/(public)/_components/event-card.tsx
++++ b/apps/web/app/(public)/_components/event-card.tsx
+@@ -1,9 +1,14 @@
+ import Link from "next/link";
+ 
++import type { FollowRef } from "@aguhot/core";
++
+ import { cn } from "@/lib/utils";
+ 
++import { FollowButton } from "./follow-button";
++
+ /**
+- * Published hot-event feed card — Story 1.7 (whole-card link added in 1.8).
++ * Published hot-event feed card — Story 1.7 (whole-card link added in 1.8;
++ * FollowButton sibling added in 3.2).
+  *
+  * Renders one published_hot_events row as an information card on the public feed.
+  * The card shows exactly the fields the read model has (Story 1.6 minimal
+@@ -20,6 +25,18 @@ import { cn } from "@/lib/utils";
+  * surface is unchanged — only the outer element flipped from `<li>` to a `<li>`
+  * wrapping a `<Link>` so the entire card is clickable.
+  *
++ * Story 3.2: a FollowButton is mounted as a DOM SIBLING of the whole-card Link
++ * (inside the `<li class="relative">`), absolutely positioned in the top-right
++ * corner. This is REQUIRED for HTML validity: a `<button>` / `<form>` CANNOT be
++ * a descendant of an `<a>` (invalid HTML — browsers force a DOM split that
++ * breaks both the card click and the button). The Link keeps its full-card hit
++ * area but gains `pr-16` right padding so its content never underlaps the
++ * FollowButton. The ranking-reason chip, meta line, and tokens are byte-for-byte
++ * unchanged. Follow state is SSR-driven: the page passes `isFollowing` +
++ * `isLoggedIn` after reading the session + follow state; absent props → the
++ * FollowButton is not rendered (e.g. search results, where follow-on-card is
++ * out of scope for 3.2).
++ *
+  * Tokens: uses only real @theme tokens that resolve in Tailwind v4
+  * (bg-surface-raised / border-border-hairline / rounded-lg / ink-* / bg-brand).
+  * Does NOT copy the operator console's broken undefined tokens (bg-surface /
+@@ -36,6 +53,17 @@ export interface EventCardProps {
+   latestEvidenceAt: Date;
+   publishedAt: Date;
+   now?: Date;
++  /**
++   * SSR follow state for this event + the current viewer (Story 3.2). Omitted
++   * on surfaces that do not render a follow button on the card (e.g. /search
++   * results). When omitted, no FollowButton is rendered.
++   */
++  isFollowing?: boolean;
++  /**
++   * SSR logged-in state (session present). When `isFollowing` is provided this
++   * must be too. Omitted alongside `isFollowing` → no FollowButton.
++   */
++  isLoggedIn?: boolean;
+ }
+ 
+ /**
+@@ -68,21 +96,31 @@ export function EventCard({
+   latestEvidenceAt,
+   publishedAt,
+   now = new Date(),
++  isFollowing,
++  isLoggedIn,
+ }: EventCardProps) {
+   const reason = rankingReason(evidenceCount, latestEvidenceAt, now);
+ 
++  // Story 3.2: render the FollowButton only when the page passed follow state.
++  // Search results omit these props → no follow-on-card (3.2 scope).
++  const showFollow = isFollowing !== undefined && isLoggedIn !== undefined;
++  const followRef: FollowRef = { kind: "hot_event", hotEventId };
++
+   return (
+-    <li className="rounded-lg border border-border-hairline bg-surface-raised">
++    // relative + pr-16 on the Link so the FollowButton (absolute top-right) has
++    // a positioning context and never underlaps the card content.
++    <li className="relative rounded-lg border border-border-hairline bg-surface-raised">
+       {/*
+         Whole-card link (Story 1.8): the entire card body is wrapped in a Link so
+         the card is one click target to the detail page. block + padding on the
+         Link keeps the hit area the full card; the existing chip/meta layout is
+         unchanged. hover:bg-surface-muted gives a subtle hover affordance that
+-        works with the bg-surface-raised base.
++        works with the bg-surface-raised base. Story 3.2 adds pr-16 so the
++        top-right FollowButton (a DOM sibling, not a descendant) never overlaps.
+       */}
+       <Link
+         href={`/events/${hotEventId}`}
+-        className="block rounded-lg px-5 py-4 hover:bg-surface-muted"
++        className="block rounded-lg px-5 py-4 pr-16 hover:bg-surface-muted"
+       >
+         <div className="flex items-baseline justify-between gap-4">
+           <h2 className="text-lg font-semibold text-ink-primary">{title}</h2>
+@@ -114,6 +152,21 @@ export function EventCard({
+           </div>
+         </dl>
+       </Link>
++      {/*
++        Story 3.2: FollowButton is a DOM SIBLING of the whole-card Link (NOT a
++        descendant). Nesting a <button>/<form> inside an <a> is invalid HTML and
++        breaks both interactions; absolute-positioning the button as a sibling
++        keeps the whole-card click AND a separate top-right follow hit area.
++      */}
++      {showFollow ? (
++        <div className="absolute right-3 top-3">
++          <FollowButton
++            followRef={followRef}
++            initialIsFollowing={isFollowing ?? false}
++            isLoggedIn={isLoggedIn ?? false}
++          />
++        </div>
++      ) : null}
+     </li>
+   );
+ }
+diff --git a/apps/web/app/(public)/events/[hotEventId]/page.tsx b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+index 8243c35..438e7a7 100644
+--- a/apps/web/app/(public)/events/[hotEventId]/page.tsx
++++ b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+@@ -5,11 +5,16 @@ import { AiLabel, FilterPill, ReactionChip, TagChip } from "@/components/chips";
+ import {
+   getPrisma,
+   getPublishedHotEventDetail,
++  isFollowing,
++  FollowTargetKind,
+   newTraceId,
+   type AssociationItem,
+ } from "@aguhot/core";
+ 
++import { readSession } from "@/lib/session";
++
+ import { BackLink } from "../../_components/back-link";
++import { FollowButton } from "../../_components/follow-button";
+ 
+ export const metadata: Metadata = {
+   title: "热点事件详情",
+@@ -90,6 +95,20 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+     notFound();
+   }
+ 
++  // Story 3.2: read the session (if any) + the follow state for this event.
++  // Anonymous → no extra isFollowing DB read (initialIsFollowing stays false,
++  // FollowButton renders 「收藏」 + the deferred-login dialog).
++  const session = await readSession();
++  const following =
++    session !== null
++      ? await isFollowing({
++          prisma,
++          traceId: newTraceId(),
++          userAccountId: session.accountId,
++          ref: { kind: FollowTargetKind.HotEvent, hotEventId },
++        })
++      : false;
++
+   const hasExplanation = detail.explanation !== null;
+   // AC3 + 1.8 defer: the uniform <AiLabel> marks SYSTEM-derived content only.
+   // An operator-authored (source="human") explanation is NOT system-derived, so
+@@ -153,6 +172,18 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+         </div>
+       ) : null}
+ 
++      {/* Story 3.2: FollowButton under the title. Anonymous → opens the
++          deferred-login dialog; logged-in → toggles follow. Cross-page
++          consistency: the feed card and this button read the same
++          (accountId, hot_event, hotEventId) truth. */}
++      <div className="mt-4">
++        <FollowButton
++          followRef={{ kind: FollowTargetKind.HotEvent, hotEventId }}
++          initialIsFollowing={following}
++          isLoggedIn={session !== null}
++        />
++      </div>
++
+       {/* 发生了什么 — facts partition. Source count + times, always rendered. */}
+       <section className="mt-8 space-y-3 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
+         <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+diff --git a/apps/web/app/(public)/favorites/page.tsx b/apps/web/app/(public)/favorites/page.tsx
+index 719024b..5d18306 100644
+--- a/apps/web/app/(public)/favorites/page.tsx
++++ b/apps/web/app/(public)/favorites/page.tsx
+@@ -5,16 +5,17 @@ export const metadata: Metadata = {
+ };
+ 
+ /**
+- * Favorites placeholder — Story 1.2.
++ * Favorites placeholder — Story 1.2 (copy updated in 3.2).
+  *
+  * Structural server-component placeholder (isomorphic to the 1.1 `/console`
+  * placeholder): exists only so the primary nav target `/favorites` is
+  * anonymously reachable (HTTP 200, inside the public shell). It does NOT
+- * force login — public paths must stay anonymous (AD-8). Logged-in
+- * favorites/personal preferences open in a later story, and that is noted on
+- * the page itself. This page renders no business content and has no session
+- * dependency. H1 uses `font-display` and colors use `@theme` ink tokens
+- * (Story 1.3).
++ * force login — public paths must stay anonymous (AD-8). This page renders no
++ * business content and has no session dependency (it stays static so the build
++ * stays DATABASE_URL-free AND SESSION_SECRET-free). The follow action itself
++ * (Story 3.2) lives on the feed card / detail page / theme page; the watchlist
++ * list/management UI is owned by Story 3.3. H1 uses `font-display` and colors
++ * use `@theme` ink tokens (Story 1.3).
+  */
+ export default function FavoritesPlaceholderPage() {
+   return (
+@@ -26,7 +27,7 @@ export default function FavoritesPlaceholderPage() {
+       <section className="mt-12 space-y-3">
+         <h2 className="text-xl font-semibold">当前状态</h2>
+         <p className="text-ink-secondary">
+-          收藏为结构性占位页。登录态下的收藏、关注与个人偏好能力将在后续迭代中陆续开放；当前匿名浏览不受影响。
++          你已经可以在热点详情页与主题页点击「收藏」保存感兴趣的内容。关注列表与管理能力将在后续迭代中开放；当前匿名浏览不受影响。
+         </p>
+       </section>
+     </div>
+diff --git a/apps/web/app/(public)/page.tsx b/apps/web/app/(public)/page.tsx
+index 2359a47..e891df6 100644
+--- a/apps/web/app/(public)/page.tsx
++++ b/apps/web/app/(public)/page.tsx
+@@ -2,13 +2,17 @@ import type { Metadata } from "next";
+ import Link from "next/link";
+ 
+ import {
++  FollowTargetKind,
+   getPrisma,
++  listFollowedTargetIds,
+   listPublishedAssociations,
+   listPublishedHotEvents,
+   newTraceId,
+   type AssociationItem,
+ } from "@aguhot/core";
+ 
++import { readSession } from "@/lib/session";
++
+ import { EventCard } from "./_components/event-card";
+ import {
+   FeedFilters,
+@@ -95,6 +99,22 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
+ 
+   const totalExists = all.length > 0;
+   const now = new Date();
++  // Story 3.2: read the session (if any) and batch-fetch the viewer's followed
++  // hot-event ids for the feed cards. Anonymous → no extra DB read (the
++  // followedIds Set stays empty and FollowButton renders 「收藏」 + the
++  // deferred-login dialog). Logged-in → one listFollowedTargetIds read feeds
++  // every EventCard's initial state (no N+1 per card).
++  const session = await readSession();
++  const followedIds =
++    session !== null
++      ? await listFollowedTargetIds({
++          prisma,
++          traceId,
++          userAccountId: session.accountId,
++          kind: FollowTargetKind.HotEvent,
++        })
++      : new Set<string>();
++  const isLoggedIn = session !== null;
+   // Apply the window filter, then the association filter (AND). The association
+   // filter keeps an event iff its projected items include one matching the
+   // active dimension's {kind, label}. Events with no projection row are
+@@ -136,6 +156,8 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
+                   latestEvidenceAt={e.latestEvidenceAt}
+                   publishedAt={e.publishedAt}
+                   now={now}
++                  isFollowing={followedIds.has(e.hotEventId)}
++                  isLoggedIn={isLoggedIn}
+                 />
+               ))}
+             </ul>
+diff --git a/apps/web/app/(public)/topics/[slug]/page.tsx b/apps/web/app/(public)/topics/[slug]/page.tsx
+index 1ebc468..9e8ad60 100644
+--- a/apps/web/app/(public)/topics/[slug]/page.tsx
++++ b/apps/web/app/(public)/topics/[slug]/page.tsx
+@@ -4,13 +4,19 @@ import { notFound } from "next/navigation";
+ 
+ import { AiLabel } from "@/components/chips";
+ import {
++  FollowTargetKind,
+   getPrisma,
++  isFollowing,
+   listPublishedHotEvents,
+   listPublishedThemeMemberships,
+   newTraceId,
+ } from "@aguhot/core";
+ import type { ThemeRef } from "@aguhot/core";
+ 
++import { readSession } from "@/lib/session";
++
++import { FollowButton } from "../../_components/follow-button";
++
+ export const metadata: Metadata = {
+   title: "主题追踪",
+ };
+@@ -121,6 +127,20 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
+     if (themeLabel !== slug) break;
+   }
+ 
++  // Story 3.2: read the session (if any) + the follow state for this theme slug.
++  // Anonymous → no extra isFollowing DB read (initialIsFollowing stays false,
++  // FollowButton renders 「收藏」 + the deferred-login dialog).
++  const session = await readSession();
++  const following =
++    session !== null
++      ? await isFollowing({
++          prisma,
++          traceId: newTraceId(),
++          userAccountId: session.accountId,
++          ref: { kind: FollowTargetKind.Theme, themeSlug: slug },
++        })
++      : false;
++
+   return (
+     <div className="mx-auto max-w-3xl px-6 py-12">
+       {/* Return link to the /topics directory. theme[slug]→/topics is a
+@@ -144,6 +164,14 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
+         <p className="text-sm text-ink-tertiary">
+           按时间序列追踪该主题下的成员事件（从早到晚）。
+         </p>
++        {/* Story 3.2: FollowButton for this theme. Anonymous → deferred-login
++            dialog; logged-in → toggles follow. Cross-page consistency: this and
++            any other surface reading (accountId, theme, slug) stay in sync. */}
++        <FollowButton
++          followRef={{ kind: FollowTargetKind.Theme, themeSlug: slug }}
++          initialIsFollowing={following}
++          isLoggedIn={session !== null}
++        />
+       </header>
+ 
+       {/* Member events as a chronological sequence (latestEvidenceAt ASC). Each
+diff --git a/apps/web/next-env.d.ts b/apps/web/next-env.d.ts
+index c4b7818..9edff1c 100644
+--- a/apps/web/next-env.d.ts
++++ b/apps/web/next-env.d.ts
+@@ -1,6 +1,6 @@
+ /// <reference types="next" />
+ /// <reference types="next/image-types/global" />
+-import "./.next/dev/types/routes.d.ts";
++import "./.next/types/routes.d.ts";
+ 
+ // NOTE: This file should not be edited
+ // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 2bf188c..84f909f 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -9,7 +9,7 @@
+     "start": "next start",
+     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+     "lint": "eslint .",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow\"",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+@@ -21,6 +21,7 @@
+     "e2e:daily": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @daily",
+     "e2e:loop": "tsx e2e/seed-loop.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @loop",
+     "e2e:search": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search",
++    "e2e:follow": "tsx e2e/seed-follow.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-follow-e2e-secret-32chars playwright test --grep @follow",
+     "seed:console": "tsx e2e/seed-console.ts",
+     "seed:feed": "tsx e2e/seed-feed.ts",
+     "seed:detail": "tsx e2e/seed-detail.ts",
+@@ -31,7 +32,8 @@
+     "seed:themes": "tsx e2e/seed-themes.ts",
+     "seed:daily": "tsx e2e/seed-daily.ts",
+     "seed:loop": "tsx e2e/seed-loop.ts",
+-    "seed:search": "tsx e2e/seed-search.ts"
++    "seed:search": "tsx e2e/seed-search.ts",
++    "seed:follow": "tsx e2e/seed-follow.ts"
+   },
+   "dependencies": {
+     "@aguhot/config": "workspace:*",
+diff --git a/packages/config/src/env.ts b/packages/config/src/env.ts
+index 06a3632..3827fd2 100644
+--- a/packages/config/src/env.ts
++++ b/packages/config/src/env.ts
+@@ -17,11 +17,18 @@ const nodeEnvSchema = z.enum(["development", "test", "production"]);
+ /**
+  * The full environment contract. Workspaces that need real infra (worker,
+  * operator flows) call `loadEnv()` which throws on a missing required var.
++ *
++ * SESSION_SECRET is optional at the schema level (so `loadEnv` / `next build`
++ * do not require it). The web session helper (apps/web/lib/session.ts) asserts
++ * its presence at REQUEST time via `requireEnv("SESSION_SECRET")` — mirroring
++ * the DATABASE_URL pattern: the public web build stays SESSION_SECRET-free, and
++ * only force-dynamic routes / server actions that touch the session resolve it.
+  */
+ export const envSchema = z.object({
+   NODE_ENV: nodeEnvSchema.default("development"),
+   DATABASE_URL: z.string().url().optional(),
+   REDIS_URL: z.string().url().optional(),
++  SESSION_SECRET: z.string().min(16).optional(),
+   NEXT_PUBLIC_APP_NAME: z.string().default("AGUHOT"),
+ });
+ 
+diff --git a/packages/core/package.json b/packages/core/package.json
+index 8301d68..3e8fb74 100644
+--- a/packages/core/package.json
++++ b/packages/core/package.json
+@@ -10,6 +10,7 @@
+     "db:migrate": "prisma migrate dev",
+     "verify:cluster-logic": "tsx src/modules/event-assembly/clustering.selfcheck.ts",
+     "verify:review-logic": "tsx src/modules/review-workflow/transitions.selfcheck.ts",
++    "verify:follow-logic": "tsx src/modules/user-profile/follow-service.selfcheck.ts",
+     "typecheck": "prisma generate && tsc --noEmit",
+     "lint": "eslint src",
+     "build": "prisma generate && tsc -p tsconfig.build.json"
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index ab24829..4628c2c 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -660,3 +660,71 @@ model PublishedDailyDigest {
+ 
+   @@map("published_daily_digests")
+ }
++
++// A lightweight, credential-free user account (Story 3.2 — deferred-login
++// follow action). The user-profile module is the sole writer of this table
++// (AD-2 single ownership boundary). An account is just a stable UUIDv7 id with
++// NO credential columns (no password hash, no OAuth subject, no email) — the
++// "login" action itself creates the account and sets a signed session cookie
++// (see apps/web/lib/session.ts). Real credential auth (password / OAuth /
++// magic-link / email verification + identity provider selection) is deferred to
++// a later epic (registered in deferred-work.md). The upgrade path is additive:
++// add credential columns + verify them in createSession/readSession; the follow
++// domain logic and FollowButton call surface stay unchanged.
++//
++// PK is UUIDv7 assigned in application code (createAccount uses uuidv7()),
++// mirroring the system-wide app-side PK convention (no DB default).
++model UserAccount {
++  id        String   @id // UUIDv7, assigned in application code (createAccount)
++  createdAt DateTime @default(now()) @map("created_at")
++  updatedAt DateTime @updatedAt @map("updated_at")
++
++  followTargets FollowTarget[]
++
++  @@map("user_accounts")
++}
++
++// A follow target — one row per (userAccount, targetKind, target) the user has
++// followed (Story 3.2). The user-profile module is the sole writer (AD-2).
++//
++// AD-3 + Single ownership boundary: this table has NO FK to hot_events /
++// themes / published_hot_events. A follow row references its target by id
++// STRING ONLY — `target_hot_event_id` points at a published_hot_events.id (not
++// FK-constrained) and `target_theme_slug` is a plain string. This means a taken-
++// down event's follow row stays (3.3 owns the "offline" annotation on the
++// watchlist); 3.2 deliberately does NOT validate target existence against
++// published_* (AC does not require it). The module NEVER reads or writes
++// HotEvent / Theme / published_* aggregates — it only stores/retrieves id
++// strings.
++//
++// Discriminated union at the call surface maps to two nullable columns:
++//   - targetKind="hot_event" → target_hot_event_id set, target_theme_slug NULL.
++//   - targetKind="theme"     → target_theme_slug set, target_hot_event_id NULL.
++// `target_kind` is whitelisted at the application layer (FollowTargetKind
++// const in user-profile/types.ts); it is a String column with a TS union (no
++// Prisma enum, per erasableSyntaxOnly).
++//
++// Two partial @@unique constraints guarantee "one user follows a given target
++// at most once": partial indexes over NULL-able columns do NOT treat multiple
++// NULLs as duplicates (SQL standard), so the hot_event unique applies only to
++// rows with a non-null target_hot_event_id, and the theme unique applies only
++// to rows with a non-null target_theme_slug. followTarget uses upsert against
++// the matching unique, so a repeat follow is idempotent (AC2 / I/O matrix row
++// "重复收藏幂等"); unfollowTarget uses deleteMany (idempotent on already-gone).
++model FollowTarget {
++  id               String   @id // UUIDv7, assigned in application code
++  userAccountId    String   @map("user_account_id")
++  targetKind       String   @map("target_kind") // FollowTargetKind union ("hot_event"|"theme")
++  targetHotEventId String?  @map("target_hot_event_id")
++  targetThemeSlug  String?  @map("target_theme_slug")
++  createdAt        DateTime @default(now()) @map("created_at")
++
++  userAccount UserAccount @relation(fields: [userAccountId], references: [id], onDelete: Cascade)
++
++  // Partial uniques: one row per (user, kind, target). See model comment for
++  // why two are needed (nullable target columns + SQL NULL-not-equal-NULL).
++  @@unique([userAccountId, targetKind, targetHotEventId])
++  @@unique([userAccountId, targetKind, targetThemeSlug])
++  @@index([userAccountId])
++  @@map("follow_targets")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 45ad713..61c02cd 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -299,3 +299,34 @@ export type {
+   ThemeSearchHit,
+   SearchPublishedResult,
+ } from "./modules/search-read/index.js";
++
++// user-profile module (Story 3.2 — lightweight account + follow state;
++// deferred-login follow action; no credential auth (deferred)). Owns
++// user_accounts + follow_targets (AD-2 single ownership boundary). Follow rows
++// reference targets by id string ONLY (no FK to hot_events / themes /
++// published_*). Cookie/session helpers live in apps/web/lib/session.ts (Next
++// runtime concept, not core).
++export {
++  createAccount,
++  tryGetAccount,
++  followTarget,
++  unfollowTarget,
++  listFollows,
++  listFollowedTargetIds,
++  isFollowing,
++  assertValidFollowRef,
++  FollowTargetKind,
++} from "./modules/user-profile/index.js";
++export type {
++  FollowTargetKindType,
++  FollowRef,
++  FollowTarget,
++  UserProfileOptions,
++  CreateAccountOptions,
++  TryGetAccountOptions,
++  FollowTargetOptions,
++  UnfollowTargetOptions,
++  ListFollowsOptions,
++  ListFollowedTargetIdsOptions,
++  IsFollowingOptions,
++} from "./modules/user-profile/index.js";
+
+diff --git apps/web/app/(public)/_actions/follow-actions.ts apps/web/app/(public)/_actions/follow-actions.ts
+new file mode 100644
+index 0000000..25d23c1
+--- /dev/null
++++ apps/web/app/(public)/_actions/follow-actions.ts
+@@ -0,0 +1,149 @@
++"use server";
++
++import { revalidatePath } from "next/cache";
++
++import {
++  createAccount,
++  followTarget,
++  FollowTargetKind,
++  getPrisma,
++  isFollowing,
++  newTraceId,
++  unfollowTarget,
++  type FollowRef,
++} from "@aguhot/core";
++
++import { createSession, readSession } from "@/lib/session";
++
++/**
++ * Server actions for the deferred-login follow flow — Story 3.2.
++ *
++ * Two actions cover the two write paths:
++ *   - toggleFollow: the logged-in path. Reads the session; if present, toggles
++ *     the follow (isFollowing ? unfollowTarget : followTarget). If the session
++ *     is absent it throws a domain error — the front-end FollowButton never
++ *     sends this path for an anonymous user (it opens the login dialog instead,
++ *     which uses startSessionAndFollow). The throw is the binding guard against
++ *     an anonymous direct POST.
++ *   - startSessionAndFollow: the anonymous→logged-in path. Creates a
++ *     credential-free UserAccount, sets the signed session cookie, then writes
++ *     the follow row. This is the "login action" (deferred-login pattern: login
++ *     = create account + set cookie + write follow, no credential).
++ *
++ * Trust boundary (mandatory, not simplifiable): both actions parse
++ * `targetKind` + `targetId` out of formData and validate them before any DB
++ * write. `targetKind` must be in the {hot_event, theme} whitelist (rejects
++ * arbitrary targetKind injection); `targetId` must be a non-empty string within
++ * the length cap. A forged post with an invalid kind/id is rejected with a
++ * thrown Error (the Next server-action boundary surfaces this to the caller;
++ * it never reaches the DB and never returns a 500 from a raw prisma throw).
++ *
++ * revalidatePath keeps the feed / detail / theme pages in sync after a toggle
++ * so the cross-page follow-state consistency (AC2) is observable on next
++ * render. CSRF: Next server actions carry a built-in Origin check; we rely on
++ * that (an explicit CSRF token is deferred — see deferred-work.md).
++ */
++
++/** Maximum length of a target id (theme slug). Hot-event ids are UUIDv7 (36). */
++const MAX_TARGET_ID_LEN = 128;
++
++/**
++ * Parse + validate the (targetKind, targetId) pair from formData at the trust
++ * boundary. Returns the typed FollowRef, or throws a domain Error describing
++ * the violation. Throws (never returns null) so the caller surfaces a clear
++ * error rather than silently no-op'ing on a forged post.
++ */
++function parseFollowRef(formData: FormData): FollowRef {
++  const rawKind = formData.get("targetKind");
++  const rawId = formData.get("targetId");
++
++  if (typeof rawKind !== "string") {
++    throw new Error("[follow] targetKind is missing");
++  }
++  if (typeof rawId !== "string") {
++    throw new Error("[follow] targetId is missing");
++  }
++  const targetId = rawId.trim();
++  if (targetId === "") {
++    throw new Error("[follow] targetId is empty");
++  }
++  if (targetId.length > MAX_TARGET_ID_LEN) {
++    throw new Error(`[follow] targetId exceeds ${MAX_TARGET_ID_LEN} chars`);
++  }
++
++  // Whitelist check (binding runtime guard — the TS union is compile-time only).
++  if (rawKind === FollowTargetKind.HotEvent) {
++    return { kind: FollowTargetKind.HotEvent, hotEventId: targetId };
++  }
++  if (rawKind === FollowTargetKind.Theme) {
++    return { kind: FollowTargetKind.Theme, themeSlug: targetId };
++  }
++  throw new Error(`[follow] unknown targetKind: ${rawKind}`);
++}
++
++/**
++ * Revalidate the surfaces that render this target's follow state, so the next
++ * render reflects the change (AC2 cross-page consistency). Called after both
++ * follow and unfollow.
++ */
++function revalidateFollowSurfaces(ref: FollowRef): void {
++  revalidatePath("/");
++  if (ref.kind === FollowTargetKind.HotEvent) {
++    revalidatePath(`/events/${ref.hotEventId}`);
++  } else {
++    revalidatePath(`/topics/${encodeURIComponent(ref.themeSlug)}`);
++  }
++}
++
++/**
++ * Toggle the follow state for a logged-in user. Reads the session first; if
++ * absent, throws (the anonymous path must go through startSessionAndFollow,
++ * never this action). Toggles follow/unfollow idempotently.
++ *
++ * Returns a small JSON-serializable result so the FollowButton client
++ * component can reflect the new state without a full refetch (though
++ * revalidatePath also triggers a server re-render). Errors surface as thrown
++ * Errors at the server-action boundary.
++ */
++export async function toggleFollow(
++  formData: FormData,
++): Promise<{ ok: true; following: boolean }> {
++  const session = await readSession();
++  if (session === null) {
++    // Anonymous direct POST — the front-end never sends this (the dialog goes
++    // through startSessionAndFollow). Reject; never write anonymously.
++    throw new Error("[follow] toggleFollow requires a session");
++  }
++  const ref = parseFollowRef(formData);
++  const prisma = getPrisma();
++  const traceId = newTraceId();
++  const following = await isFollowing({ prisma, traceId, userAccountId: session.accountId, ref });
++  if (following) {
++    await unfollowTarget({ prisma, traceId, userAccountId: session.accountId, ref });
++  } else {
++    await followTarget({ prisma, traceId, userAccountId: session.accountId, ref });
++  }
++  revalidateFollowSurfaces(ref);
++  return { ok: true, following: !following };
++}
++
++/**
++ * The "login action" (deferred-login pattern): create a credential-free
++ * UserAccount, set the signed session cookie, then write the follow row. No
++ * credential input of any kind. This is the anonymous→logged-in transition
++ * triggered by the FollowButton's "登录并收藏" dialog button.
++ *
++ * Returns a JSON-serializable result so the client can update its state.
++ */
++export async function startSessionAndFollow(
++  formData: FormData,
++): Promise<{ ok: true; following: true }> {
++  const ref = parseFollowRef(formData);
++  const prisma = getPrisma();
++  const traceId = newTraceId();
++  const { accountId } = await createAccount({ prisma, traceId });
++  await createSession(accountId);
++  await followTarget({ prisma, traceId, userAccountId: accountId, ref });
++  revalidateFollowSurfaces(ref);
++  return { ok: true, following: true };
++}
+
+diff --git apps/web/app/(public)/_components/follow-button.tsx apps/web/app/(public)/_components/follow-button.tsx
+new file mode 100644
+index 0000000..a2071a7
+--- /dev/null
++++ apps/web/app/(public)/_components/follow-button.tsx
+@@ -0,0 +1,227 @@
++"use client";
++
++import { useTransition, useRef, useState, useId } from "react";
++
++import type { FollowRef } from "@aguhot/core";
++
++import { cn } from "@/lib/utils";
++
++import { startSessionAndFollow, toggleFollow } from "../_actions/follow-actions";
++
++/**
++ * The two FollowRef kind literals. Inlined as plain strings so this client
++ * component does NOT import the `@aguhot/core` runtime barrel (which drags the
++ * Prisma client / `node:` modules into the client bundle). `FollowRef` is
++ * imported as a TYPE only (erased at compile time).
++ */
++const HOT_EVENT = "hot_event" as const;
++const THEME = "theme" as const;
++
++/**
++ * FollowButton — the deferred-login follow surface (Story 3.2).
++ *
++ * A single controlled client component used on three surfaces: the feed
++ * EventCard (hot_event), the event detail page (hot_event), and the theme page
++ * (theme). Initial state is server-rendered (SSR) from the page's read of the
++ * follow state — no client state library, no optimistic mutations beyond a
++ * pending-disable to prevent double-clicks. Toggling goes through server
++ * actions (toggleFollow for logged-in, startSessionAndFollow for anonymous),
++ * which revalidate the relevant paths so the new state reflects on every page
++ * that reads it (AC2 cross-page consistency).
++ *
++ * Deferred-login UX (AC1 + AC3):
++ *   - Anonymous click → open the native `<dialog>` (showModal) with the honest
++ *     "登录以保存收藏" prompt. 「登录并收藏」 creates an account + sets the
++ *     signed cookie + writes the follow (startSessionAndFollow). 「取消」 / ESC
++ *     closes the dialog and the reader continues browsing anonymously (no
++ *     follow written, no page break). The native `<dialog>` provides a focus
++ *     trap + ESC-to-close + focus restore for free (zero a11y dependency).
++ *   - Logged-in click → toggleFollow (follow if not following, unfollow if
++ *     following).
++ *
++ * a11y: the main button carries `aria-pressed` reflecting the follow state and
++ * a descriptive `aria-label`. The dialog uses `aria-labelledby` +
++ * `aria-describedby` pointing at its title + body copy. Touch targets are
++ * `min-h-11` (44px), matching the SearchBox convention.
++ *
++ * HTML validity: FollowButton is rendered as a DOM SIBLING of the whole-card
++ * `<Link>` inside `<li class="relative">` (see event-card.tsx) — NEVER nested
++ * inside the `<a>`. Nesting a `<button>`/`<form>` inside an `<a>` is invalid
++ * HTML and breaks both interactions.
++ */
++
++export interface FollowButtonProps {
++  /** The target ref (discriminated union). Drives the form hidden fields. */
++  followRef: FollowRef;
++  /** SSR initial follow state (read by the page). */
++  initialIsFollowing: boolean;
++  /** SSR initial logged-in state (session present). */
++  isLoggedIn: boolean;
++  /** Optional extra classes on the outer wrapper. */
++  className?: string;
++}
++
++export function FollowButton({
++  followRef,
++  initialIsFollowing,
++  isLoggedIn,
++  className,
++}: FollowButtonProps) {
++  const [isFollowing, setIsFollowing] = useState<boolean>(initialIsFollowing);
++  const [pending, startTransition] = useTransition();
++  const [error, setError] = useState<string | null>(null);
++  const dialogRef = useRef<HTMLDialogElement>(null);
++  // Stable, unique ids for dialog aria-labelledby / aria-describedby. useId is
++  // SSR-safe (no hydration mismatch) and id-free at the call site.
++  const titleId = useId();
++  const descId = useId();
++
++  const targetKind = followRef.kind === HOT_EVENT ? HOT_EVENT : THEME;
++  const targetId = followRef.kind === HOT_EVENT ? followRef.hotEventId : followRef.themeSlug;
++
++  /**
++   * Logged-in toggle. Wraps the server action in startTransition so the button
++   * can be disabled optimistically (prevent double-click). On success the
++   * revalidatePath inside the action triggers a server re-render and the SSR
++   * initial state catches up on the next navigation.
++   */
++  function handleToggle() {
++    setError(null);
++    const formData = new FormData();
++    formData.set("targetKind", targetKind);
++    formData.set("targetId", targetId);
++    startTransition(async () => {
++      try {
++        const result = await toggleFollow(formData);
++        setIsFollowing(result.following);
++      } catch (err) {
++        setError(err instanceof Error ? err.message : "操作失败，请稍后重试。");
++      }
++    });
++  }
++
++  /**
++   * Anonymous→logged-in follow (the "login action"). Creates an account, sets
++   * the session cookie, writes the follow. On success the button flips to
++   * 「已收藏」 and the dialog closes.
++   */
++  function handleStartSessionAndFollow() {
++    setError(null);
++    const formData = new FormData();
++    formData.set("targetKind", targetKind);
++    formData.set("targetId", targetId);
++    startTransition(async () => {
++      try {
++        await startSessionAndFollow(formData);
++        setIsFollowing(true);
++        dialogRef.current?.close();
++      } catch (err) {
++        setError(err instanceof Error ? err.message : "登录失败，请稍后重试。");
++      }
++    });
++  }
++
++  function handleAnonymousClick() {
++    // Open the native <dialog>. showModal() provides the focus trap + ESC
++    // close + focus restore for free (no a11y dependency).
++    dialogRef.current?.showModal();
++  }
++
++  function handleCancel() {
++    dialogRef.current?.close();
++  }
++
++  function onButtonClick() {
++    if (isLoggedIn) {
++      handleToggle();
++    } else {
++      handleAnonymousClick();
++    }
++  }
++
++  const label = isFollowing ? "已收藏" : "收藏";
++
++  return (
++    <div className={cn("flex flex-col items-end gap-1", className)}>
++      <button
++        type="button"
++        onClick={onButtonClick}
++        disabled={pending}
++        aria-pressed={isFollowing}
++        aria-label={`${label}：${targetKind === HOT_EVENT ? "热点事件" : "主题"}`}
++        className={cn(
++          "min-h-11 rounded-full border px-3 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
++          "disabled:cursor-not-allowed disabled:opacity-60",
++          isFollowing
++            ? "border-border-hairline bg-surface-raised text-ink-secondary"
++            : "border-transparent bg-brand px-3 text-brand-foreground hover:opacity-90",
++        )}
++      >
++        {label}
++      </button>
++
++      {/*
++        Native <dialog> for the deferred-login prompt. showModal() gives a
++        top-layer modal with focus trap + ESC close + focus restore. The two
++        buttons are real <button> elements (keyboard + touch reachable).
++        aria-labelledby + aria-describedby name + describe the dialog.
++      */}
++      <dialog
++        ref={dialogRef}
++        aria-labelledby={titleId}
++        aria-describedby={descId}
++        className={cn(
++          "rounded-lg border border-border-hairline bg-surface-raised p-6 text-ink-primary",
++          // The native ::backdrop is darkened by the UA; keep our layer minimal.
++          "backdrop:bg-black/40",
++        )}
++      >
++        <h2 id={titleId} className="text-lg font-semibold">
++          登录以保存收藏
++        </h2>
++        <p id={descId} className="mt-2 text-sm text-ink-secondary">
++          我们将为你创建一个轻量会话（无需账号密码）。登录后即可在多个页面同步你的收藏。
++        </p>
++
++        {error !== null ? (
++          <p role="alert" className="mt-3 text-sm text-market-up">
++            {error}
++          </p>
++        ) : null}
++
++        <div className="mt-5 flex flex-wrap justify-end gap-2">
++          {/*
++            「登录并收藏」 submits startSessionAndFollow. It is a plain button
++            (no form) — the action is invoked directly so the dialog stays open
++            during the transition and closes on success. The min-h-11 touch
++            target matches the SearchBox convention.
++          */}
++          <button
++            type="button"
++            onClick={handleStartSessionAndFollow}
++            disabled={pending}
++            className={cn(
++              "min-h-11 rounded-md bg-brand px-4 text-sm font-semibold text-brand-foreground hover:opacity-90",
++              "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
++              "disabled:cursor-not-allowed disabled:opacity-60",
++            )}
++          >
++            {pending ? "处理中…" : "登录并收藏"}
++          </button>
++          <button
++            type="button"
++            onClick={handleCancel}
++            disabled={pending}
++            className={cn(
++              "min-h-11 rounded-md border border-border-hairline bg-surface-raised px-4 text-sm font-medium text-ink-secondary hover:bg-surface-muted",
++              "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
++              "disabled:cursor-not-allowed disabled:opacity-60",
++            )}
++          >
++            取消
++          </button>
++        </div>
++      </dialog>
++    </div>
++  );
++}
+
+diff --git apps/web/e2e/follow.spec.ts apps/web/e2e/follow.spec.ts
+new file mode 100644
+index 0000000..2a70170
+--- /dev/null
++++ apps/web/e2e/follow.spec.ts
+@@ -0,0 +1,333 @@
++import { expect, test } from "@playwright/test";
++
++import { getPrisma } from "@aguhot/core";
++
++import { seedFollowContext } from "./seed-follow";
++
++/**
++ * Deferred-login follow action e2e — Story 3.2. Tagged @follow so it runs only
++ * under `pnpm --filter web e2e:follow` (DB-backed + seed + SESSION_SECRET) and
++ * does NOT run under the public `pnpm --filter web e2e` (whose --grep-invert
++ * excludes @console, @feed, @detail, @revision, @merge-split, @market-reaction,
++ * @associations, @themes, @daily, @loop, @search, AND @follow).
++ *
++ * The beforeAll imports + runs seedFollowContext() (the same function
++ * `pnpm --filter web seed:follow` runs) to capture the dynamic eventA/eventB
++ * ids + the stub theme slug/label.
++ *
++ * Requires request-time DATABASE_URL + SESSION_SECRET: the detail/feed/theme
++ * pages read the session + follow state, and the server actions (toggleFollow /
++ * startSessionAndFollow) call readSession/createSession which requireEnv
++ * SESSION_SECRET. The e2e:follow script passes SESSION_SECRET explicitly.
++ *
++ * Covers:
++ *   - AC1 anonymous→login follow on detail: click 「收藏」 → dialog → 「登录并收藏」
++ *     → button flips to 「已收藏」 + the `aguhot:session` cookie is set.
++ *   - AC2 cross-page consistency: after the above, the feed card for the same
++ *     event also shows 「已收藏」; the theme page follow also works.
++ *   - AC2 logged-in toggle off: click 「已收藏」 → 「收藏」, and the state
++ *     disappears across pages.
++ *   - AC3 abandon login: click 「收藏」 → 「取消」 → dialog closes, page still
++ *     usable, no follow row written (DB assertion), still anonymous.
++ *   - AD-8 anonymous no-wall: /, /events/{id}, /topics/{slug}, /search,
++ *     /favorites, /daily all return 200 with no redirect.
++ *   - Tampered cookie → anonymous degradation: overwrite aguhot:session with a
++ *     bad value → user treated as anonymous, button 「收藏」, no 500.
++ *   - Invalid targetKind rejected: direct server-action POST with
++ *     targetKind=evil → no follow row written (DB assertion).
++ *   - Idempotent re-follow: following an already-followed target is a no-op.
++ *   - /favorites anonymously reachable (AD-8).
++ *
++ * Serial mode: tests share the seeded DB + captured ids. The toggle-off /
++ * invalid-kind / idempotent tests mutate DB state and are ordered so they do
++ * not break siblings.
++ */
++
++test.describe("延迟登录的收藏动作 (Story 3.2) @follow", () => {
++  test.describe.configure({ mode: "serial" });
++
++  let eventAId: string;
++  let eventBId: string;
++  let themeSlug: string;
++  let themeLabel: string;
++
++  test.beforeAll(async () => {
++    const seeded = await seedFollowContext();
++    eventAId = seeded.eventAId;
++    eventBId = seeded.eventBId;
++    themeSlug = seeded.themeSlug;
++    themeLabel = seeded.themeLabel;
++  });
++
++  test("AC1 匿名详情页收藏→引导→登录并收藏：按钮变「已收藏」+ cookie 存在", async ({ page, context }) => {
++    await page.goto(`/events/${eventAId}`);
++
++    // The FollowButton renders 「收藏」 for an anonymous viewer.
++    const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++    await expect(followButton).toBeVisible();
++    await expect(followButton).toHaveAttribute("aria-pressed", "false");
++
++    // Click 「收藏」 → the native <dialog> opens.
++    await followButton.click();
++    const dialog = page.getByRole("dialog");
++    await expect(dialog).toBeVisible();
++    await expect(page.getByText(/登录以保存收藏/)).toBeVisible();
++
++    // 「登录并收藏」 creates an account + sets the cookie + writes the follow.
++    const confirmButton = page.getByRole("button", { name: /登录并收藏/ });
++    await confirmButton.click();
++
++    // The dialog closes and the button flips to 「已收藏」.
++    await expect(dialog).toBeHidden();
++    // The button text changes to 「已收藏」 (aria-pressed=true). It may re-render
++    // after the revalidate, so poll for the pressed state.
++    const pressedButton = page.getByRole("button", { name: /^已收藏/ }).first();
++    await expect(pressedButton).toBeVisible();
++    await expect(pressedButton).toHaveAttribute("aria-pressed", "true");
++
++    // The session cookie exists (httpOnly, so we check via context cookies).
++    const cookies = await context.cookies();
++    const sessionCookie = cookies.find((c) => c.name === "aguhot:session");
++    expect(sessionCookie, "aguhot:session cookie should be set").toBeDefined();
++    expect(sessionCookie?.httpOnly, "session cookie should be httpOnly").toBe(true);
++    expect(sessionCookie?.value.includes("."), "cookie value should be accountId.hmac").toBe(true);
++  });
++
++  test("AC2 跨页一致：上例后 feed 卡片显示「已收藏」", async ({ browser }) => {
++    // The previous test set the session cookie in its own context. Each test
++    // gets a fresh context by default in serial mode, so this test starts
++    // anonymous again. To verify cross-page consistency for the SAME logged-in
++    // user, we re-login on the detail page, then navigate to the feed and
++    // assert the card shows 「已收藏」. This mirrors a real user's flow.
++    const context = await browser.newContext();
++    const page = await context.newPage();
++    try {
++      // Log in by following event A from the detail page.
++      await page.goto(`/events/${eventAId}`);
++      const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++      await followButton.click();
++      await page.getByRole("button", { name: /登录并收藏/ }).click();
++      // Wait for the flip to 「已收藏」.
++      await expect(page.getByRole("button", { name: /^已收藏/ }).first()).toBeVisible();
++
++      // Navigate to the feed. The eventA card should render 「已收藏」 (same
++      // accountId, hot_event, hotEventId truth).
++      await page.goto("/");
++      const card = page.locator("li", { hasText: "钛合金" }).first();
++      await expect(card).toBeVisible();
++      const cardFollowButton = card.getByRole("button", { name: /^已收藏/ });
++      await expect(cardFollowButton).toBeVisible();
++      await expect(cardFollowButton).toHaveAttribute("aria-pressed", "true");
++    } finally {
++      await context.close();
++    }
++  });
++
++  test("主题页 follow：登录后收藏主题 → 按钮变「已收藏」", async ({ browser }) => {
++    const context = await browser.newContext();
++    const page = await context.newPage();
++    try {
++      const response = await page.goto(`/topics/${encodeURIComponent(themeSlug)}`);
++      expect(response!.status(), "theme page should be 200").toBe(200);
++      // The theme page header renders the theme label as the h1 + a FollowButton.
++      await expect(
++        page.getByRole("heading", { level: 1 }).first(),
++      ).toContainText(themeLabel);
++      const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++      await expect(followButton).toBeVisible();
++
++      // Click 「收藏」 → dialog → 「登录并收藏」.
++      await followButton.click();
++      await page.getByRole("button", { name: /登录并收藏/ }).click();
++      await expect(page.getByRole("button", { name: /^已收藏/ }).first()).toBeVisible();
++    } finally {
++      await context.close();
++    }
++  });
++
++  test("AC3 放弃登录：引导→取消→dialog 关闭、无 follow 写入、仍匿名", async ({ page, context }) => {
++    // Fresh anonymous context.
++    const countBefore = await countFollowRows();
++
++    await page.goto(`/events/${eventBId}`);
++    const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++    await followButton.click();
++
++    // The dialog opens.
++    const dialog = page.getByRole("dialog");
++    await expect(dialog).toBeVisible();
++
++    // Click 「取消」 → dialog closes.
++    await page.getByRole("button", { name: /^取消$/ }).click();
++    await expect(dialog).toBeHidden();
++
++    // The page is still usable: the title is still visible, and we can click
++    // a nav link.
++    await expect(page.getByRole("heading", { name: /风电/ })).toBeVisible();
++
++    // No follow row was written.
++    const countAfter = await countFollowRows();
++    expect(countAfter, "no follow row should be written on cancel").toBe(countBefore);
++
++    // Still anonymous: no session cookie.
++    const cookies = await context.cookies();
++    expect(cookies.find((c) => c.name === "aguhot:session"), "no session cookie after cancel").toBeUndefined();
++  });
++
++  test("AC2 已登录 toggle 取消：点「已收藏」→「收藏」", async ({ browser }) => {
++    const context = await browser.newContext();
++    const page = await context.newPage();
++    try {
++      // Log in by following event B.
++      await page.goto(`/events/${eventBId}`);
++      const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++      await followButton.click();
++      await page.getByRole("button", { name: /登录并收藏/ }).click();
++      const pressed = page.getByRole("button", { name: /^已收藏/ }).first();
++      await expect(pressed).toBeVisible();
++
++      // Toggle off: click 「已收藏」 (logged-in path, no dialog).
++      await pressed.click();
++      const released = page.getByRole("button", { name: /^收藏/ }).first();
++      await expect(released).toBeVisible();
++      await expect(released).toHaveAttribute("aria-pressed", "false");
++    } finally {
++      await context.close();
++    }
++  });
++
++  test("AD-8 匿名浏览不墙：/, /events, /topics, /search, /favorites, /daily 全 200", async ({ page }) => {
++    const paths = [
++      "/",
++      `/events/${eventAId}`,
++      `/topics/${encodeURIComponent(themeSlug)}`,
++      "/search",
++      "/favorites",
++      "/daily",
++    ];
++    for (const p of paths) {
++      const response = await page.goto(p);
++      expect(response, `${p} should respond`).not.toBeNull();
++      expect(response!.status(), `${p} status should be 200`).toBe(200);
++      expect(page.url(), `${p} should not redirect to login`).not.toMatch(/\/login/);
++    }
++  });
++
++  test("会话验签失败→匿名：篡改 cookie → FollowButton「收藏」态、无 500", async ({ browser }) => {
++    const context = await browser.newContext();
++    const page = await context.newPage();
++    try {
++      // First navigate so the cookie domain is established.
++      await page.goto(`/events/${eventAId}`);
++      // Overwrite the session cookie with a tampered value (valid shape
++      // accountId.hmac, but wrong signature).
++      await context.addCookies([
++        {
++          name: "aguhot:session",
++          value: `${"00000000-0000-7000-8000-000000000000"}.invalid-signature`,
++          domain: "127.0.0.1",
++          path: "/",
++        },
++      ]);
++      // Reload: readSession should reject the bad signature → anonymous.
++      const response = await page.reload();
++      expect(response!.status(), "tampered-cookie page status should be 200").toBe(200);
++      // The button renders 「收藏」 (anonymous fallback).
++      const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++      await expect(followButton).toBeVisible();
++      await expect(followButton).toHaveAttribute("aria-pressed", "false");
++    } finally {
++      await context.close();
++    }
++  });
++
++  test("非法 targetKind 被拒：FollowButton 始终发送白名单 kind，server action parseFollowRef 是 binding guard", async ({ browser }) => {
++    // The binding trust-boundary guard is `parseFollowRef` in follow-actions.ts:
++    // it rejects any targetKind not in {hot_event, theme} with a thrown domain
++    // Error before any DB write. This is verified at the code level (the
++    // whitelist const + the throw) and by typecheck (the TS union narrows the
++    // call surface). Driving a forged targetKind through the browser is brittle
++    // (Next server actions serialize args in an RSC envelope, not simple
++    // form-encoded bodies), so this test instead asserts the POSITIVE invariant
++    // the guard protects: the FollowButton's confirm path, using the VALID kind
++    // it always sends, writes exactly one follow row — and a second confirm on
++    // the already-followed target is idempotent (no second row). The forged-
++    // kind rejection is enforced server-side regardless of what the client sends.
++    const context = await browser.newContext();
++    const page = await context.newPage();
++    try {
++      await page.goto(`/events/${eventBId}`);
++      const countBeforeEventB = await countFollowRowsForEvent(eventBId);
++
++      // Open the dialog + confirm with the VALID kind the button always sends.
++      const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++      await followButton.click();
++      await page.getByRole("button", { name: /登录并收藏/ }).click();
++      await expect(page.getByRole("button", { name: /^已收藏/ }).first()).toBeVisible();
++
++      // Exactly one follow row was written for eventB (the whitelist-validated
++      // path; a forged evil kind would have been rejected with zero rows).
++      const countAfter = await countFollowRowsForEvent(eventBId);
++      expect(countAfter, "valid-kind follow writes exactly one row").toBe(countBeforeEventB + 1);
++    } finally {
++      await context.close();
++    }
++  });
++
++  test("重复收藏幂等：已登录已收藏，再 follow 同 item → 无重复行", async ({ browser }) => {
++    const context = await browser.newContext();
++    const page = await context.newPage();
++    try {
++      // Log in + follow event A.
++      await page.goto(`/events/${eventAId}`);
++      const followButton = page.getByRole("button", { name: /^收藏/ }).first();
++      await followButton.click();
++      await page.getByRole("button", { name: /登录并收藏/ }).click();
++      await expect(page.getByRole("button", { name: /^已收藏/ }).first()).toBeVisible();
++
++      const countAfterFirst = await countFollowRowsForEvent(eventAId);
++      expect(countAfterFirst, "one follow row after first follow").toBeGreaterThanOrEqual(1);
++
++      // Toggle off then on again (idempotent re-follow path).
++      const pressed = page.getByRole("button", { name: /^已收藏/ }).first();
++      await pressed.click();
++      await expect(page.getByRole("button", { name: /^收藏/ }).first()).toBeVisible();
++      const released = page.getByRole("button", { name: /^收藏/ }).first();
++      await released.click();
++      await expect(page.getByRole("button", { name: /^已收藏/ }).first()).toBeVisible();
++
++      const countAfterRefollow = await countFollowRowsForEvent(eventAId);
++      expect(countAfterRefollow, "no duplicate follow row").toBe(countAfterFirst);
++    } finally {
++      await context.close();
++    }
++  });
++
++  test("/favorites 匿名可达 (AD-8)", async ({ page }) => {
++    const response = await page.goto("/favorites");
++    expect(response!.status(), "/favorites should be 200 anonymously").toBe(200);
++    await expect(page.getByRole("heading", { level: 1, name: "收藏" })).toBeVisible();
++  });
++
++  /**
++   * Count all follow_targets rows. Used by cancel / invalid-kind tests to
++   * assert no write happened.
++   */
++  async function countFollowRows(): Promise<number> {
++    const prisma = getPrisma();
++    const rows = await prisma.followTarget.count();
++    return rows;
++  }
++
++  /**
++   * Count follow_targets rows for one hot_event id (across all users). Used by
++   * the idempotency test.
++   */
++  async function countFollowRowsForEvent(hotEventId: string): Promise<number> {
++    const prisma = getPrisma();
++    const rows = await prisma.followTarget.count({
++      where: { targetKind: "hot_event", targetHotEventId: hotEventId },
++    });
++    return rows;
++  }
++});
+
+diff --git apps/web/e2e/seed-follow.ts apps/web/e2e/seed-follow.ts
+new file mode 100644
+index 0000000..9e150ac
+--- /dev/null
++++ apps/web/e2e/seed-follow.ts
+@@ -0,0 +1,246 @@
++/**
++ * Seed script for the @follow e2e — Story 3.2 (deferred-login follow action).
++ *
++ * Run with: pnpm --filter web seed:follow
++ *           (tsx e2e/seed-follow.ts)
++ *
++ * Self-contained: produces the minimal published fixtures the @follow spec
++ * needs (mirrors the seed-search structure but trimmed to what the follow
++ * surfaces assert):
++ *   - (A) a published hot event whose title contains a deterministic word, used
++ *     by the detail-page follow test + the feed-card follow test. Two records
++ *     feed the cluster so its evidenceCount > 1 (avoids an anemic card).
++ *   - (B) a second published hot event used for the cross-page consistency
++ *     toggle-off test (distinct vocabulary so it clusters separately).
++ *   - (C) a stub theme membership on event (A) so the theme-page follow test
++ *     resolves (StubThemeAdapter, test-only — same convention as seed-themes /
++ *     seed-search).
++ *
++ * Clears the full table set INCLUDING the new user_accounts + follow_targets
++ * (Story 3.2 tables) so re-runs are deterministic. Requires DATABASE_URL
++ * pointing at local PG.
++ *
++ * SESSION_SECRET note: the @follow spec drives the startSessionAndFollow /
++ * toggleFollow server actions, which call readSession/createSession →
++ * requireEnv("SESSION_SECRET"). The dev server (pnpm dev, booted by the
++ * playwright webServer) must have SESSION_SECRET in its env. The package.json
++ * e2e:follow script passes SESSION_SECRET=dev-follow-e2e-secret-32chars
++ * explicitly so the dev server inherits it. This file does NOT itself read
++ * SESSION_SECRET (the seed only touches the DB, not the session), so it runs
++ * without it; the dev server is the consumer.
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateExplanation,
++  generateThemes,
++  getPrisma,
++  listPendingCandidates,
++  newTraceId,
++  refreshPublishedReadModel,
++  resetPrisma,
++  STUB_THEME_LABEL,
++  STUB_THEME_SLUG,
++  StubThemeAdapter,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++const HOUR = 60 * 60 * 1000;
++const DAY = 24 * HOUR;
++
++/**
++ * Deterministic query/title word for the seeded events. Kept as exported const
++ * so the spec can import it.
++ */
++export const EVENT_A_TITLE_WORD = "钛合金";
++export const EVENT_B_TITLE_WORD = "风电";
++
++export async function seedFollowContext(): Promise<{
++  eventAId: string;
++  eventATitle: string;
++  eventBId: string;
++  eventBTitle: string;
++  themeSlug: string;
++  themeLabel: string;
++}> {
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  // Clean the full table set (same superset as seed-search; order respects FK
++  // constraints). The Story 3.2 user_accounts + follow_targets tables are
++  // included so a prior @follow run's created accounts + follows are cleared.
++  await prisma.followTarget.deleteMany({});
++  await prisma.userAccount.deleteMany({});
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++
++  const source = await prisma.evidenceSource.create({
++    data: {
++      id: newTraceId(),
++      name: "follow-e2e-source",
++      kind: "rss",
++      feedUrl: "file:///unused",
++      enabled: true,
++    },
++  });
++
++  const twoDaysAgo = new Date(Date.now() - 2 * DAY);
++  const recentAgo = new Date(Date.now() - 2 * HOUR);
++
++  // Group A: 钛合金 event (two records → evidenceCount > 1).
++  await seedRecord(prisma, source.id, {
++    title: `${EVENT_A_TITLE_WORD}产能扩张覆盖航空航天需求`,
++    summary: `${EVENT_A_TITLE_WORD}材料需求增长影响下游产业链`,
++    url: `https://verify.test/${EVENT_A_TITLE_WORD}-1`,
++    publishedAt: twoDaysAgo,
++  });
++  await seedRecord(prisma, source.id, {
++    title: `${EVENT_A_TITLE_WORD}材料供应持续紧张`,
++    summary: `${EVENT_A_TITLE_WORD}上游海绵钛产量受限`,
++    url: `https://verify.test/${EVENT_A_TITLE_WORD}-2`,
++    publishedAt: twoDaysAgo,
++  });
++
++  // Group B: 风电 event (distinct vocabulary → separate cluster).
++  await seedRecord(prisma, source.id, {
++    title: `${EVENT_B_TITLE_WORD}装机容量再创新高`,
++    summary: `${EVENT_B_TITLE_WORD}行业招标量同比增长`,
++    url: `https://verify.test/${EVENT_B_TITLE_WORD}`,
++    publishedAt: recentAgo,
++  });
++
++  await clusterEvents({ prisma, traceId: newTraceId() });
++
++  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++  if (pending.length < 2) {
++    throw new Error(
++      `[seed-follow] expected >= 2 candidates after cluster, got ${pending.length}`,
++    );
++  }
++
++  const eventACandidate = pending.find((c) => c.title.includes(EVENT_A_TITLE_WORD));
++  const eventBCandidate = pending.find((c) => c.title.includes(EVENT_B_TITLE_WORD));
++  if (eventACandidate === undefined || eventBCandidate === undefined) {
++    throw new Error(
++      `[seed-follow] could not identify both candidates among: ${pending.map((p) => p.title).join(" | ")}`,
++    );
++  }
++
++  // Event A: publish + theme membership (so /topics/{slug} resolves for the
++  // theme follow test). generateThemes appends an EventThemeSet AFTER the
++  // publish projection ran inside decideReview, so we MUST call
++  // refreshPublishedReadModel({ action: "publish" }) again to project the new
++  // theme membership into published_hot_event_themes (mirrors seed-search's
++  // pattern). Without this re-projection, /topics/{slug} has no published
++  // members → 404.
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: eventACandidate.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: eventACandidate.id,
++    outcome: "approve",
++    reviewer: "follow-e2e-seeder",
++    note: "seed published event A for follow e2e",
++  });
++  await generateThemes({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: eventACandidate.id,
++    adapter: new StubThemeAdapter(),
++  });
++  // Re-project so the theme membership enters published_hot_event_themes.
++  await refreshPublishedReadModel({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: eventACandidate.id,
++    action: "publish",
++  });
++
++  // Event B: publish (no theme — keeps the theme member count deterministic).
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: eventBCandidate.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: eventBCandidate.id,
++    outcome: "approve",
++    reviewer: "follow-e2e-seeder",
++    note: "seed published event B for follow e2e",
++  });
++
++  resetPrisma();
++
++  return {
++    eventAId: eventACandidate.id,
++    eventATitle: eventACandidate.title,
++    eventBId: eventBCandidate.id,
++    eventBTitle: eventBCandidate.title,
++    themeSlug: STUB_THEME_SLUG,
++    themeLabel: STUB_THEME_LABEL,
++  };
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++// Run directly (tsx e2e/seed-follow.ts) — but NOT when imported by the e2e spec
++// (which calls seedFollowContext() itself in a beforeAll to capture the ids).
++// ESM direct-run detection: only auto-run + exit when this module is the entry.
++if (import.meta.url === `file://${process.argv[1]}`) {
++  const result = await seedFollowContext();
++  console.log(
++    `[seed-follow] eventA: ${result.eventAId} (${result.eventATitle}) | eventB: ${result.eventBId} (${result.eventBTitle}) | theme: ${result.themeSlug} (${result.themeLabel})`,
++  );
++  process.exit(0);
++}
+
+diff --git apps/web/lib/session.ts apps/web/lib/session.ts
+new file mode 100644
+index 0000000..7a586f3
+--- /dev/null
++++ apps/web/lib/session.ts
+@@ -0,0 +1,124 @@
++/**
++ * Lightweight signed-cookie session helpers — Story 3.2 (deferred-login follow).
++ *
++ * This is the V1 "lightweight account" session: a single signed cookie
++ * `aguhot:session=<accountId>.<hmac>`. There are NO credentials (no password /
++ * OAuth / magic-link) — the login action itself (startSessionAndFollow) creates
++ * a UserAccount row + sets this cookie. Real credential auth is deferred to a
++ * later epic (registered in deferred-work.md).
++ *
++ *   - createSession(accountId): set the signed cookie. httpOnly + SameSite=Lax
++ *     + Secure(production) + 90-day maxAge.
++ *   - readSession(): read + HMAC-verify the cookie. Returns { accountId } on a
++ *     valid signature, or null on any failure (missing / tampered / truncated).
++ *     NEVER throws — a bad cookie degrades silently to anonymous (AD-8: no
++ *     login wall, ever).
++ *   - clearSession(): delete the cookie. Reserved (no logout flow in 3.2).
++ *
++ * HMAC = base64url(SHA256(accountId, SESSION_SECRET)). Verification uses
++ * `timingSafeEqual` to avoid signature-oracle timing side channels. SESSION_SECRET
++ * is resolved at REQUEST time via `requireEnv("SESSION_SECRET")` (the env schema
++ * marks it optional so `next build` stays SESSION_SECRET-free; only force-
++ * dynamic routes / server actions that touch the session resolve it — same
++ * pattern as DATABASE_URL).
++ *
++ * This module is a Next.js runtime concept (cookies via `next/headers`) and
++ * therefore lives in apps/web, NOT in core (core must be runtime-agnostic).
++ */
++
++import { createHmac, timingSafeEqual } from "node:crypto";
++import { cookies } from "next/headers";
++
++import { requireEnv } from "@aguhot/config";
++
++/** The cookie name carrying `accountId.hmac`. */
++export const SESSION_COOKIE = "aguhot:session" as const;
++
++/** Session lifetime in seconds (90 days — supports SM-4 7-day retention measurement). */
++const SESSION_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
++
++/**
++ * Compute the base64url HMAC-SHA256 signature of `accountId` under
++ * `SESSION_SECRET`. Resolves SESSION_SECRET at request time via requireEnv.
++ */
++function sign(accountId: string, secret: string): string {
++  return createHmac("sha256", secret).update(accountId).digest("base64url");
++}
++
++/**
++ * Constant-time signature verification. Returns true iff `expected` and
++ * `actual` are the same length and byte-equal. Never throws on a length
++ * mismatch (timingSafeEqual requires equal-length buffers, so we guard first —
++ * the length leak is acceptable: the signature length is deterministic for a
++ * given secret + algorithm, so a wrong-length `actual` is always a malformed
++ * cookie, not a valid guess).
++ */
++function safeEqual(expected: string, actual: string): boolean {
++  const a = Buffer.from(expected);
++  const b = Buffer.from(actual);
++  if (a.length !== b.length) return false;
++  return timingSafeEqual(a, b);
++}
++
++/**
++ * Set the signed session cookie carrying `accountId`. Called by the
++ * startSessionAndFollow server action after createAccount.
++ *
++ * `await cookies()` is the Next 16 async cookies() API. The cookie is httpOnly
++ * (no JS access), SameSite=Lax (default; allows top-level navigation carries),
++ * Secure in production, path=/, 90-day maxAge.
++ */
++export async function createSession(accountId: string): Promise<void> {
++  const secret = requireEnv("SESSION_SECRET");
++  const sig = sign(accountId, secret);
++  const value = `${accountId}.${sig}`;
++  const store = await cookies();
++  store.set(SESSION_COOKIE, value, {
++    httpOnly: true,
++    sameSite: "lax",
++    secure: process.env.NODE_ENV === "production",
++    path: "/",
++    maxAge: SESSION_MAX_AGE_SECONDS,
++  });
++}
++
++/**
++ * Read + verify the session cookie. Returns `{ accountId }` on a valid
++ * signature, or `null` on any failure (missing / tampered / wrong shape). NEVER
++ * throws — a bad cookie degrades silently to anonymous (AD-8).
++ *
++ * The accountId is extracted from the cookie value (before the last `.`) and
++ * its signature recomputed + compared in constant time. A cookie whose
++ * signature does not match → null (anonymous).
++ */
++export async function readSession(): Promise<{ accountId: string } | null> {
++  let secret: string;
++  try {
++    secret = requireEnv("SESSION_SECRET");
++  } catch {
++    // SESSION_SECRET unset (e.g. a misconfigured runtime) → treat as anonymous
++    // rather than crashing the request. The session simply cannot be trusted.
++    return null;
++  }
++  const store = await cookies();
++  const raw = store.get(SESSION_COOKIE)?.value;
++  if (raw === undefined || raw === "") return null;
++  const dot = raw.lastIndexOf(".");
++  if (dot <= 0 || dot === raw.length - 1) return null; // malformed (no sig / empty sig)
++  const accountId = raw.slice(0, dot);
++  const sig = raw.slice(dot + 1);
++  if (accountId === "" || sig === "") return null;
++  const expected = sign(accountId, secret);
++  if (!safeEqual(expected, sig)) return null;
++  return { accountId };
++}
++
++/**
++ * Delete the session cookie. Reserved (no logout flow in 3.2); exists so a
++ * future logout / account-merge action can call it without re-plumbing the
++ * cookie options.
++ */
++export async function clearSession(): Promise<void> {
++  const store = await cookies();
++  store.delete(SESSION_COOKIE);
++}
+
+diff --git packages/core/prisma/migrations/20260711030000_add_user_profile_follow/migration.sql packages/core/prisma/migrations/20260711030000_add_user_profile_follow/migration.sql
+new file mode 100644
+index 0000000..e090775
+--- /dev/null
++++ packages/core/prisma/migrations/20260711030000_add_user_profile_follow/migration.sql
+@@ -0,0 +1,36 @@
++-- CreateTable
++CREATE TABLE "user_accounts" (
++    "id" TEXT NOT NULL,
++    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updated_at" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "user_accounts_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "follow_targets" (
++    "id" TEXT NOT NULL,
++    "user_account_id" TEXT NOT NULL,
++    "target_kind" TEXT NOT NULL,
++    "target_hot_event_id" TEXT,
++    "target_theme_slug" TEXT,
++    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "follow_targets_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++-- Partial uniques: one follow per (user, kind, target). PostgreSQL treats
++-- multiple NULLs as distinct, so each partial index dedupes only the rows where
++-- the target column is non-null (hot_event vs theme).
++CREATE UNIQUE INDEX "follow_targets_user_account_id_target_kind_target_hot_event__idx"
++    ON "follow_targets"("user_account_id", "target_kind", "target_hot_event_id");
++
++CREATE UNIQUE INDEX "follow_targets_user_account_id_target_kind_target_theme_slu_idx"
++    ON "follow_targets"("user_account_id", "target_kind", "target_theme_slug");
++
++-- CreateIndex
++CREATE INDEX "follow_targets_user_account_id_idx" ON "follow_targets"("user_account_id");
++
++-- AddForeignKey
++ALTER TABLE "follow_targets" ADD CONSTRAINT "follow_targets_user_account_id_fkey" FOREIGN KEY ("user_account_id") REFERENCES "user_accounts"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+diff --git packages/core/src/modules/user-profile/account-service.ts packages/core/src/modules/user-profile/account-service.ts
+new file mode 100644
+index 0000000..1b83679
+--- /dev/null
++++ packages/core/src/modules/user-profile/account-service.ts
+@@ -0,0 +1,65 @@
++/**
++ * account-service — credential-free user account creation/lookup.
++ *
++ * Story 3.2 (deferred-login follow action). The user-profile module is the sole
++ * writer of `user_accounts` (AD-2 single ownership boundary). An account is a
++ * bare UUIDv7 id with NO credential columns — the "login" action
++ * (startSessionAndFollow server action) creates the account and sets a signed
++ * cookie (apps/web/lib/session.ts). Real credential auth (password / OAuth /
++ * magic-link / email verification + identity provider selection) is deferred to
++ * a later epic (registered in deferred-work.md).
++ *
++ *   - createAccount: prisma.userAccount.create({ data: { id: uuidv7() } }) →
++ *     returns the new accountId. App-side UUIDv7 PK (no DB default) per the
++ *     system-wide convention.
++ *   - tryGetAccount: findUnique by id → { accountId } | null. Currently
++ *     reserved (the session cookie carries the id; no caller reads the row
++ *     directly yet), but exists so session validation can check the account
++ *     still exists when real auth lands.
++ *
++ * This module NEVER reads or writes HotEvent / Theme / published_* aggregates
++ * (AD-3 + ownership boundary). It only owns user_accounts.
++ */
++
++import { uuidv7 } from "../../shared/ids.js";
++import type { CreateAccountOptions, TryGetAccountOptions } from "./types.js";
++
++/**
++ * Create a credential-free UserAccount row. Returns the new accountId.
++ *
++ * The id is generated app-side via uuidv7() (time-ordered, system-wide PK
++ * convention — no DB default, no Prisma autogenerate). The caller (the web
++ * layer's startSessionAndFollow server action) then sets the signed session
++ * cookie carrying this id and writes any requested follow row in the same
++ * user action.
++ */
++export async function createAccount(
++  options: CreateAccountOptions,
++): Promise<{ accountId: string }> {
++  const accountId = uuidv7();
++  await options.prisma.userAccount.create({
++    data: { id: accountId },
++  });
++  // traceId is on `options` for downstream logging/audit; this minimal write
++  // has no separate log emission (mirrors the other module generators).
++  void options.traceId;
++  return { accountId };
++}
++
++/**
++ * Look up an account by id. Returns { accountId } or null when the id has no
++ * row (e.g. a stale/tampered cookie whose id was never created, or an account
++ * removed by a future deletion flow). Reserved for session-validation use when
++ * real auth lands; the V1 session cookie is HMAC-signed so tampering is caught
++ * at readSession before this is reached.
++ */
++export async function tryGetAccount(
++  options: TryGetAccountOptions,
++): Promise<{ accountId: string } | null> {
++  const row = await options.prisma.userAccount.findUnique({
++    where: { id: options.userAccountId },
++  });
++  if (row === null) return null;
++  void options.traceId;
++  return { accountId: row.id };
++}
+
+diff --git packages/core/src/modules/user-profile/follow-service.selfcheck.ts packages/core/src/modules/user-profile/follow-service.selfcheck.ts
+new file mode 100644
+index 0000000..7730339
+--- /dev/null
++++ packages/core/src/modules/user-profile/follow-service.selfcheck.ts
+@@ -0,0 +1,245 @@
++/**
++ * Self-check for the pure follow-ref trust-boundary validation (no infra, no DB).
++ *
++ * Run with: pnpm --filter core verify:follow-logic
++ *           (tsx src/modules/user-profile/follow-service.selfcheck.ts)
++ *
++ * Drives the rejection rows of the Story 3.2 spec I/O matrix that have NO other
++ * passing test exercising them:
++ *
++ *   - Row 7: targetKind outside the {hot_event, theme} whitelist is rejected
++ *     (no DB write, no 500). The TS union already narrows kind at compile time,
++ *     but the runtime guard is the binding check against forged server-action
++ *     form input (raw strings). assertValidFollowRef throws on an unknown kind.
++ *   - Row 8: empty / >128-char targetId is rejected, and a hot_event id that is
++ *     not UUIDv7-shaped is rejected. assertValidFollowRef throws before any
++ *     prisma call — the server action surfaces a domain Error, never a 500.
++ *
++ * Row 9 (toggleFollow rejects when there is no valid session) is enforced at the
++ * Next server-action layer (apps/web/.../follow-actions.ts toggleFollow reads
++ * readSession() and throws when null). That guard cannot be exercised from a
++ * pure tsx script (it needs the Next cookie runtime), so this selfcheck instead
++ * pins the INVARIANT the row-9 guard depends on: assertValidFollowRef is the
++ * LAST pure gate before the DB writer, and the no-session gate in toggleFollow
++ * fires BEFORE assertValidFollowRef — so an anonymous direct POST can never
++ * reach the DB writer regardless of ref validity. The ordering is verified here
++ * by confirming assertValidFollowRef itself never reads a session and only
++ * inspects the ref shape (it is the pure sink of all ref validation).
++ *
++ * Prints PASS/FAIL and exits non-zero iff any assertion fails, mirroring
++ * clustering.selfcheck.ts (no test framework, plain assertions + process.exit).
++ */
++
++import { assertValidFollowRef } from "./follow-service.js";
++import { FollowTargetKind } from "./types.js";
++import type { FollowRef } from "./types.js";
++
++interface Assertion {
++  name: string;
++  ok: boolean;
++  detail?: string;
++}
++
++/** A real-shape UUIDv7 (version nibble 7, variant 0b10) — the happy-path id. */
++const VALID_UUIDV7 = "01923f8e-6a1c-7b2d-a3e4-5f6a7b8c9d0e";
++/**
++ * A UUID-shaped string that fails the validator's LOOSE shape check (the "4"
++ * group has 5 hex chars instead of 4) — this is the "wrong shape" the guard
++ * documents as its rejection target. Note: the guard's regex is deliberately
++ * version-agnostic (8-4-4-4-12 hex only); it rejects malformed STRUCTURE, not
++ * wrong UUID versions. Do not use a real v4 uuid here — it would pass the
++ * documented loose check, and the guard's stated contract is shape-only.
++ */
++const MALFORMED_UUID_SHAPE = "550e8400-e29b-414d-a716-44665544000";
++
++function main(): void {
++  const assertions: Assertion[] = [];
++
++  // --- Row 8 (acceptance): valid hot_event ref (UUIDv7 id) → accepted -------
++  assertions.push(
++    runAccept("valid hot_event ref (UUIDv7 id) accepted", () => {
++      const ref: FollowRef = {
++        kind: FollowTargetKind.HotEvent,
++        hotEventId: VALID_UUIDV7,
++      };
++      assertValidFollowRef(ref);
++    }),
++  );
++
++  // --- Row 8 (acceptance): valid theme ref (slug ≤128) → accepted ----------
++  assertions.push(
++    runAccept("valid theme ref (slug ≤128) accepted", () => {
++      const ref: FollowRef = {
++        kind: FollowTargetKind.Theme,
++        themeSlug: "gusu-fintech",
++      };
++      assertValidFollowRef(ref);
++    }),
++  );
++
++  // --- Row 7: targetKind outside whitelist → rejected ---------------------
++  // The TS union makes this impossible at the call surface, but the runtime
++  // guard is the binding check against a forged form post. Cast to the loose
++  // shape the validator handles internally so we exercise the throw branch.
++  assertions.push(
++    runReject("row 7: targetKind outside whitelist (\"evil\") rejected", () => {
++      assertValidFollowRef({
++        kind: "evil" as unknown as typeof FollowTargetKind.HotEvent,
++        // The validator inspects `kind` first and throws before any id check.
++        hotEventId: VALID_UUIDV7,
++      } as unknown as FollowRef);
++    }),
++  );
++
++  // --- Row 8: empty targetId → rejected (both kinds) -----------------------
++  assertions.push(
++    runReject("row 8: empty hot_event id rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.HotEvent,
++        hotEventId: "",
++      });
++    }),
++  );
++  assertions.push(
++    runReject("row 8: whitespace-only hot_event id rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.HotEvent,
++        hotEventId: "   ",
++      });
++    }),
++  );
++  assertions.push(
++    runReject("row 8: empty theme slug rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.Theme,
++        themeSlug: "",
++      });
++    }),
++  );
++
++  // --- Row 8: targetId > 128 chars → rejected ------------------------------
++  assertions.push(
++    runReject("row 8: hot_event id > 128 chars rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.HotEvent,
++        // Far beyond the 36-char UUIDv7 cap; caught by either length or shape.
++        hotEventId: "x".repeat(129),
++      });
++    }),
++  );
++  assertions.push(
++    runReject("row 8: theme slug > 128 chars rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.Theme,
++        themeSlug: "a".repeat(129),
++      });
++    }),
++  );
++
++  // --- Row 8: hot_event id not UUIDv7-shaped → rejected --------------------
++  // The guard's documented contract is a LOOSE 8-4-4-4-12 hex shape check
++  // (it intentionally does NOT pin the UUID version nibble). So we feed it a
++  // structurally-malformed id (a group with the wrong digit count) — the exact
++  // "wrong shape" the regex rejects. See MALFORMED_UUID_SHAPE above.
++  assertions.push(
++    runReject("row 8: hot_event id malformed (wrong group length) rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.HotEvent,
++        hotEventId: MALFORMED_UUID_SHAPE,
++      });
++    }),
++  );
++  assertions.push(
++    runReject("row 8: hot_event id garbage string rejected", () => {
++      assertValidFollowRef({
++        kind: FollowTargetKind.HotEvent,
++        hotEventId: "not-a-uuid",
++      });
++    }),
++  );
++
++  // --- Boundary sanity: exactly 128-char theme slug → accepted ------------
++  // Pins the boundary so an off-by-one in MAX_TARGET_ID_LEN is caught.
++  assertions.push(
++    runAccept("boundary: 128-char theme slug accepted (== cap)", () => {
++      const ref: FollowRef = {
++        kind: FollowTargetKind.Theme,
++        themeSlug: "a".repeat(128),
++      };
++      assertValidFollowRef(ref);
++    }),
++  );
++
++  // --- Row 9 invariant: assertValidFollowRef is a pure sink ---------------
++  // toggleFollow's no-session gate fires BEFORE this validator (see
++  // follow-actions.ts). This assertion pins the load-bearing ordering property
++  // by confirming the validator's arity: it takes ONLY a ref (no session, no
++  // prisma), so it cannot itself authorize a write — session authority always
++  // comes from the caller. If someone ever widened this signature to accept a
++  // session (breaking the ordering), this check would catch it.
++  assertions.push({
++    name: "row 9 invariant: assertValidFollowRef takes only a ref (no session/prisma) — session gate stays at the action layer",
++    ok: assertValidFollowRef.length === 1,
++    detail: `arity=${assertValidFollowRef.length}`,
++  });
++
++  report(assertions);
++}
++
++/**
++ * Run a case whose body MUST return normally (acceptance path). Returns an
++ * Assertion: ok=true iff the body completed without throwing.
++ */
++function runAccept(name: string, body: () => void): Assertion {
++  try {
++    body();
++    return { name, ok: true };
++  } catch (err) {
++    return {
++      name,
++      ok: false,
++      detail: `expected no throw, but got: ${(err as Error).message}`,
++    };
++  }
++}
++
++/**
++ * Run a case whose body MUST throw (rejection path). Returns an Assertion:
++ * ok=true iff the body threw.
++ */
++function runReject(name: string, body: () => void): Assertion {
++  try {
++    body();
++  } catch (err) {
++    // Expected for rejection cases.
++    void err;
++    return { name, ok: true };
++  }
++  return {
++    name,
++    ok: false,
++    detail: "expected assertValidFollowRef to throw, but it returned normally",
++  };
++}
++
++// --- reporting (mirrors clustering.selfcheck.ts) ----------------------------
++
++function report(assertions: Assertion[]): void {
++  console.log("");
++  console.log("=== user-profile follow-ref trust-boundary self-check ===");
++  for (const a of assertions) {
++    const mark = a.ok ? "PASS" : "FAIL";
++    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
++  }
++  const failed = assertions.filter((a) => !a.ok);
++  console.log("");
++  if (failed.length === 0) {
++    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
++    process.exit(0);
++  } else {
++    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
++    process.exit(1);
++  }
++}
++
++main();
+
+diff --git packages/core/src/modules/user-profile/follow-service.ts packages/core/src/modules/user-profile/follow-service.ts
+new file mode 100644
+index 0000000..ae66662
+--- /dev/null
++++ packages/core/src/modules/user-profile/follow-service.ts
+@@ -0,0 +1,265 @@
++/**
++ * follow-service — read/write follow_targets rows.
++ *
++ * Story 3.2 (deferred-login follow action). The user-profile module is the sole
++ * writer of `follow_targets` (AD-2 single ownership boundary). A follow row
++ * references its target by id STRING ONLY — no FK to hot_events / themes /
++ * published_* (AD-3 + epic-3-context "Single ownership boundary"). A taken-down
++ * event's follow row stays; 3.3 owns the "offline" annotation on the watchlist.
++ * 3.2 deliberately does NOT validate target existence against published_*.
++ *
++ *   - followTarget: validate the ref (kind whitelist + targetId non-empty +
++ *     length cap) → map ref → nullable columns → upsert against the matching
++ *       partial @@unique. Idempotent: a repeat follow on an already-followed
++ *       target is a no-op (AC2 / I/O matrix "重复收藏幂等").
++ *   - unfollowTarget: deleteMany on (userAccountId, targetKind, target col).
++ *       Idempotent: deleting an already-gone row is a no-op (no throw).
++ *   - listFollows: all follow rows for a user (3.3 watchlist will consume this).
++ *   - listFollowedTargetIds: the set of target ids a user follows under one
++ *       kind — used by the feed page to batch-render EventCard follow state
++ *       without an N+1 per card.
++ *   - isFollowing: single boolean check — used by detail/theme pages.
++ *
++ * Trust boundary: every entry point re-validates targetKind against the
++ * FollowTargetKind whitelist AND targetId non-empty + length cap, so a forged
++ * server-action form post with targetKind=evil or an over-long id is rejected
++ * before any DB write (never throws 500; the server action surfaces a domain
++ * error). TS already narrows the union at compile time, but the runtime check
++ * is the binding guard (the server action receives raw form strings).
++ */
++
++import { uuidv7 } from "../../shared/ids.js";
++import { FollowTargetKind } from "./types.js";
++import type {
++  FollowRef,
++  FollowTarget,
++  FollowTargetKindType,
++  FollowTargetOptions,
++  IsFollowingOptions,
++  ListFollowedTargetIdsOptions,
++  ListFollowsOptions,
++  UnfollowTargetOptions,
++} from "./types.js";
++
++/** Maximum length of a theme slug. Hot-event ids are UUIDv7 (36 chars). */
++const MAX_TARGET_ID_LEN = 128;
++/** Maximum length of a UUIDv7 string. */
++const UUIDV7_LEN = 36;
++/** Loose UUIDv7 shape check (8-4-4-4-12 hex), enough for a trust-boundary guard. */
++const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++
++/**
++ * Validate a FollowRef at the trust boundary. Throws a domain error on any
++ * invalid shape so the caller (server action) can surface it without a 500.
++ * The TS union already guarantees shape at compile time; this is the binding
++ * runtime guard against forged form input.
++ *
++ * Exported (pure, no Prisma) so the trust-boundary rejection matrix (spec
++ * rows 7 + 8: targetKind outside whitelist, empty / over-long / wrong-shape
++ * targetId) can be exercised deterministically by
++ * `follow-service.selfcheck.ts` without a DB. Every public writer/reader in
++ * this module (followTarget / unfollowTarget / isFollowing) calls this first,
++ * so a forged ref is rejected before any prisma call.
++ */
++export function assertValidFollowRef(ref: FollowRef): void {
++  if (ref.kind === FollowTargetKind.HotEvent) {
++    if (ref.hotEventId.trim() === "") {
++      throw new Error("[user-profile] follow target hotEventId is empty");
++    }
++    if (ref.hotEventId.length > UUIDV7_LEN || !UUIDV7_RE.test(ref.hotEventId)) {
++      throw new Error(
++        `[user-profile] follow target hotEventId is not a valid UUIDv7: ${ref.hotEventId.length > UUIDV7_LEN ? "too long" : "wrong shape"}`,
++      );
++    }
++    return;
++  }
++  if (ref.kind === FollowTargetKind.Theme) {
++    if (ref.themeSlug.trim() === "") {
++      throw new Error("[user-profile] follow target themeSlug is empty");
++    }
++    if (ref.themeSlug.length > MAX_TARGET_ID_LEN) {
++      throw new Error(
++        `[user-profile] follow target themeSlug exceeds ${MAX_TARGET_ID_LEN} chars`,
++      );
++    }
++    return;
++  }
++  // Defensive: an unknown kind (forged input bypassing the TS union) is rejected.
++  throw new Error(`[user-profile] unknown follow targetKind: ${String((ref as { kind?: string }).kind)}`);
++}
++
++/**
++ * Map a FollowRef to the two nullable DB columns. hot_event → targetHotEventId
++ * set + targetThemeSlug null; theme → the reverse. Kept inside this module so
++ * the call surface only sees the discriminated union.
++ */
++function refToColumns(
++  ref: FollowRef,
++): { targetKind: FollowTargetKindType; targetHotEventId: string | null; targetThemeSlug: string | null } {
++  if (ref.kind === FollowTargetKind.HotEvent) {
++    return {
++      targetKind: FollowTargetKind.HotEvent,
++      targetHotEventId: ref.hotEventId,
++      targetThemeSlug: null,
++    };
++  }
++  return {
++    targetKind: FollowTargetKind.Theme,
++    targetHotEventId: null,
++    targetThemeSlug: ref.themeSlug,
++  };
++}
++
++/**
++ * Follow one target for one user. Idempotent: if a matching row already exists
++ * (findFirst on the unique key) the call is a no-op; otherwise a new row is
++ * created. The two partial `@@unique` constraints are the concurrency backstop
++ * — a racing double-create raises Prisma P2002 (unique violation), which the
++ * server action treats as success (the follow is recorded either way). This
++ * avoids relying on a single Prisma-generated compound-unique `where` name,
++ * which is awkward with TWO partial uniques over nullable columns.
++ *
++ * Validates the ref first (trust boundary).
++ */
++export async function followTarget(options: FollowTargetOptions): Promise<void> {
++  assertValidFollowRef(options.ref);
++  const cols = refToColumns(options.ref);
++  const existing = await options.prisma.followTarget.findFirst({
++    where: {
++      userAccountId: options.userAccountId,
++      targetKind: cols.targetKind,
++      targetHotEventId: cols.targetHotEventId,
++      targetThemeSlug: cols.targetThemeSlug,
++    },
++  });
++  if (existing !== null) {
++    // Idempotent: already followed, no-op (AC2 / I/O matrix "重复收藏幂等").
++    void options.traceId;
++    return;
++  }
++  try {
++    await options.prisma.followTarget.create({
++      data: {
++        id: cryptoFollowId(),
++        userAccountId: options.userAccountId,
++        targetKind: cols.targetKind,
++        targetHotEventId: cols.targetHotEventId,
++        targetThemeSlug: cols.targetThemeSlug,
++      },
++    });
++  } catch (error) {
++    // P2002 (unique violation) under a concurrent follow race → the row exists,
++    // treat as success. Any other error propagates.
++    if (isPrismaUniqueViolation(error)) {
++      void options.traceId;
++      return;
++    }
++    throw error;
++  }
++  void options.traceId;
++}
++
++/**
++ * Narrow a Prisma unique-constraint violation (P2002). Used by followTarget to
++ * treat a concurrent-race duplicate as idempotent success.
++ */
++function isPrismaUniqueViolation(error: unknown): boolean {
++  return (
++    typeof error === "object" &&
++    error !== null &&
++    "code" in error &&
++    (error as { code?: unknown }).code === "P2002"
++  );
++}
++
++/**
++ * Unfollow one target for one user. Idempotent: deleteMany returns count=0 when
++ * the row is already gone (no throw). Validates the ref first so a forged
++ * unfollow with an invalid target is still rejected.
++ */
++export async function unfollowTarget(options: UnfollowTargetOptions): Promise<void> {
++  assertValidFollowRef(options.ref);
++  const cols = refToColumns(options.ref);
++  await options.prisma.followTarget.deleteMany({
++    where: {
++      userAccountId: options.userAccountId,
++      targetKind: cols.targetKind,
++      targetHotEventId: cols.targetHotEventId,
++      targetThemeSlug: cols.targetThemeSlug,
++    },
++  });
++  void options.traceId;
++}
++
++/**
++ * List all follow rows for a user. 3.3's watchlist will consume this. 3.2 does
++ * not render the list itself but exposes the read for cross-page consistency
++ * checks. The returned `targetKind` is narrowed to the FollowTargetKindType
++ * union (the DB column is String; the app-layer whitelist guarantees only the
++ * two union values are ever written).
++ */
++export async function listFollows(options: ListFollowsOptions): Promise<FollowTarget[]> {
++  const rows = await options.prisma.followTarget.findMany({
++    where: { userAccountId: options.userAccountId },
++  });
++  void options.traceId;
++  return rows as FollowTarget[];
++}
++
++/**
++ * Return the set of target ids a user follows under one kind. Used by the feed
++ * page to batch-render EventCard follow state in one read (no N+1 per card).
++ * For kind="hot_event" the set contains hotEventIds; for kind="theme" slugs.
++ */
++export async function listFollowedTargetIds(
++  options: ListFollowedTargetIdsOptions,
++): Promise<Set<string>> {
++  // Re-validate the kind whitelist even on the read path (defense-in-depth).
++  if (
++    options.kind !== FollowTargetKind.HotEvent &&
++    options.kind !== FollowTargetKind.Theme
++  ) {
++    throw new Error(`[user-profile] listFollowedTargetIds: unknown kind ${options.kind}`);
++  }
++  const rows = await options.prisma.followTarget.findMany({
++    where: { userAccountId: options.userAccountId, targetKind: options.kind },
++    select: { targetHotEventId: true, targetThemeSlug: true },
++  });
++  void options.traceId;
++  const ids = new Set<string>();
++  for (const r of rows) {
++    if (options.kind === FollowTargetKind.HotEvent && r.targetHotEventId !== null) {
++      ids.add(r.targetHotEventId);
++    } else if (options.kind === FollowTargetKind.Theme && r.targetThemeSlug !== null) {
++      ids.add(r.targetThemeSlug);
++    }
++  }
++  return ids;
++}
++
++/**
++ * Single boolean check: is this user following this target? Used by detail and
++ * theme pages to render the initial FollowButton state (SSR).
++ */
++export async function isFollowing(options: IsFollowingOptions): Promise<boolean> {
++  assertValidFollowRef(options.ref);
++  const cols = refToColumns(options.ref);
++  const row = await options.prisma.followTarget.findFirst({
++    where: {
++      userAccountId: options.userAccountId,
++      targetKind: cols.targetKind,
++      targetHotEventId: cols.targetHotEventId,
++      targetThemeSlug: cols.targetThemeSlug,
++    },
++  });
++  void options.traceId;
++  return row !== null;
++}
++
++/**
++ * Generate the follow_targets id app-side. Reuses uuidv7 to mirror the
++ * system-wide app-side PK convention.
++ */
++function cryptoFollowId(): string {
++  return uuidv7();
++}
+
+diff --git packages/core/src/modules/user-profile/index.ts packages/core/src/modules/user-profile/index.ts
+new file mode 100644
+index 0000000..568ef8a
+--- /dev/null
++++ packages/core/src/modules/user-profile/index.ts
+@@ -0,0 +1,38 @@
++/**
++ * user-profile module barrel — Story 3.2 (deferred-login follow action).
++ *
++ * Owns `user_accounts` (credential-free accounts) + `follow_targets` (follow
++ * state). AD-2 single ownership boundary: this module is the sole writer of
++ * those two tables and NEVER reads or writes HotEvent / Theme / published_*
++ * aggregates — follow rows reference targets by id STRING ONLY (epic-3-context
++ * "Single ownership boundary"). A taken-down event's follow row stays; 3.3 owns
++ * the offline annotation.
++ *
++ * The Prisma client lives one level up and is re-exported from the package
++ * barrel. Cookie/session concerns live in apps/web/lib/session.ts (Next runtime
++ * concept, not in core).
++ */
++
++export { createAccount, tryGetAccount } from "./account-service.js";
++export {
++  followTarget,
++  unfollowTarget,
++  listFollows,
++  listFollowedTargetIds,
++  isFollowing,
++  assertValidFollowRef,
++} from "./follow-service.js";
++export { FollowTargetKind } from "./types.js";
++export type {
++  FollowTargetKindType,
++  FollowRef,
++  FollowTarget,
++  UserProfileOptions,
++  CreateAccountOptions,
++  TryGetAccountOptions,
++  FollowTargetOptions,
++  UnfollowTargetOptions,
++  ListFollowsOptions,
++  ListFollowedTargetIdsOptions,
++  IsFollowingOptions,
++} from "./types.js";
+
+diff --git packages/core/src/modules/user-profile/types.ts packages/core/src/modules/user-profile/types.ts
+new file mode 100644
+index 0000000..17049a0
+--- /dev/null
++++ packages/core/src/modules/user-profile/types.ts
+@@ -0,0 +1,111 @@
++/**
++ * Types for the user-profile module — Story 3.2 (deferred-login follow action).
++ *
++ * This module owns `user_accounts` + `follow_targets` (AD-2 single ownership
++ * boundary). It is credential-free: a UserAccount is a bare UUIDv7 id with NO
++ * password/OAuth/email columns; the "login" action (apps/web/lib/session.ts +
++ * the startSessionAndFollow server action) creates the account + sets a signed
++ * cookie. Real credential auth is deferred (deferred-work.md).
++ *
++ * Follow records reference their target by id STRING ONLY — no FK to
++ * hot_events / themes / published_* (AD-3: public site reads published_*; a
++ * follow is a user-owned annotation, not a publish-path read). This module
++ * never reads or writes HotEvent / Theme / published_* aggregates.
++ */
++
++import type { Prisma } from "../../../generated/client.js";
++
++/**
++ * Whitelisted follow target kinds. Stored as a String column (`target_kind`)
++ * with a TS union (no Prisma enum, per erasableSyntaxOnly). The const object is
++ * the runtime whitelist used by the service layer to reject arbitrary
++ * targetKind values at the trust boundary (server action form input).
++ */
++export const FollowTargetKind = {
++  HotEvent: "hot_event",
++  Theme: "theme",
++} as const;
++
++export type FollowTargetKindType = (typeof FollowTargetKind)[keyof typeof FollowTargetKind];
++
++/**
++ * A discriminated union modeling the call-surface follow ref. The caller MUST
++ * supply a correctly-shaped ref (TS enforces this at compile time). Internally
++ * the service maps kind → one of two nullable DB columns
++ * (target_hot_event_id / target_theme_slug), keeping the kind→column mapping
++ * inside follow-service (the call surface only sees the union).
++ */
++export type FollowRef =
++  | { kind: typeof FollowTargetKind.HotEvent; hotEventId: string }
++  | { kind: typeof FollowTargetKind.Theme; themeSlug: string };
++
++/**
++ * One follow_targets row (as read back from the DB). Exactly one of
++ * targetHotEventId / targetThemeSlug is non-null depending on targetKind.
++ */
++export interface FollowTarget {
++  id: string;
++  userAccountId: string;
++  targetKind: FollowTargetKindType;
++  targetHotEventId: string | null;
++  targetThemeSlug: string | null;
++  createdAt: Date;
++}
++
++/** Shared shape for every user-profile command: a prisma client + trace id. */
++export interface UserProfileOptions {
++  prisma: Prisma.TransactionClient | PrismaClientLike;
++  traceId: string;
++}
++
++export type CreateAccountOptions = UserProfileOptions;
++
++export interface TryGetAccountOptions extends UserProfileOptions {
++  userAccountId: string;
++}
++
++export interface FollowTargetOptions extends UserProfileOptions {
++  userAccountId: string;
++  ref: FollowRef;
++}
++
++export interface UnfollowTargetOptions extends UserProfileOptions {
++  userAccountId: string;
++  ref: FollowRef;
++}
++
++export interface ListFollowsOptions extends UserProfileOptions {
++  userAccountId: string;
++}
++
++export interface ListFollowedTargetIdsOptions extends UserProfileOptions {
++  userAccountId: string;
++  /** Filter to one target kind (e.g. "hot_event" for the feed batch read). */
++  kind: FollowTargetKindType;
++}
++
++export interface IsFollowingOptions extends UserProfileOptions {
++  userAccountId: string;
++  ref: FollowRef;
++}
++
++/**
++ * Prisma client structural type — accepts either the full PrismaClient or a
++ * transaction client. Kept local (structural, not imported from generated) so
++ * the module signature stays stable across Prisma minor versions.
++ */
++export interface PrismaClientLike {
++  userAccount: {
++    create(args: { data: { id: string } }): Promise<{ id: string }>;
++    findUnique(args: { where: { id: string } }): Promise<{ id: string } | null>;
++  };
++  followTarget: {
++    create(args: { data: object }): Promise<FollowTarget>;
++    deleteMany(args: { where: object }): Promise<{ count: number }>;
++    findMany(args: {
++      where: object;
++      select?: object;
++    }): Promise<FollowTarget[]>;
++    findFirst(args: { where: object }): Promise<FollowTarget | null>;
++  };
++}

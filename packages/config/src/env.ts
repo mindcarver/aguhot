@@ -17,11 +17,18 @@ const nodeEnvSchema = z.enum(["development", "test", "production"]);
 /**
  * The full environment contract. Workspaces that need real infra (worker,
  * operator flows) call `loadEnv()` which throws on a missing required var.
+ *
+ * SESSION_SECRET is optional at the schema level (so `loadEnv` / `next build`
+ * do not require it). The web session helper (apps/web/lib/session.ts) asserts
+ * its presence at REQUEST time via `requireEnv("SESSION_SECRET")` — mirroring
+ * the DATABASE_URL pattern: the public web build stays SESSION_SECRET-free, and
+ * only force-dynamic routes / server actions that touch the session resolve it.
  */
 export const envSchema = z.object({
   NODE_ENV: nodeEnvSchema.default("development"),
   DATABASE_URL: z.string().url().optional(),
   REDIS_URL: z.string().url().optional(),
+  SESSION_SECRET: z.string().min(16).optional(),
   NEXT_PUBLIC_APP_NAME: z.string().default("AGUHOT"),
 });
 

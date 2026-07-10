@@ -5,11 +5,16 @@ import { AiLabel, FilterPill, ReactionChip, TagChip } from "@/components/chips";
 import {
   getPrisma,
   getPublishedHotEventDetail,
+  isFollowing,
+  FollowTargetKind,
   newTraceId,
   type AssociationItem,
 } from "@aguhot/core";
 
+import { readSession } from "@/lib/session";
+
 import { BackLink } from "../../_components/back-link";
+import { FollowButton } from "../../_components/follow-button";
 
 export const metadata: Metadata = {
   title: "热点事件详情",
@@ -90,6 +95,20 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
     notFound();
   }
 
+  // Story 3.2: read the session (if any) + the follow state for this event.
+  // Anonymous → no extra isFollowing DB read (initialIsFollowing stays false,
+  // FollowButton renders 「收藏」 + the deferred-login dialog).
+  const session = await readSession();
+  const following =
+    session !== null
+      ? await isFollowing({
+          prisma,
+          traceId: newTraceId(),
+          userAccountId: session.accountId,
+          ref: { kind: FollowTargetKind.HotEvent, hotEventId },
+        })
+      : false;
+
   const hasExplanation = detail.explanation !== null;
   // AC3 + 1.8 defer: the uniform <AiLabel> marks SYSTEM-derived content only.
   // An operator-authored (source="human") explanation is NOT system-derived, so
@@ -152,6 +171,18 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
           ))}
         </div>
       ) : null}
+
+      {/* Story 3.2: FollowButton under the title. Anonymous → opens the
+          deferred-login dialog; logged-in → toggles follow. Cross-page
+          consistency: the feed card and this button read the same
+          (accountId, hot_event, hotEventId) truth. */}
+      <div className="mt-4">
+        <FollowButton
+          followRef={{ kind: FollowTargetKind.HotEvent, hotEventId }}
+          initialIsFollowing={following}
+          isLoggedIn={session !== null}
+        />
+      </div>
 
       {/* 发生了什么 — facts partition. Source count + times, always rendered. */}
       <section className="mt-8 space-y-3 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">

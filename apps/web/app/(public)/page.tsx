@@ -2,12 +2,16 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import {
+  FollowTargetKind,
   getPrisma,
+  listFollowedTargetIds,
   listPublishedAssociations,
   listPublishedHotEvents,
   newTraceId,
   type AssociationItem,
 } from "@aguhot/core";
+
+import { readSession } from "@/lib/session";
 
 import { EventCard } from "./_components/event-card";
 import {
@@ -95,6 +99,22 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
 
   const totalExists = all.length > 0;
   const now = new Date();
+  // Story 3.2: read the session (if any) and batch-fetch the viewer's followed
+  // hot-event ids for the feed cards. Anonymous → no extra DB read (the
+  // followedIds Set stays empty and FollowButton renders 「收藏」 + the
+  // deferred-login dialog). Logged-in → one listFollowedTargetIds read feeds
+  // every EventCard's initial state (no N+1 per card).
+  const session = await readSession();
+  const followedIds =
+    session !== null
+      ? await listFollowedTargetIds({
+          prisma,
+          traceId,
+          userAccountId: session.accountId,
+          kind: FollowTargetKind.HotEvent,
+        })
+      : new Set<string>();
+  const isLoggedIn = session !== null;
   // Apply the window filter, then the association filter (AND). The association
   // filter keeps an event iff its projected items include one matching the
   // active dimension's {kind, label}. Events with no projection row are
@@ -136,6 +156,8 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
                   latestEvidenceAt={e.latestEvidenceAt}
                   publishedAt={e.publishedAt}
                   now={now}
+                  isFollowing={followedIds.has(e.hotEventId)}
+                  isLoggedIn={isLoggedIn}
                 />
               ))}
             </ul>

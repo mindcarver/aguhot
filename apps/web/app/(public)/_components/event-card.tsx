@@ -1,9 +1,14 @@
 import Link from "next/link";
 
+import type { FollowRef } from "@aguhot/core";
+
 import { cn } from "@/lib/utils";
 
+import { FollowButton } from "./follow-button";
+
 /**
- * Published hot-event feed card — Story 1.7 (whole-card link added in 1.8).
+ * Published hot-event feed card — Story 1.7 (whole-card link added in 1.8;
+ * FollowButton sibling added in 3.2).
  *
  * Renders one published_hot_events row as an information card on the public feed.
  * The card shows exactly the fields the read model has (Story 1.6 minimal
@@ -19,6 +24,18 @@ import { cn } from "@/lib/utils";
  * (epic: event card is whole-card clickable to detail). The card's token/style
  * surface is unchanged — only the outer element flipped from `<li>` to a `<li>`
  * wrapping a `<Link>` so the entire card is clickable.
+ *
+ * Story 3.2: a FollowButton is mounted as a DOM SIBLING of the whole-card Link
+ * (inside the `<li class="relative">`), absolutely positioned in the top-right
+ * corner. This is REQUIRED for HTML validity: a `<button>` / `<form>` CANNOT be
+ * a descendant of an `<a>` (invalid HTML — browsers force a DOM split that
+ * breaks both the card click and the button). The Link keeps its full-card hit
+ * area but gains `pr-16` right padding so its content never underlaps the
+ * FollowButton. The ranking-reason chip, meta line, and tokens are byte-for-byte
+ * unchanged. Follow state is SSR-driven: the page passes `isFollowing` +
+ * `isLoggedIn` after reading the session + follow state; absent props → the
+ * FollowButton is not rendered (e.g. search results, where follow-on-card is
+ * out of scope for 3.2).
  *
  * Tokens: uses only real @theme tokens that resolve in Tailwind v4
  * (bg-surface-raised / border-border-hairline / rounded-lg / ink-* / bg-brand).
@@ -36,6 +53,17 @@ export interface EventCardProps {
   latestEvidenceAt: Date;
   publishedAt: Date;
   now?: Date;
+  /**
+   * SSR follow state for this event + the current viewer (Story 3.2). Omitted
+   * on surfaces that do not render a follow button on the card (e.g. /search
+   * results). When omitted, no FollowButton is rendered.
+   */
+  isFollowing?: boolean;
+  /**
+   * SSR logged-in state (session present). When `isFollowing` is provided this
+   * must be too. Omitted alongside `isFollowing` → no FollowButton.
+   */
+  isLoggedIn?: boolean;
 }
 
 /**
@@ -68,21 +96,37 @@ export function EventCard({
   latestEvidenceAt,
   publishedAt,
   now = new Date(),
+  isFollowing,
+  isLoggedIn,
 }: EventCardProps) {
   const reason = rankingReason(evidenceCount, latestEvidenceAt, now);
 
+  // Story 3.2: render the FollowButton only when the page passed follow state.
+  // Search results omit these props → no follow-on-card (3.2 scope).
+  const showFollow = isFollowing !== undefined && isLoggedIn !== undefined;
+  const followRef: FollowRef = { kind: "hot_event", hotEventId };
+
   return (
-    <li className="rounded-lg border border-border-hairline bg-surface-raised">
+    // relative + pr-16 on the Link so the FollowButton (absolute top-right) has
+    // a positioning context and never underlaps the card content.
+    <li className="relative rounded-lg border border-border-hairline bg-surface-raised">
       {/*
         Whole-card link (Story 1.8): the entire card body is wrapped in a Link so
         the card is one click target to the detail page. block + padding on the
         Link keeps the hit area the full card; the existing chip/meta layout is
         unchanged. hover:bg-surface-muted gives a subtle hover affordance that
-        works with the bg-surface-raised base.
+        works with the bg-surface-raised base. Story 3.2 adds pr-16 (only when
+        the FollowButton is rendered) so the top-right button never overlaps.
       */}
       <Link
         href={`/events/${hotEventId}`}
-        className="block rounded-lg px-5 py-4 hover:bg-surface-muted"
+        className={cn(
+          "block rounded-lg px-5 py-4 hover:bg-surface-muted",
+          // Reserve top-right space only when the FollowButton is actually
+          // rendered; /search reuses this card without follow props and would
+          // otherwise show an empty ~64px gap.
+          showFollow && "pr-16",
+        )}
       >
         <div className="flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-semibold text-ink-primary">{title}</h2>
@@ -114,6 +158,21 @@ export function EventCard({
           </div>
         </dl>
       </Link>
+      {/*
+        Story 3.2: FollowButton is a DOM SIBLING of the whole-card Link (NOT a
+        descendant). Nesting a <button>/<form> inside an <a> is invalid HTML and
+        breaks both interactions; absolute-positioning the button as a sibling
+        keeps the whole-card click AND a separate top-right follow hit area.
+      */}
+      {showFollow ? (
+        <div className="absolute right-3 top-3">
+          <FollowButton
+            followRef={followRef}
+            initialIsFollowing={isFollowing ?? false}
+            isLoggedIn={isLoggedIn ?? false}
+          />
+        </div>
+      ) : null}
     </li>
   );
 }

@@ -612,3 +612,118 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: AD-3 读作用域不变式（`listPublishedHotEventExplanations` 只读 `published_*`、不读 `explanation_versions`/`hot_events`/`evidence_*`）当前不可机器验证
   evidence: 仓内无 `packages/core`/web 组件单测 runner，无 prisma query spy / schema 级守卫测试。AD-3 读作用域仅存于 docstring + 模块注释。takedown 测试与「只读 published_*」一致，但不能证明读作用域（一个也读 `explanation_versions` 的实现仍能通过现有测试，只要 published 行存在）。
   resolution: 引入 `packages/core` 单测 runner（vitest）+ prisma query spy，或架构层 lint 规则守卫 publish-orchestrator 的读作用域。跨 story 基建投入，低优先。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: 真实凭证 auth（密码 / OAuth / magic-link / 邮箱验证）+ identity provider 选型未落地——V1 会话为纯 HMAC 签名 cookie（无凭证），登录动作 = 建账号 + 设 cookie
+  evidence: Story 3.2 的 `user_accounts` 表只有 id + 时间戳，无密码哈希 / OAuth subject / email 列。会话 = `aguhot:session=accountId.hmac`（Node `crypto.createHmac` + `timingSafeEqual`，零依赖）。登录动作（`startSessionAndFollow`）= 建 `UserAccount` 行 + 设签名 cookie + 写 follow，无任何凭证校验。升级路径：真实 auth 落地时 `UserAccount` 加 credential 列，`createSession`/`readSession` 替换为凭证校验，follow 域逻辑与 FollowButton 调用面不变。deferred 到后续 epic。
+  resolution: 已于 Story 3.2 登记为真实凭证 auth defer——待真实 identity provider（next-auth/Auth.js/lucia 或自建）选型落地时，替换 session helper + 加 credential 列，follow 调用面无感。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: `/favorites` 列表 / 管理 / 空态 / 离线标注（3.3 own）——3.2 仅保 `/favorites` 匿名可达占位 + 微调文案
+  evidence: Story 3.2 的 `/favorites/page.tsx` 仍为结构性占位（静态服务端组件，不读 session / 不读 follow），仅微调文案反映「收藏能力已就绪，列表将在后续开放」。follow 列表 UI（读 `listFollows` + 渲染卡片 + 离线/下线标注 + 管理/取消）归 Story 3.3。3.2 不建列表，3.3 own。
+  resolution: 已于 Story 3.2 登记为 3.3 own——Story 3.3 落地 `/favorites` 列表 UI（读 `listFollows` + 渲染 + 离线标注 + 管理）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: follow target 存在性校验（下线事件 follow 行的离线展示）defer——3.2 不读 published 校验 follow 目标存在
+  evidence: Story 3.2 的 `follow_targets` 行按 id 字符串引用 published_hot_events.id / theme slug，**不**外键约束、**不**校验存在性。下线事件的 follow 行仍在（`refreshPublishedReadModel(takedown)` 删 published_* 不影响 follow_targets）。3.2 的 follow 读/写不校验目标是否存在（AC 不要求）。3.3 watchlist 列表需读 published_* 比对，标注「离线」状态（NFR2：watchlist 须明确标注离线 item，绝不伪装为 live）。
+  resolution: 已于 Story 3.2 登记为 3.3 范围——Story 3.3 watchlist 读 `listFollows` + 比对 published_* 存在性，标注离线。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: 账号资料 / 偏好 / 账号删除 / 多设备账号合并 defer——V1 账号为纯 id，无资料/偏好/删除/合并
+  evidence: Story 3.2 的 `UserAccount` 表只有 id + createdAt + updatedAt，无资料列（昵称/头像）、无偏好列、无软删/硬删、无设备/会话列表。多设备登录同一账号 = 同一 cookie 值（cookie 可跨设备复制，无设备绑定）。账号合并（两个 UserAccount 合一）无机制。真实账号体系随凭证 auth（见上 defer）落地时一并设计。
+  resolution: 已于 Story 3.2 登记为账号体系 defer——待真实 auth 落地时，加资料/偏好列 + 账号删除流程 + 多设备会话管理 + 账号合并机制。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: 关注数量展示 / 通知 / 推送 defer——V1 无关注计数、无通知/推送
+  evidence: Story 3.2 不渲染关注数量（`listFollows` 返回行但不计数展示）、无通知/推送基建（无 WebSocket/SSE/邮件通知）。关注事件的更新通知（事件有新证据时提醒关注者）是独立 concern，需通知基建（worker 触发 + 通知渠道 adapter）。epic-3-context 未列通知为 V1。
+  resolution: 已于 Story 3.2 登记为通知 defer——待通知基建（WebSocket/SSE/邮件/push）落地时，加关注事件更新通知 + 关注计数展示。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: 会话旋转 / 续期 / 吊销 + SESSION_SECRET 轮换策略 defer——V1 会话为固定 90 天 HMAC cookie，无旋转/续期/吊销，SECRET 轮换需全员重登
+  evidence: Story 3.2 的 `createSession` 设固定 90 天 maxAge cookie，无续期（每次请求不刷新）、无旋转、无服务端吊销列表（cookie 是无状态的，无法单点失效除非改 SECRET）。`SESSION_SECRET` 轮换 = 所有现有 cookie 立即失效（签名不再匹配 → 全员降级匿名 → 需重登）。真实 session 治理（服务端 session store、旋转、吊销）随凭证 auth 落地。
+  resolution: 已于 Story 3.2 登记为 session 治理 defer——待真实 auth + 服务端 session store 落地时，加会话旋转/续期/吊销 + SECRET 轮换兼容窗口（双 SECRET 重叠期）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: CSRF 显式 token defer——3.2 依赖 Next server action 内置 Origin 校验，无显式 CSRF token
+  evidence: Story 3.2 的 `toggleFollow` / `startSessionAndFollow` 是 Next server actions（`"use server"`），Next 16 对 server action POST 自带 Origin 校验（拒绝跨站 forged POST）。3.2 依赖该内置校验，不引入显式 CSRF token（double-submit / SameSite=Strict 已由 cookie SameSite=Lax 部分覆盖）。显式 CSRF token（更严格 / 兼容性更好）defer。
+  resolution: 已于 Story 3.2 登记为 CSRF defer——待安全审计要求或凭证 auth 落地时，加显式 CSRF token（double-submit cookie 或同步 token pattern）。当前 SameSite=Lax + Next Origin 校验是足够的地板。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: toggleFollow 读-后-写并发竞态 defer——同一用户跨 tab/双击并发 toggle 可能 A 跟随 B 取消致状态翻转两次
+  evidence: `toggleFollow` (`apps/web/app/(public)/_actions/follow-actions.ts`) 先 `isFollowing` 读后条件 `followTarget`/`unfollowTarget` 写，无事务/锁。客户端 `pending` flag 防同按钮双击，但跨 tab 或直接并发 POST 两个 toggle 可交错（A 读 false→follow，B 读 true→unfollow），最终态偏离用户单次点击意图。`followTarget` 的 `@@unique` + `findFirst` 幂等保证不重复行，但不防 toggle 翻转竞态。V1 单用户单 tab 体量下不可达；与 1.9 「非原子跨步 defer」同型。
+  resolution: 已于 Story 3.2 登记为并发 defer——待真实并发 toggle 负载（多 tab / 自动化客户端）出现时，用 `prisma.$transaction` + serializable 隔离或 SELECT...FOR UPDATE 包住 isFollowing+follow/unfollow。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: startSessionAndFollow 三步非原子 defer——createAccount+createSession 成功但 followTarget 抛错时留下孤儿账号+已设 cookie 但零收藏
+  evidence: `startSessionAndFollow` 顺序 `createAccount` → `createSession`（设 cookie）→ `followTarget`，三步无 `prisma.$transaction`。若 followTarget 抛错（DB 写失败），账号已建 + cookie 已设但无 follow 行——用户点「登录并收藏」只得到登录未得到收藏。仅在中途 DB 错误（loud failure 场景）下发生，可恢复（再次收藏）。V1 不阻断。
+  resolution: 已于 Story 3.2 登记为原子性 defer——待真实账号清理/一致性需求出现时，三步包事务或在 followTarget 失败时 `clearSession()` + 标记账号待清理。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: readSession 不校验账号存在性 defer——HMAC 合法但 user_accounts 行已删的 cookie 仍被视为有效会话
+  evidence: `apps/web/lib/session.ts` 的 `readSession()` 仅校验 HMAC 签名，不查 `user_accounts` 行是否存在（`tryGetAccount` 已实现但未接入）。V1 无账号删除流程（defer），故不可达。未来账号删除/清理落地后，已删账号的 cookie 仍验签通过 → 用户看似已登录但收藏全失（FK cascade 删了 follow_targets），页面渲染 following=false 无重新认证提示。
+  resolution: 已于 Story 3.2 登记为 defense-in-depth defer——待账号删除/吊销流程落地时，在 readSession 后调 `tryGetAccount`，null 则视为匿名（并清 cookie）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: createSession secure 标志读裸 process.env.NODE_ENV defer——误配 prod（NODE_ENV 非 "production"）时 cookie 无 Secure 可被中间人嗅探
+  evidence: `apps/web/lib/session.ts` 的 `createSession` 用 `secure: process.env.NODE_ENV === "production"` 直接读裸 env，未走 `@aguhot/config` 校验过的 env schema（schema 默认 NODE_ENV=development）。Next 自身可靠地设 NODE_ENV，实际风险低，但与「配置经 env schema 注入」约定不一致。
+  resolution: 已于 Story 3.2 登记为硬化 defer——读校验过的 env（或显式非生产 flag），并默认 Secure:true。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: theme slug 无字符集约束 defer——assertValidFollowRef 仅校验非空+长度，未限字符集（控制符/`/`/`..`/换行可通过）
+  evidence: `follow-service.ts` 的 theme 分支只校验空 + ≤128，无 slug 字符集白名单。V1 slug 来自运营管线/已发布主题（非公开输入），非信任边界；`revalidatePath` 用 `encodeURIComponent` 中和注入。若未来 slug 变用户定义则成攻击面。
+  resolution: 已于 Story 3.2 登记为 defer——待 slug 变用户定义或观察到滥用时，加 slug regex（如 `/^[a-z0-9-]+$/i`）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: feed follow 状态读无缓存预算 defer——每个登录访客每次 `/` 导航（含 filter searchParams 变更）都跑一次 listFollowedTargetIds
+  evidence: `apps/web/app/(public)/page.tsx` 登录态下对每次请求跑 `listFollowedTargetIds`（批量取该用户 hot_event follow id 集合），与既有重 published 读同路径，无缓存。`revalidatePath("/")` 重跑整页含此读。V1 体量可接受。
+  resolution: 已于 Story 3.2 登记为 scale defer——待 feed 流量增长时，引入 follow 状态读缓存 + 按 follow 写事件失效。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: 跨 tab/跨设备 follow 态实时同步 defer——FollowButton useState 在 revalidatePath 后已同步同账号 prop，但跨 tab/跨设备的远端状态变更不实时推送
+  evidence: patch 已修同一挂载内 props 变更同步（React 19 渲染期 state 调整模式）。但另一 tab/设备改变了同一 item 的 follow 态，当前 tab 的已挂载 FollowButton 不会主动刷新（需导航/revalidate）。V1 单用户单 tab 假设。
+  resolution: 已于 Story 3.2 登记为实时性 defer——待多设备/实时同步需求出现时，引入 BroadcastChannel / SWR 轮询 / WebSocket 推送。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: dialog role=alert 作用域 defer——error state 在 dialog 关闭后其 `<p role="alert">` 仍留 DOM，SR 可能播报过期错误
+  evidence: `follow-button.tsx` 的错误 `<p role="alert">`（含 dialog 内 + patch 新增的外部）在 error state 非空时即渲染，不随 dialog open/close 切换。dialog 关闭后若 error 未清，SR 仍可能播报。
+  resolution: 已于 Story 3.2 登记为 a11y defer——dialog 关闭时（onClose）清 error state，或仅在 dialog open 时渲染内部 alert。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: showModal 旧浏览器特性检测 defer——`<dialog>.showModal()` 在无该 API 的旧引擎上调用抛 TypeError
+  evidence: `follow-button.tsx` 用 `dialogRef.current?.showModal()`，`?.` 仅防 ref null，不防方法缺失。无 HTMLDialogElement.showModal 的旧浏览器（已罕见）会抛 TypeError 而非降级。Next 16/React 19 目标浏览器普遍支持 `<dialog>`。
+  resolution: 已于 Story 3.2 登记为兼容性 defer——待需支持旧引擎时加特性检测 + fallback（如 alert/自定义模态）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: migration updated_at 无 DEFAULT defer——直接 SQL INSERT（非 Prisma）不供 updated_at 时违反 NOT NULL
+  evidence: `20260711030000_add_user_profile_follow/migration.sql` 的 `user_accounts.updated_at` 是 NOT NULL 无 DEFAULT（Prisma `@updatedAt` 在 app 层设值）。raw SQL insert（运维脚本/数据迁移）会失败；与同表 `created_at DEFAULT CURRENT_TIMESTAMP` 不一致。
+  resolution: 已于 Story 3.2 登记为 schema 一致性 defer——若引入非 Prisma 写路径，给 updated_at 加 `DEFAULT CURRENT_TIMESTAMP`（或 `ON UPDATE` 触发器）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: seed-follow 直接运行检测跨平台 defer——`import.meta.url === \`file://${process.argv[1]}\`` 在 Windows/符号链接 tsx 下可能失效
+  evidence: `apps/web/e2e/seed-follow.ts` 的直接运行守卫用 `import.meta.url` 与 `process.argv[1]` 字符串比较，Windows 路径分隔符/符号链接 tsx runner 下可能不匹配（沿用既有 seed 脚本先例）。仓库其他 seed 同模式，故一致但同脆弱。
+  resolution: 已于 Story 3.2 登记为健壮性 defer——待跨平台运行需求时，换 `pathToFileURL` 归一比较。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: defer 项未从代码注释回链 defer——session.ts/follow-service.ts 等注释说「真实 auth defer」但无 deferred-work 锚点
+  evidence: 代码注释多处提「deferred to a later epic」，但未指回 `deferred-work.md` 具体条目，读者须 grep + 猜匹配。不影响行为。
+  resolution: 已于 Story 3.2 登记为可追溯性 defer——后续在 defer 相关注释加 source_spec/条目锚点。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: AC2 跨会话 returning-user 一致性未 e2e 驱动 defer——cross-page e2e 在同一 fresh context 内重登录后导航，未断言「上一会话 cookie 的 returning 用户」跨独立页面加载的一致性
+  evidence: `follow.spec.ts` 的 AC2 跨页测试在 serial fresh context 内重新走登录流程后导航 feed/theme 证 SSR 读一致，但未驱动「带上一会话 cookie 直接访问」的 returning 用户路径。底层不变量（listFollowedTargetIds 与 isFollowing 读同一持久行）已被覆盖，仅 returning-user 字面路径未单独驱动。
+  resolution: 已于 Story 3.2 登记为测试完整性 defer——待需要时加 returning-user cookie 注入的跨页一致性用例。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: Story 3.2 验证 opt-in 未入聚合/CI 门 defer——`e2e:follow` 与 `verify:follow-logic`/`verify:follow-ref` 仅手动触发，默认 `pnpm --filter web e2e` 经 --grep-invert 排除 @follow
+  evidence: 根 `package.json` 无 verify 聚合脚本、无 `.github/workflows`、无 turbo.json，bmad-loop gate `commands=[]`。`pnpm --filter web e2e` 默认 `--grep-invert "...|@follow"` 故不跑 @follow；`pnpm --filter core verify:follow-logic` / `pnpm --filter web verify:follow-ref` 须显式调。与 spec-1-1/1-4/2-x 既有「e2e/verify 未接入自动化门」defer 同根。
+  resolution: 已于 Story 3.2 登记为 CI defer——待平台 CI/turbo 门就绪时，把 e2e:follow + verify:follow-logic + verify:follow-ref（+ PG/Redis service container）一并接入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: toggleFollow 无 session 守卫未被执行测试 defer——`if (session === null) throw` 仅代码阅读覆盖，下游 session.accountId null-deref 兜底
+  evidence: `follow-actions.ts` 的 `toggleFollow` 无 session 抛 domain error 的守卫，无任何测试执行（e2e 总先登录；selfcheck 不触 Next runtime）。但下游 `session.accountId` 解引用会 null-deref 成 500 而非静默匿名写，故最坏只是错误码更差，非静默数据写。矩阵行 9 经纯层不变量（assertValidFollowRef arity）间接覆盖。
+  resolution: 已于 Story 3.2 登记为测试 defer——待加 server action 直发匿名 POST 的可驱动测试（需稳定 action_id）时覆盖。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-delayed-login-follow-action.md`
+  summary: /favorites 文案未 e2e 断言 defer——body copy 从占位改为「已可在详情/主题页收藏」，但 e2e 仅断言 200 + H1「收藏」
+  evidence: `follow.spec.ts` 的 `/favorites` 匿名测试仅断言 HTTP 200 + H1 heading，不断言 body 文案。文案回退/损坏不会被捕获。低风险（散文非行为契约）。
+  resolution: 已于 Story 3.2 登记为测试 defer——若该文案成契约一部分，加文本断言；否则保持。

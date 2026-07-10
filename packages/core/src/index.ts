@@ -299,3 +299,34 @@ export type {
   ThemeSearchHit,
   SearchPublishedResult,
 } from "./modules/search-read/index.js";
+
+// user-profile module (Story 3.2 — lightweight account + follow state;
+// deferred-login follow action; no credential auth (deferred)). Owns
+// user_accounts + follow_targets (AD-2 single ownership boundary). Follow rows
+// reference targets by id string ONLY (no FK to hot_events / themes /
+// published_*). Cookie/session helpers live in apps/web/lib/session.ts (Next
+// runtime concept, not core).
+export {
+  createAccount,
+  tryGetAccount,
+  followTarget,
+  unfollowTarget,
+  listFollows,
+  listFollowedTargetIds,
+  isFollowing,
+  assertValidFollowRef,
+  FollowTargetKind,
+} from "./modules/user-profile/index.js";
+export type {
+  FollowTargetKindType,
+  FollowRef,
+  FollowTarget,
+  UserProfileOptions,
+  CreateAccountOptions,
+  TryGetAccountOptions,
+  FollowTargetOptions,
+  UnfollowTargetOptions,
+  ListFollowsOptions,
+  ListFollowedTargetIdsOptions,
+  IsFollowingOptions,
+} from "./modules/user-profile/index.js";

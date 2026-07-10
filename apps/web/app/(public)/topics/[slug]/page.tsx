@@ -4,12 +4,18 @@ import { notFound } from "next/navigation";
 
 import { AiLabel } from "@/components/chips";
 import {
+  FollowTargetKind,
   getPrisma,
+  isFollowing,
   listPublishedHotEvents,
   listPublishedThemeMemberships,
   newTraceId,
 } from "@aguhot/core";
 import type { ThemeRef } from "@aguhot/core";
+
+import { readSession } from "@/lib/session";
+
+import { FollowButton } from "../../_components/follow-button";
 
 export const metadata: Metadata = {
   title: "主题追踪",
@@ -121,6 +127,20 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
     if (themeLabel !== slug) break;
   }
 
+  // Story 3.2: read the session (if any) + the follow state for this theme slug.
+  // Anonymous → no extra isFollowing DB read (initialIsFollowing stays false,
+  // FollowButton renders 「收藏」 + the deferred-login dialog).
+  const session = await readSession();
+  const following =
+    session !== null
+      ? await isFollowing({
+          prisma,
+          traceId: newTraceId(),
+          userAccountId: session.accountId,
+          ref: { kind: FollowTargetKind.Theme, themeSlug: slug },
+        })
+      : false;
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
       {/* Return link to the /topics directory. theme[slug]→/topics is a
@@ -144,6 +164,14 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
         <p className="text-sm text-ink-tertiary">
           按时间序列追踪该主题下的成员事件（从早到晚）。
         </p>
+        {/* Story 3.2: FollowButton for this theme. Anonymous → deferred-login
+            dialog; logged-in → toggles follow. Cross-page consistency: this and
+            any other surface reading (accountId, theme, slug) stay in sync. */}
+        <FollowButton
+          followRef={{ kind: FollowTargetKind.Theme, themeSlug: slug }}
+          initialIsFollowing={following}
+          isLoggedIn={session !== null}
+        />
       </header>
 
       {/* Member events as a chronological sequence (latestEvidenceAt ASC). Each
