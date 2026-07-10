@@ -38,9 +38,9 @@ export const metadata: Metadata = {
  *     evaluates it at REQUEST time, not BUILD time. getPrisma() reads
  *     DATABASE_URL at runtime; that call is never reached during `next build`.
  *     This keeps the public web build DATABASE_URL-free — the same mechanism the
- *     (operator)/console route uses. The (public)/layout.tsx and /daily /topics
- *     /favorites /design routes stay static (they never import core), so only
- *     this one route is dynamic.
+ *     (operator)/console route uses. The (public)/layout.tsx and /design route
+ *     stay static (they never import core); the /daily /topics /favorites routes
+ *     are also force-dynamic for the same reason.
  *
  * Why URL-driven filtering:
  *   - The date window (?window=today|7d|30d|all, default all) is read from

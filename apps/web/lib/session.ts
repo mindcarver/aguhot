@@ -1,5 +1,7 @@
 /**
- * Lightweight signed-cookie session helpers — Story 3.2 (deferred-login follow).
+ * Lightweight signed-cookie session helpers — Story 3.2 (deferred-login follow);
+ * `signSessionCookie` extracted as a pure signer in Story 3.3 so the e2e seed/
+ * spec can mint a session cookie WITHOUT importing `next/headers`.
  *
  * This is the V1 "lightweight account" session: a single signed cookie
  * `aguhot:session=<accountId>.<hmac>`. There are NO credentials (no password /
@@ -7,8 +9,15 @@
  * a UserAccount row + sets this cookie. Real credential auth is deferred to a
  * later epic (registered in deferred-work.md).
  *
- *   - createSession(accountId): set the signed cookie. httpOnly + SameSite=Lax
- *     + Secure(production) + 90-day maxAge.
+ *   - signSessionCookie(accountId, secret): PURE — returns
+ *     `${accountId}.${base64url hmac}` using only Node `crypto`. Single source
+ *     of truth for the cookie value format. No `next/headers` import, so it is
+ *     importable from tsx scripts (e2e seed/spec mint a cookie to simulate a
+ *     logged-in viewer without going through the login UI).
+ *   - createSession(accountId): set the signed cookie (delegates to
+ *     signSessionCookie). httpOnly + SameSite=Lax + Secure(production) + 90-day
+ *     maxAge. Cookie name / attributes / value format byte-for-byte unchanged
+ *     from 3.2.
  *   - readSession(): read + HMAC-verify the cookie. Returns { accountId } on a
  *     valid signature, or null on any failure (missing / tampered / truncated).
  *     NEVER throws — a bad cookie degrades silently to anonymous (AD-8: no
@@ -26,24 +35,24 @@
  * therefore lives in apps/web, NOT in core (core must be runtime-agnostic).
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 
 import { requireEnv } from "@aguhot/config";
+
+// The pure signer module owns the cookie value format (sign + verify), with NO
+// `next/headers` import so the e2e seed/spec can import it under playwright's
+// ESM loader. session.ts re-exports signSessionCookie for callers that reach it
+// via the session module, and imports `sign` for readSession's verify path —
+// single source of truth for mint + verify (no twin-`sign` drift risk).
+export { signSessionCookie } from "./session-cookie-signer";
+import { sign, signSessionCookie } from "./session-cookie-signer";
 
 /** The cookie name carrying `accountId.hmac`. */
 export const SESSION_COOKIE = "aguhot:session" as const;
 
 /** Session lifetime in seconds (90 days — supports SM-4 7-day retention measurement). */
 const SESSION_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
-
-/**
- * Compute the base64url HMAC-SHA256 signature of `accountId` under
- * `SESSION_SECRET`. Resolves SESSION_SECRET at request time via requireEnv.
- */
-function sign(accountId: string, secret: string): string {
-  return createHmac("sha256", secret).update(accountId).digest("base64url");
-}
 
 /**
  * Constant-time signature verification. Returns true iff `expected` and
@@ -70,8 +79,9 @@ function safeEqual(expected: string, actual: string): boolean {
  */
 export async function createSession(accountId: string): Promise<void> {
   const secret = requireEnv("SESSION_SECRET");
-  const sig = sign(accountId, secret);
-  const value = `${accountId}.${sig}`;
+  // Delegate to the pure signer so createSession and the e2e seed/spec mint
+  // byte-identical cookie values (single source of truth for the format).
+  const value = signSessionCookie(accountId, secret);
   const store = await cookies();
   store.set(SESSION_COOKIE, value, {
     httpOnly: true,

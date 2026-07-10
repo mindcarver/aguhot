@@ -36,8 +36,9 @@ export const metadata: Metadata = {
  *     DATABASE_URL at runtime; that call is never reached during `next build`,
  *     so the public web build stays DATABASE_URL-free (same mechanism as the
  *     1.7 homepage and the (operator)/console route). (public)/layout.tsx and
- *     the static public routes (/daily, /topics, /favorites, /design) never
- *     import core, so only `/` and `/events/[hotEventId]` are dynamic.
+ *     /design stay static (never import core); /daily /topics /favorites are
+ *     also force-dynamic, so `/`, `/events/[hotEventId]`, `/daily`, `/topics`,
+ *     `/topics/[slug]`, `/search`, and `/favorites` are all dynamic.
  *
  * Three first-screen partitions (AC1):
  *   - 发生了什么 (what happened): title + source count + time FACTS. Always

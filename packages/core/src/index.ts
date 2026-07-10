@@ -19,8 +19,8 @@
  * Public read note: as of 1.7 the public homepage imports this package, and as
  * of 1.8 the public detail page does too (AD-3 public-read via the read model).
  * DB-read routes declare `force-dynamic` so `next build` stays DATABASE_URL-free;
- * static public routes (layout, /daily, /topics, /favorites, /design) still do
- * NOT import core.
+ * only layout + /design stay static (they do not import core); /daily /topics
+ * /favorites are force-dynamic and import core.
  */
 
 // Shared kernel.

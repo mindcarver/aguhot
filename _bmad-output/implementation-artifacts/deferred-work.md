@@ -727,3 +727,59 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: /favorites 文案未 e2e 断言 defer——body copy 从占位改为「已可在详情/主题页收藏」，但 e2e 仅断言 200 + H1「收藏」
   evidence: `follow.spec.ts` 的 `/favorites` 匿名测试仅断言 HTTP 200 + H1 heading，不断言 body 文案。文案回退/损坏不会被捕获。低风险（散文非行为契约）。
   resolution: 已于 Story 3.2 登记为测试 defer——若该文案成契约一部分，加文本断言；否则保持。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: 关注数量统计 / 通知 / 推送 defer——V1 watchlist 不渲染关注计数、无通知/推送基建
+  evidence: Story 3.3 的 `/favorites` 列表渲染全部 follow 行（一次 `listFollows` 全量），不展示「关注 N 个热点 / M 个主题」计数，无关注事件更新通知（无 WebSocket/SSE/邮件/push 基建）。epic-3-context 未列通知/计数为 V1 AC。关注事件的更新通知（事件有新证据/解释修订时提醒关注者）需独立通知基建（worker 触发 + 通知渠道 adapter），与 3.2 登记的通知 defer 同根。
+  resolution: 已于 Story 3.3 登记为通知/计数 defer——待通知基建（WebSocket/SSE/邮件/push）落地时，加关注事件更新通知 + 关注数量展示。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: 批量管理 / 排序 / 筛选 / 分页 defer——V1 watchlist 单页全量按 createdAt desc，无批量 unfollow/排序 toggle/筛选/分页
+  evidence: Story 3.3 `/favorites` 一次渲染全部 follow（live + offline），排序固定 createdAt desc（最近收藏在前），无批量 unfollow（「清除全部已下线」控件）、无排序 toggle（按标题/时间/kind）、无筛选（仅看事件/主题/已下线）、无分页。epic-3-context 明示「V1 关注量小，一次 listFollows 全量渲染」。批量管理/排序/筛选/分页 defer。
+  resolution: 已于 Story 3.3 登记为批量管理/排序/筛选/分页 defer——待真实关注量增长至单页过长或用户反馈「想批量清理已下线」时，加批量 unfollow + 排序 toggle + 筛选 + 分页（或无限滚动）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: watchlist 读缓存预算 defer——每个登录访客每次 `/favorites` 导航都跑三读（listFollows + listPublishedHotEvents + listPublishedThemeMemberships），无缓存
+  evidence: Story 3.3 `/favorites` force-dynamic 请求期跑三个全表读 + JS join（resolveWatchlistView），无缓存。`revalidatePath` 重跑整页含三读。V1 体量可接受（published 行数极小、单用户 follow 行数极小）。与 1.7 feed 全表读 + 2.2 关联全表读 + 2.3 主题全表读同模式 defer。
+  resolution: 已于 Story 3.3 登记为 scale defer——待 watchlist 流量增长时，引入 published 读缓存 + 按 follow 写事件失效（或按用户 follow 集 cache-key）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: 跨 tab / 跨设备 watchlist 实时同步 defer——一 tab unfollow 后另一 tab/设备的 `/favorites` 不主动刷新
+  evidence: Story 3.3 watchlist 是 force-dynamic 请求期读，无 WebSocket/SSE 实时推送。读者在 tab A unfollow 一个事件后，tab B 的 `/favorites` 仍显示该项（需导航/刷新才同步）。与 3.2 FollowButton 跨 tab 同步 defer 同根。V1 单用户单 tab 假设。
+  resolution: 已于 Story 3.3 登记为实时性 defer——待多设备/实时同步需求出现时，引入 BroadcastChannel / SWR 轮询 / WebSocket 推送。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: offline 项批量清理 defer——V1 须逐项点 FollowButton 清理已下线项，无「一键清除全部已下线」控件
+  evidence: Story 3.3 offline 组的每项挂 FollowButton（逐项 unfollow），无批量清除控件。读者积累大量已下线 follow 时须逐项点击。批量清除控件（「清除全部已下线」按钮 + 确认）defer（与批量管理 defer 同根）。
+  resolution: 已于 Story 3.3 登记为批量清理 defer——待真实读者反馈「想一键清除已下线」时，加批量 unfollow server action + 确认控件。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: theme slug 字符集校验 defer——resolveWatchlistView 的 theme 离线判定按 slug 精确匹配，大小写/Unicode/首尾空白不一致会静默归类为 offline
+  evidence: Story 3.3 `resolveWatchlistView` 的 `themeLabelBySlug` Map 按 slug 精确匹配。若 follow 记录的 slug 与 published membership 的 slug 存在大小写/首尾空白/NFC 差异，follow 会被静默归类为 offline（即使主题仍在线）。沿用 3.1 搜索 slug 规范性 + 3.2 theme slug 字符集 defer。V1 slug 来自 StubThemeAdapter（确定性、规范），故不可达；真实主题源 slug 质量不可控时存在风险。
+  resolution: 已于 Story 3.3 登记为 slug 归一化 defer（沿用 3.1/3.2）——真实主题源引入时，在 slug 匹配前做归一化（trim + NFC + 可选 casefold），与 3.1 搜索 slug 规范性一并统一处理。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: `listFollows` 分页 defer——V1 返回该用户全部 follow 行，关注量增长后单用户 follow 集膨胀会成为瓶颈
+  evidence: Story 3.3 `/favorites` 用 `listFollows`（无 where filter、无分页）返回该用户全部 follow 行。V1 单用户 follow 行数极小（读者少量收藏）；真实重度用户（关注数百+项）的全量读 + 内存 join + 全量渲染会成瓶颈。与 1.7/2.2/2.3 全表读 scale ceiling 同型 defer，但 listFollows 是 per-user 而非 global。
+  resolution: 已于 Story 3.3 登记为 listFollows 分页 defer——待真实重度用户关注量增长时，给 listFollows 加分页（cursor 或 offset）+ watchlist 分页 UI。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: 真实 auth 落地后 watchlist 与账号资料/偏好关联 defer——V1 账号为纯 id，watchlist 无账号资料/偏好展示
+  evidence: Story 3.3 `/favorites` 不渲染账号资料（昵称/头像）、无偏好设置（通知偏好/语言/时区）。`UserAccount` 表只有 id + 时间戳（3.2 设计）。真实 auth 落地后，watchlist 页可加账号资料 header + 偏好设置入口（与 3.2 账号体系 defer 同根）。
+  resolution: 已于 Story 3.3 登记为账号体系关联 defer——待真实 auth 落地时，watchlist 加账号资料 header + 偏好设置入口（随 3.2 账号体系 defer 一并设计）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: `resolveWatchlistView` 全量 published 读的伸缩上限 defer——三读（listFollows + listPublishedHotEvents + listPublishedThemeMemberships）均为全表读 + JS join，已发布集/单用户 follow 集增长后成瓶颈
+  evidence: Story 3.3 `resolveWatchlistView` 接收三个全量数组（该用户全部 follow + 全部 published events + 全部 published theme memberships），在 JS 内存做 Map 索引 + diff。V1 published 体量极小（每次 /favorites 导航三读 + JS join）；已发布集增长后（数千+事件/主题）+ 单用户重度 follow（数百+项）的全量读 + 内存 join 会成瓶颈，需改 SQL JOIN 或增量读（只读该用户 follow 的 id 对应的 published 行）。沿用 1.7/2.2/2.3 全表读 scale ceiling 同型 defer。
+  resolution: 已于 Story 3.3 登记为 scale ceiling——待已发布集/单用户 follow 集增长至三读 + JS join 有可测延迟时，把 published 读下推为 SQL JOIN（follow 的 id IN (...) → published 行存在性检查）或增量读（只读 follow 命中的 published 行）。
+
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: watchlist a11y 基线 defer——标题层级（section h2「关注中」与每个 EventCard 内的 h2 同级）、offline FollowButton aria-label 不区分在线/下线、`<ul>` 未用 aria-labelledby 显式关联 h2
+  evidence: Story 3.3 review (adversarial) 指出 `/favorites` 的 live section h2「关注中」与复用的 EventCard 内每卡 h2 同级（screen reader 无法区分 section 标签与 item 标题）；offline 行的 FollowButton aria-label 与 live item 相同（下线状态仅靠前置「已下线」文本 + 视觉传达，按钮 accessible name 不携带状态）；live/offline `<ul>` 仅靠 `<section>` DOM 嵌套隐式关联 h2。这些属 Story 3.5（公开页面语义与键盘可达基线）/3.6（触控热区与减少动态效果）跨切面 a11y 基线 scope——本 story 复用既有 EventCard h2 模式（home feed 同构），未单独修。
+  resolution: 已于 Story 3.3 review 登记为 a11y defer——随 Story 3.5/3.6 a11y 基线统一处理（EventCard 标题层级调整跨 home/feed/watchlist；offline FollowButton aria-label 携带下线状态；`<ul>` aria-labelledby 显式关联）。本 story 不单独改（避免越 3.5/3.6 scope 与 EventCard 跨面回归）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-watchlist-and-revisit-management.md`
+  summary: `verify:*` selfcheck 未接入 CI/precommit defer——`verify:watchlist`/`verify:session-cookie`/`verify:follow-ref`/`verify:cluster-logic` 等纯 selfcheck 脚本仅手动运行，无 CI workflow / git hook / 根 `verify` 聚合脚本驱动
+  evidence: Story 3.3 review (verification-gap) 指出 `verify:watchlist`（钉 AC3 离线归类）与新增 `verify:session-cookie`（钉 mint/verify 回环、防 sign() twin 漂移）在全仓 grep 仅命中 package.json 脚本行 + 自身注释，repo 无 `.github/`、无 `.husky/`、根 `package.json` 仅 build/typecheck/lint/format——selfcheck 回归只能靠开发者记得手动跑。这是 repo-wide 既有约定（`verify:follow-ref` 等同为手动），非 3.3 引入。
+  resolution: 已于 Story 3.3 review 登记为 repo-wide verify 接入 defer——待 CI/hook 基建引入时，把所有 `verify:*` selfcheck 聚合进根 `verify`/`test` 脚本 + precommit/CI，使 AC3 离线归类与 session-cookie 回环等关键不变量自动运行。

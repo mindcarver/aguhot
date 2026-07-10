@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "eslint .",
     "verify:follow-ref": "tsx \"app/(public)/_actions/follow-ref-parser.selfcheck.ts\"",
-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow\"",
+    "verify:session-cookie": "tsx lib/session-cookie-signer.selfcheck.ts",
+    "verify:watchlist": "tsx lib/watchlist.selfcheck.ts",
+    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist\"",
     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
@@ -23,6 +25,7 @@
     "e2e:loop": "tsx e2e/seed-loop.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @loop",
     "e2e:search": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search",
     "e2e:follow": "tsx e2e/seed-follow.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-follow-e2e-secret-32chars playwright test --grep @follow",
+    "e2e:watchlist": "tsx e2e/seed-watchlist.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-watchlist-e2e-secret-32chars playwright test --grep @watchlist",
     "seed:console": "tsx e2e/seed-console.ts",
     "seed:feed": "tsx e2e/seed-feed.ts",
     "seed:detail": "tsx e2e/seed-detail.ts",
@@ -34,7 +37,8 @@
     "seed:daily": "tsx e2e/seed-daily.ts",
     "seed:loop": "tsx e2e/seed-loop.ts",
     "seed:search": "tsx e2e/seed-search.ts",
-    "seed:follow": "tsx e2e/seed-follow.ts"
+    "seed:follow": "tsx e2e/seed-follow.ts",
+    "seed:watchlist": "tsx e2e/seed-watchlist.ts"
   },
   "dependencies": {
     "@aguhot/config": "workspace:*",
