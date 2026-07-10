@@ -80,31 +80,44 @@ model EvidenceRecord {
 }
 
 // A candidate hot event produced by clustering archived evidence records.
-// The event-assembly module is the sole writer of this table (AD-2): it only
-// ever creates/updates candidates here via clusterEvents. A candidate is never
-// visible publicly until review-workflow (1.6) transitions publication_status
-// to "published" and publish-orchestrator (1.7+) writes a published_* read
-// model — this story never creates that read model and never sets "published".
+// The event-assembly module owns creation + (title, cluster_signature) writes
+// (AD-2); review-workflow owns the `publication_status` field writes (AD-6 —
+// field-level write-ownership, see Design Notes in spec-1-6: two modules write
+// hot_events but different, non-overlapping fields). A candidate is never
+// visible publicly until review-workflow transitions publication_status to
+// "published" and publish-orchestrator upserts the published_hot_events read
+// model. event-assembly only ever assigns "candidate"; review-workflow drives
+// candidate→published / candidate→rejected / published→taken_down.
 //
 // `publication_status` is a String column with a TS union (no Prisma enum, per
-// erasableSyntaxOnly). This story only assigns "candidate"; the transitions to
-// "published"/"taken_down" etc. belong to review-workflow (1.6) and are not
-// enumerated here. `cluster_signature` is the sorted token-union signature of
-// the cluster's member records (see signatureOf in clustering.ts); it is the
-// key used for incremental merge: a newly archived record whose tokens overlap
-// an existing candidate's signature joins that candidate instead of spawning a
-// duplicate. `title` is a naive derivation (latest published_at record's title,
-// non-AI) — real title/explanation generation is the separate explain job (1.8).
+// erasableSyntaxOnly). The authoritative union lives in shared/publication-
+// status.ts (candidate|published|rejected|taken_down) and is re-exported from
+// event-assembly/types.ts to keep the 1-5 public API stable. `cluster_signature`
+// is the sorted token-union signature of the cluster's member records (see
+// signatureOf in clustering.ts); it is the key used for incremental merge: a
+// newly archived record whose tokens overlap an existing candidate's signature
+// joins that candidate instead of spawning a duplicate. `title` is a naive
+// derivation (latest published_at record's title, non-AI) — real title/
+// explanation generation is the separate explain job (1.8).
 model HotEvent {
   id                 String   @id // UUIDv7, assigned in application code (newTraceId)
   title              String
   clusterSignature   String   @map("cluster_signature")
-  publicationStatus  String   @map("publication_status") // PublicationStatus union value ("candidate")
+  publicationStatus  String   @map("publication_status") // PublicationStatus union value (shared/publication-status.ts)
   traceId            String?  @map("trace_id")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
-  evidence HotEventEvidence[]
+  evidence           HotEventEvidence[]
+  // Read-only reverse relations (Prisma navigation metadata, not write paths):
+  // let review-workflow list candidates / detail evidence and let
+  // publish-orchestrator compute read-model projections without a second query
+  // round-trip. Adding these does NOT change event-assembly's write-ownership
+  // of (title, cluster_signature) or review-workflow's ownership of
+  // publication_status (AD-2/AD-6 field-level split).
+  reviewDecisions     ReviewDecision[]
+  publicationDecisions PublicationDecision[]
+  publishedReadModel  PublishedHotEvent?
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -131,4 +144,78 @@ model HotEventEvidence {
   @@index([evidenceRecordId])
   @@index([hotEventId])
   @@map("hot_event_evidence")
+}
+
+// An append-only operator decision on a candidate HotEvent (AD-5/AD-6). The
+// review-workflow module is the sole writer of this table. Each row records one
+// approve/reject/takedown outcome; rows are never updated or deleted — the full
+// chain (ordered by created_at) is the auditable history of who decided what,
+// when, and why. `outcome` is a String column with the ReviewOutcome union
+// (approve|reject|takedown). FK onDelete: Restrict so deleting a HotEvent can
+// never silently erase review history (audit traceability, AD-5).
+model ReviewDecision {
+  id        String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId String  @map("hot_event_id")
+  outcome   String // ReviewOutcome union value ("approve"|"reject"|"takedown")
+  reviewer  String // operator identity (V1: placeholder; real auth deferred)
+  note      String? // optional operator note
+  traceId   String? @map("trace_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  hotEvent          HotEvent           @relation(fields: [hotEventId], references: [id])
+  publicationDecision PublicationDecision?
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("review_decisions")
+}
+
+// An append-only record of a publication_status transition (AD-5/AD-6). The
+// review-workflow module is the sole writer. Each row records the from→to
+// transition driven by a ReviewDecision (linked via review_decision_id) and is
+// the auditable proof that a candidate became published, was rejected, or a
+// published event was taken down. Rows are never updated or deleted. FK
+// onDelete: Restrict so deleting a HotEvent can never erase publication history.
+// `from_status`/`to_status` are PublicationStatus union values.
+model PublicationDecision {
+  id              String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId      String   @map("hot_event_id")
+  fromStatus      String   @map("from_status") // PublicationStatus union value
+  toStatus        String   @map("to_status") // PublicationStatus union value
+  reason          String? // optional operator-facing reason
+  reviewDecisionId String? @unique @map("review_decision_id")
+  traceId         String?  @map("trace_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  hotEvent       HotEvent       @relation(fields: [hotEventId], references: [id])
+  reviewDecision ReviewDecision? @relation(fields: [reviewDecisionId], references: [id])
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("publication_decisions")
+}
+
+// The public read model for published hot events (AD-3). The publish-
+// orchestrator module is the sole writer of this table. Row existence = current
+// publication: approve upserts the row (public-visible), takedown deletes it
+// (public-invisible). There is intentionally NO status column — row existence
+// is the visibility contract, so public reads are just "SELECT * FROM
+// published_hot_events" with no WHERE filter to forget (see Design Notes in
+// spec-1-6). FK onDelete: Cascade so a HotEvent deletion cleans up its read
+// model row (the decision history is preserved in review_decisions/
+// publication_decisions via their own Restrict FKs). `published_at` is the time
+// this event became public (set on first publish; kept stable across refreshes).
+// `evidence_count`/`latest_evidence_at` are recomputed on every publish refresh.
+model PublishedHotEvent {
+  hotEventId       String   @id @map("hot_event_id")
+  title            String
+  evidenceCount    Int      @map("evidence_count")
+  latestEvidenceAt DateTime @map("latest_evidence_at")
+  publishedAt      DateTime @default(now()) @map("published_at")
+  traceId          String?  @map("trace_id")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id])
+
+  @@map("published_hot_events")
 }

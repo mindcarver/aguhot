@@ -3,34 +3,18 @@
  * repo erasableSyntaxOnly convention), clustering options, and the cluster
  * input shape.
  *
- * `PublicationStatus` is stored as a String column with a TS union (not a
- * Prisma enum). This story (1.5) only ever assigns `Candidate`. The
- * transitions to "published"/"taken_down" etc. are owned by review-workflow
- * (1.6) via application commands and are intentionally NOT enumerated here —
- * this module never assigns them. Enumerating future statuses here would
- * imply this module owns them, violating the single-writer discipline (AD-2).
+ * `PublicationStatus` is now re-exported from the shared kernel
+ * (shared/publication-status.ts), which is the single source of truth for the
+ * full candidate|published|rejected|taken_down set. event-assembly still only
+ * ever assigns `Candidate` — re-exporting the full set here does NOT widen this
+ * module's writes; it only keeps the 1-5 public API stable so the 1-5 verify/
+ * selfcheck and downstream consumers keep importing `PublicationStatus` from
+ * event-assembly unchanged. The DB column is a plain String; reading it back
+ * yields Prisma's `string`, not this union.
  */
 
-/**
- * The publication lifecycle value this module may assign.
- *
- * - `Candidate`: produced by clustering (this story). Not visible on the public
- *   site. The transition to "published" (and "taken_down" etc.) is driven by
- *   review-workflow (1.6), not by this module.
- *
- * The union is derived solely from the const object above, so it contains only
- * the value(s) event-assembly writes (`"candidate"`). This type-enforces the
- * single-writer claim: `publicationStatus: "published"` does NOT type-check
- * here, so a stray publish cannot slip in via this module. The DB column itself
- * is a plain String and may hold other values written by review-workflow (1.6);
- * those are typed in that module's scope, not here. Reading the column back
- * yields Prisma's `string`, not this union, so narrowing does not affect reads.
- */
-export const PublicationStatus = {
-  Candidate: "candidate",
-} as const;
-
-export type PublicationStatus = (typeof PublicationStatus)[keyof typeof PublicationStatus];
+export { PublicationStatus } from "../../shared/publication-status.js";
+export type { PublicationStatus as PublicationStatusType } from "../../shared/publication-status.js";
 
 /**
  * Options for clusterRecords. The defaults are named constants (below) so the

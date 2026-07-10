@@ -1,17 +1,28 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config for the AGUHOT web app smoke tests.
+ * Playwright config for the AGUHOT web app tests.
  *
- * `pnpm --filter web e2e` runs `playwright test` from apps/web. The web server
- * is started on-demand; the homepage is anonymous and needs no DB/Redis, so
- * it boots even without infrastructure configured.
+ * Two test surfaces, kept strictly separate so the public e2e stays
+ * DATABASE_URL-free:
  *
- * The e2e script sets NO_PROXY/no_proxy to exclude localhost so that a
- * developer's system HTTP proxy (corporate/VPN tools) cannot intercept the
- * webServer readiness probe or the browser and return a misleading 502. The
- * webServer + baseURL pin 127.0.0.1 for deterministic loopback binding.
+ *   1. Public e2e — `pnpm --filter web e2e` (default `playwright test`).
+ *      Covers home/navigation/design. The web server boots on-demand; the
+ *      homepage is anonymous and needs no DB/Redis, so it runs even without
+ *      infrastructure. Tests in e2e/*.spec.ts that are NOT tagged @console.
+ *
+ *   2. Console e2e — `pnpm --filter web e2e:console` (--grep @console).
+ *      Covers the operator review console (Story 1.6). Requires DATABASE_URL +
+ *      a seed step (seed:console) to produce deterministic candidates. The
+ *      seed runs as a globalSetup so the DB is populated before the web server
+ *      serves /console. These tests must NOT run under the default public e2e
+ *      (which has no DATABASE_URL).
+ *
+ * The e2e script sets NO_PROXY/no_proxy to exclude localhost so a developer's
+ * system HTTP proxy cannot intercept the webServer readiness probe or the
+ * browser. The webServer + baseURL pin 127.0.0.1 for deterministic loopback.
  */
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
