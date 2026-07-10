@@ -63,6 +63,12 @@ export {
   SIGNATURE_DELIMITER,
 } from "./modules/event-assembly/clustering.js";
 export type { ClusterGroup } from "./modules/event-assembly/clustering.js";
+// Story 1.9: operator-authored title/tags revision (reviseHotEvent) +
+// normalizeTags (split/trim/dedupe the raw operator tag input). reviseHotEvent
+// only writes hot_event_revisions (append-only, AD-5); effective title/tags =
+// latest revision ?? baseline. publish-orchestrator projects the effective on
+// republish; review-workflow computes the pending diff.
+export { reviseHotEvent, normalizeTags } from "./modules/event-assembly/revise-service.js";
 export {
   SIMILARITY_THRESHOLD,
   TIME_WINDOW_MS,
@@ -75,10 +81,13 @@ export {
 export type {
   ClusterInput,
   ClusterOptions,
+  ReviseHotEventOptions,
+  ReviseHotEventResult,
 } from "./modules/event-assembly/types.js";
 
-// review-workflow module (Story 1.6 — the publish gate).
-export { decideReview, listPendingCandidates, getCandidateDetail } from "./modules/review-workflow/review-service.js";
+// review-workflow module (Story 1.6 — the publish gate; Story 1.9 — republish +
+// operator revision view).
+export { decideReview, listPendingCandidates, getCandidateDetail, getPublishedEventForRevision } from "./modules/review-workflow/review-service.js";
 export type {
   DecideReviewOptions,
   DecideReviewResult,
@@ -88,6 +97,8 @@ export type {
   CandidateDetail,
   CandidateEvidenceItem,
   CandidateDecisionEntry,
+  GetPublishedEventForRevisionOptions,
+  PublishedEventRevisionView,
 } from "./modules/review-workflow/types.js";
 export { resolveTransition, LEGAL_TRANSITIONS } from "./modules/review-workflow/transitions.js";
 export {
@@ -122,11 +133,13 @@ export type {
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
-// append-only ExplanationVersion, AD-5).
+// append-only ExplanationVersion, AD-5; Story 1.9 — saveExplanation operator
+// revision write-point, source passed by caller, V1 "human").
 export {
   generateExplanation,
   getLatestExplanation,
   derivePartitions,
+  saveExplanation,
 } from "./modules/explanation/explain-service.js";
 export {
   ExplanationSource,
@@ -138,4 +151,6 @@ export type {
   GenerateExplanationResult,
   GetLatestExplanationOptions,
   ExplanationVersionRecord,
+  SaveExplanationOptions,
+  SaveExplanationResult,
 } from "./modules/explanation/types.js";

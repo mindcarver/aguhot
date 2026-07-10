@@ -11,7 +11,7 @@
  * version at projection time and writes the public read models.
  */
 
-export { generateExplanation, getLatestExplanation, derivePartitions } from "./explain-service.js";
+export { generateExplanation, getLatestExplanation, derivePartitions, saveExplanation } from "./explain-service.js";
 export { ExplanationSource } from "./types.js";
 export type {
   ExplanationSource as ExplanationSourceType,
@@ -20,4 +20,6 @@ export type {
   GenerateExplanationResult,
   GetLatestExplanationOptions,
   ExplanationVersionRecord,
+  SaveExplanationOptions,
+  SaveExplanationResult,
 } from "./types.js";

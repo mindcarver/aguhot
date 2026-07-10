@@ -151,3 +151,38 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: `derivePartitions` 不截断 title/summary + `generateExplanation` 未守卫 `link.evidenceRecord` null——两项健壮性/防御性 defer（当前数据/约束下不可达）
   evidence: step-04 edge-case 审计：(1) `explain-service.ts` 的 `deriveSummary`/`deriveWhyItMatters` 直接拼接 title+summary 无长度上限（evidence summary 由采集归一化填入、实践有界，但无显式截断防护；超长输入→超大 ExplanationVersion 行 + 渲染膨胀）。(2) `event.evidence.map((link) => ({ id: link.evidenceRecord.id, ... }))` 假设 evidenceRecord 非 null——`HotEventEvidence.evidenceRecord` FK（onDelete 默认 Restrict）使 evidence_records 被引用时不可删→无孤儿→恒非 null，故当前不可达。
   resolution: 已于 Story 1.8 登记为健壮性/防御性 defer——(1) 若观察到超大摘要，在 `derivePartitions` 入口对 title/summary `slice(0, ~2000)`；(2) 若未来放宽 evidence_records 删除策略，map 前过滤 `link.evidenceRecord !== null`。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 按标签的 feed 筛选 / 分类维度归 Epic 2.2——1.9 标签是详情页展示属性，非筛选维度；listPublishedHotEvents / PublishedHotEventSummary 故意不带 tags
+  evidence: Story 1.9 标签是运营自由文本展示属性（详情页渲染 TagChip），不向 `listPublishedHotEvents`/`PublishedHotEventSummary` 加 `tags`（不改 1.7 feed 契约）。epic 卡片「分类筛选维度」与 deferred-work 1.7 条目明示分类筛选归 Epic 2.2（概念/行业关联、派生分类、筛选器）。1.9 标签与 Epic 2.2 分类是不同概念（前者是事件展示属性，后者是 feed 筛选维度），可共存：标签投影到读模型、详情面展示；按标签筛选若需要是另一 concern，AC 不要求。
+  resolution: 已于 Story 1.9 登记为 Epic 2.2 范围——按标签/分类筛选 + 标签作为筛选维度随 Epic 2.2 分类关联落地时评估。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 标签分类法 / 预定义标签集 / 标签级元数据表未引入——V1 取最小可辩护读法（自由文本运营标签）
+  evidence: 无分类法在任何 planning 文档定义；引入分类法需先定义标签集（超范围、未决）。1.9 `HotEventRevision.tags` 是 `String[]` 自由文本（trim/去重/保序、大小写敏感），无分类法、无标签级元数据表、无预定义标签集。`normalizeTags` 仅做分隔符拆分/trim/去重。多输入标签 UI 也未做（用单文本框分隔符输入，spec 明示 V1 不做多输入）。
+  resolution: 已于 Story 1.9 登记为 YAGNI defer——待真实运营负载需要分类法/预定义标签集/多输入 UI 时，先定义标签本体（分类法、同义词、层级），再引入对应元数据表与 UI。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 「丢弃 pending 修订」功能未做——追加式不可删；运营可再修订回 published 值使差异归零，或保持 pending 不重发布
+  evidence: Story 1.9 `reviseHotEvent`/`saveExplanation` 各做变更检测后 append（AD-5 追加式，永不 update/delete）。运营若误修订产生 pending，无法「撤销」该修订——但追加式无损坏：运营可再修订回与 published 相同的值（差异归零、pending 消失），或保持 pending 不重发布（公开不受影响）。强制 discard 需引入「标记作废」语义或软删，超 V1 最小。
+  resolution: 已于 Story 1.9 登记为 defer——待真实运营误操作频次出现时，评估「标记修订作废」（软删/标记）或「回滚到指定版本」语义。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 运营台鉴权 / `(operator)` 路由组门未做——沿用 1.6 占位 `/console` 公开可达
+  evidence: Story 1.9 运营修订 UI（`/console/[eventId]` published 分支、`submitRevision`、republish）沿用 1.6 的 `/console` 公开可达占位（`(operator)/layout.tsx` 仅 noindex、无认证）。真实运营认证依赖 `user-profile` 模块（未建，后续 epic）。reviewer 字段为占位 `"operator"`。开发态 `/console` 公开可达（安全含义：任何人可修订/重发布）。
+  resolution: 已于 Story 1.9 沿用 1.6 defer——真实认证随 user-profile 落地时接入 `(operator)` layout 门，reviewer 字段流经验证身份。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 从 `taken_down` / `rejected` 重发布归 1.10——1.9 仅加 `published→published` 重发布（修订后刷新）
+  evidence: Story 1.9 转换图仅加 `{from:"published", outcome:"republish", to:"published", action:"publish"}`。`resolveTransition` 对 `taken_down+republish` / `rejected+republish` 抛 `IllegalTransitionError`（selfcheck 锁定）。合并/拆分/从下线或驳回重发布是 1.10 范围（epic cross-story 依赖明示 1.10 复用闸门）。
+  resolution: 已于 Story 1.9 登记为 1.10 范围——`taken_down→published` / `rejected→candidate` 重发布随 Story 1.10 合并/拆分/下线重发布落地（届时扩展 LEGAL_TRANSITIONS + selfcheck）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 真实 LLM 沿用 1.8 defer——1.9 `saveExplanation` 接收运营手输文本，非 LLM 生成；LLMAdapter port 仍不预建
+  evidence: Story 1.9 `saveExplanation` 接收运营**手输**三分区（source 由 caller 传，V1 `"human"`），不调外部 LLM、不引入 openai/anthropic 依赖。`LLMAdapter` port 沿用 1.8 defer（当前唯一 explanation 实现是确定性派生 + 人工手输，无第三方 SDK，预建 port 属「单一实现接口」反模式）。真实 LLM 生成（source="ai"）+ port 抽取待真实 LLM 引入。
+  resolution: 已于 Story 1.9 沿用 1.8 defer——真实 LLM 引入时在 worker 层抽 `LLMAdapter` port，`generateExplanation` 切换为 LLM 生成（source="ai"），公开 `<AiLabel>` 标识不变（template/ai 挂、human 不挂）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-published-event-copy-and-tag-corrections.md`
+  summary: 标题/标签修订与解释修订分两个 server action、各模块 append 各自原子、整体非跨模块事务
+  evidence: Story 1.9 `submitRevision` 顺序调 `reviseHotEvent`（event-assembly 写 `hot_event_revisions`）+ `saveExplanation`（explanation 写 `explanation_versions`）——各模块写归属内、各自 append 原子，但两者非跨模块事务（web 层顺序调）。若标题 append 后解释 append 前崩溃，留部分修订——但追加式无损坏（运营重提交）。强制跨模块事务需重构模块函数接受 `tx` 或引入 core 编排器，超 V1 最小。
+  resolution: 已于 Story 1.9 登记为非原子 defer——待真实跨模块一致性需求出现时，引入 core 层编排器（接受 `PrismaTransaction` 的 revise+save 复合命令）或 saga 补偿。

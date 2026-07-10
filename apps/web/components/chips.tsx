@@ -41,6 +41,32 @@ export function AiLabel({ className }: { className?: string }) {
 }
 
 /**
+ * Free-text operator tag chip — Story 1.9.
+ *
+ * Renders one operator-authored tag (from the published read model' projected
+ * `tags` array, sourced from the effective HotEventRevision.tags). Used on the
+ * public detail page under the title (display-only attribute; NOT a feed filter
+ * — filtering by tag belongs to Epic 2.2 taxonomy). V1 tags have NO taxonomy
+ * and NO tag-level metadata; this chip is the minimal display primitive.
+ *
+ * Token: `bg-surface-muted` (a real, resolving token — DO NOT copy the 1-6
+ * console's drifted `bg-surface`/`border-line-subtle` which do not resolve
+ * under Tailwind v4). `rounded-full` matches the chip family.
+ */
+export function TagChip({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-medium text-ink-secondary",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
  * Filter pill — default vs active, optionally a link.
  *
  * DESIGN `filter-pill`: default is a light surface with secondary ink; active

@@ -26,6 +26,7 @@ export {
   SIGNATURE_DELIMITER,
 } from "./clustering.js";
 export type { ClusterGroup } from "./clustering.js";
+export { reviseHotEvent, normalizeTags } from "./revise-service.js";
 export {
   PublicationStatus,
   SIMILARITY_THRESHOLD,
@@ -35,4 +36,6 @@ export type {
   ClusterInput,
   ClusterOptions,
   PublicationStatus as PublicationStatusType,
+  ReviseHotEventOptions,
+  ReviseHotEventResult,
 } from "./types.js";

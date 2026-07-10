@@ -33,6 +33,7 @@ import {
   listPublishedHotEvents,
   newTraceId,
   resetPrisma,
+  reviseHotEvent,
   IllegalTransitionError,
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
@@ -578,6 +579,95 @@ async function main(): Promise<void> {
         ok: bondRows === 1,
         detail: `${bondRows} rows`,
       });
+
+      // --- Story 1.9: revise + republish projects effective title/tags --------
+      // A revision appends a HotEventRevision (title overlay + tag set). The
+      // published read model does NOT change until republish (pending). After
+      // republish the read model shows the effective title + the projected tags.
+      // publishedAt stays stable across republish (first-publish time preserved).
+      const bondRowBefore = await prisma.publishedHotEvent.findUniqueOrThrow({
+        where: { hotEventId: bondCand.id },
+        select: { title: true, tags: true, publishedAt: true },
+      });
+      assertions.push({
+        name: "1.9 pre-revision: published bond row has empty tags",
+        ok: bondRowBefore.tags.length === 0,
+        detail: `tags=${JSON.stringify(bondRowBefore.tags)}`,
+      });
+
+      await reviseHotEvent({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: bondCand.id,
+        title: "债券收益率上行（运营修订）",
+        tags: "利率,债市",
+        reviewer: "verify-operator",
+        note: "revision for republish verify",
+      });
+
+      // Pre-republish: public detail still shows the OLD title + empty tags.
+      const bondDetailBefore = await getPublishedHotEventDetail({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: bondCand.id,
+      });
+      assertions.push({
+        name: "1.9 pending: public detail shows OLD title before republish",
+        ok: bondDetailBefore !== null && bondDetailBefore!.title === bondCand.title,
+        detail: bondDetailBefore === null ? "(null)" : `title=${bondDetailBefore!.title}`,
+      });
+      assertions.push({
+        name: "1.9 pending: public detail shows OLD (empty) tags before republish",
+        ok: bondDetailBefore !== null && bondDetailBefore!.tags.length === 0,
+      });
+
+      // Republish: published→published, action=publish.
+      const republishRes = await decideReview({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: bondCand.id,
+        outcome: "republish",
+        reviewer: "verify-operator",
+        note: "republish revised bond event",
+      });
+      assertions.push({
+        name: "1.9 republish: published→published, action=publish",
+        ok: republishRes.fromStatus === "published" &&
+            republishRes.toStatus === "published" &&
+            republishRes.action === "publish",
+      });
+
+      // Post-republish: public detail shows the EFFECTIVE title + projected tags.
+      const bondDetailAfter = await getPublishedHotEventDetail({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: bondCand.id,
+      });
+      assertions.push({
+        name: "1.9 republish: public detail projects EFFECTIVE title (revision overlay)",
+        ok: bondDetailAfter !== null &&
+            bondDetailAfter!.title === "债券收益率上行（运营修订）",
+        detail: bondDetailAfter === null ? "(null)" : `title=${bondDetailAfter!.title}`,
+      });
+      assertions.push({
+        name: "1.9 republish: public detail projects EFFECTIVE tags",
+        ok: bondDetailAfter !== null &&
+            bondDetailAfter!.tags.length === 2 &&
+            bondDetailAfter!.tags[0] === "利率" &&
+            bondDetailAfter!.tags[1] === "债市",
+        detail: bondDetailAfter === null ? "(null)" : `tags=${JSON.stringify(bondDetailAfter!.tags)}`,
+      });
+
+      // publishedAt stable across republish.
+      const bondRowAfter = await prisma.publishedHotEvent.findUniqueOrThrow({
+        where: { hotEventId: bondCand.id },
+        select: { publishedAt: true },
+      });
+      assertions.push({
+        name: "1.9 republish: publishedAt stable (first-publish time preserved)",
+        ok: bondRowAfter.publishedAt.getTime() === bondRowBefore.publishedAt.getTime(),
+        detail: `before=${bondRowBefore.publishedAt.toISOString()}, after=${bondRowAfter.publishedAt.toISOString()}`,
+      });
     }
 
     // --- Write isolation: only the 4 owned tables changed ---------------------
@@ -631,11 +721,14 @@ async function main(): Promise<void> {
 
 async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
   // Order matters for FK constraints. The published_* read models +
-  // explanation_versions + review/publication decisions reference hot_events;
-  // hot_event_evidence references both hot_events and evidence_records.
+  // explanation_versions + review/publication decisions + hot_event_revisions
+  // reference hot_events; hot_event_evidence references both hot_events and
+  // evidence_records. hot_event_revisions uses a Restrict FK (audit-preserve,
+  // same as review_decisions) so it must be deleted before hot_events.
   await prisma.publishedHotEventEvidence.deleteMany({});
   await prisma.publishedHotEventExplanation.deleteMany({});
   await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
   await prisma.explanationVersion.deleteMany({});
   await prisma.publicationDecision.deleteMany({});
   await prisma.reviewDecision.deleteMany({});

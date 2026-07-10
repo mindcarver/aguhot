@@ -95,6 +95,14 @@ export async function refreshPublishedReadModel(
   // rewrite the evidence timeline.
 
   // 1. Summary row (published_hot_events).
+  // Story 1.9: the title now comes from the EFFECTIVE source — the latest
+  // HotEventRevision.title (operator overlay) ?? the cluster-derived baseline
+  // HotEvent.title. We also project the effective tags (latest revision.tags ??
+  // []). Clustering does not derive tags, so the baseline tag set is []. This
+  // keeps the public read model in sync with operator revisions after a
+  // republish (refreshPublishedReadModel is called inside decideReview's
+  // transaction for both approve and republish). publishedAt stays stable on
+  // the update path (set on first insert only).
   const event = await prisma.hotEvent.findUniqueOrThrow({
     where: { id: hotEventId },
     select: {
@@ -106,8 +114,17 @@ export async function refreshPublishedReadModel(
           },
         },
       },
+      revisions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { title: true, tags: true },
+      },
     },
   });
+
+  const latestRevision = event.revisions[0] ?? null;
+  const effectiveTitle = latestRevision !== null ? latestRevision.title : event.title;
+  const effectiveTags = latestRevision !== null ? latestRevision.tags : [];
 
   const evidenceCount = event.evidence.length;
   // latestEvidenceAt: the max publishedAt across member records. Falls back to
@@ -129,14 +146,16 @@ export async function refreshPublishedReadModel(
     // "first became public" timestamp). updatedAt auto-updates via @updatedAt.
     create: {
       hotEventId,
-      title: event.title,
+      title: effectiveTitle,
+      tags: effectiveTags,
       evidenceCount,
       latestEvidenceAt,
       publishedAt: new Date(),
       traceId,
     },
     update: {
-      title: event.title,
+      title: effectiveTitle,
+      tags: effectiveTags,
       evidenceCount,
       latestEvidenceAt,
       traceId,
@@ -362,6 +381,7 @@ export async function getPublishedHotEventDetail(
     select: {
       hotEventId: true,
       title: true,
+      tags: true,
       evidenceCount: true,
       latestEvidenceAt: true,
       publishedAt: true,
@@ -414,6 +434,7 @@ export async function getPublishedHotEventDetail(
   return {
     hotEventId: summary.hotEventId,
     title: summary.title,
+    tags: summary.tags,
     evidenceCount: summary.evidenceCount,
     latestEvidenceAt: summary.latestEvidenceAt,
     publishedAt: summary.publishedAt,

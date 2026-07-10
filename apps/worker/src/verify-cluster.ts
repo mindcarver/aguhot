@@ -318,6 +318,9 @@ async function main(): Promise<void> {
 // --- seeding / cleanup helpers ----------------------------------------------
 
 async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  // hot_event_revisions (Story 1.9) has a Restrict FK on hot_events; clear it
+  // first so hotEvent.deleteMany does not violate the constraint.
+  await prisma.hotEventRevision.deleteMany({});
   await prisma.hotEventEvidence.deleteMany({});
   await prisma.hotEvent.deleteMany({});
   await prisma.evidenceRecord.deleteMany({});
@@ -354,6 +357,8 @@ async function seedRecord(
 }
 
 async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  // hot_event_revisions (Story 1.9) Restrict FK — clear before hot_events.
+  await prisma.hotEventRevision.deleteMany({});
   await prisma.hotEventEvidence.deleteMany({});
   await prisma.hotEvent.deleteMany({});
   await prisma.evidenceRecord.deleteMany({});

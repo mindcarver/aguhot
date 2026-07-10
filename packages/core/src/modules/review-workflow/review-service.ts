@@ -37,8 +37,10 @@ import type {
   DecideReviewOptions,
   DecideReviewResult,
   GetCandidateDetailOptions,
+  GetPublishedEventForRevisionOptions,
   ListPendingCandidatesOptions,
   PendingCandidateSummary,
+  PublishedEventRevisionView,
 } from "./types.js";
 import { CandidateNotFoundError } from "./types.js";
 
@@ -273,4 +275,156 @@ export async function getCandidateDetail(
     evidence,
     decisions,
   };
+}
+
+/**
+ * Get one published event with the operator "revision" view: the currently
+ * PUBLIC title/tags/explanation, the LATEST working (effective) title/tags/
+ * explanation, and the pending CONTENT DIFF between them. Powers the published
+ * branch of /console/[eventId] (Story 1.9): show what is live, what a republish
+ * would change, and the revision form.
+ *
+ * This is an OPERATOR-side cross-aggregate read (same shape as getCandidateDetail
+ * reading hot_events + evidence_records + decisions). It reads hot_events +
+ * hot_event_revisions + explanation_versions + the published_* read models to
+ * compute the diff. AD-3 still holds: the PUBLIC detail page only reads
+ * published_* via getPublishedHotEventDetail (this function is never on the
+ * public path). Throws CandidateNotFoundError if the event is missing.
+ *
+ *   - effective title  = latest revision.title ?? hotEvent.title (cluster baseline)
+ *   - effective tags   = latest revision.tags   ?? [] (clustering derives no tags)
+ *   - effective explanation = latest ExplanationVersion ?? null
+ *   - published = the published_* read-model rows (null if not currently published)
+ *   - pending = CONTENT diff (title string / tags array / explanation partitions),
+ *     NOT a timestamp diff (content diff is robust; timestamps are fragile).
+ */
+export async function getPublishedEventForRevision(
+  options: GetPublishedEventForRevisionOptions,
+): Promise<PublishedEventRevisionView> {
+  const { prisma, hotEventId } = options;
+
+  // Single findUnique with reverse-navigation includes — one round-trip. Reads
+  // the HotEvent (baseline title + status) + its published read models (the
+  // current public surface) + the latest revision + the latest explanation
+  // version (the effective working copy). All are read-only navigation metadata
+  // (same pattern as getCandidateDetail reading evidence + decisions).
+  const event = await prisma.hotEvent.findUnique({
+    where: { id: hotEventId },
+    select: {
+      id: true,
+      title: true,
+      publicationStatus: true,
+      publishedReadModel: {
+        select: {
+          title: true,
+          tags: true,
+          publishedAt: true,
+        },
+      },
+      publishedExplanation: {
+        select: {
+          summary: true,
+          whyItMatters: true,
+          uncertainties: true,
+        },
+      },
+      revisions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { title: true, tags: true },
+      },
+      explanationVersions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { summary: true, whyItMatters: true, uncertainties: true },
+      },
+    },
+  });
+
+  if (event === null) {
+    throw new CandidateNotFoundError(hotEventId);
+  }
+
+  // effective = latest revision ?? baseline.
+  const latestRevision = event.revisions[0] ?? null;
+  const effectiveTitle = latestRevision !== null ? latestRevision.title : event.title;
+  const effectiveTags = latestRevision !== null ? latestRevision.tags : [];
+  const latestExplanation = event.explanationVersions[0] ?? null;
+  const effectiveExplanation =
+    latestExplanation === null
+      ? null
+      : {
+          summary: latestExplanation.summary,
+          whyItMatters: latestExplanation.whyItMatters,
+          uncertainties: latestExplanation.uncertainties,
+        };
+
+  // published = the read-model rows. Null when not currently published (taken_down,
+  // or never published). For a published event the published row always exists.
+  const publishedRow = event.publishedReadModel;
+  const publishedExplanation = event.publishedExplanation;
+  const published =
+    publishedRow === null
+      ? null
+      : {
+          title: publishedRow.title,
+          tags: publishedRow.tags,
+          explanation:
+            publishedExplanation === null
+              ? null
+              : {
+                  summary: publishedExplanation.summary,
+                  whyItMatters: publishedExplanation.whyItMatters,
+                  uncertainties: publishedExplanation.uncertainties,
+                },
+          publishedAt: publishedRow.publishedAt,
+        };
+
+  // pending = CONTENT diff (effective vs published). When published is null
+  // (not currently published), every non-empty effective field is "pending" in
+  // the sense that a republish would publish it — but republish is illegal on
+  // non-published statuses, so the operator UI hides the republish button and
+  // these booleans are informational only in that case.
+  const pendingTitle =
+    published === null ? effectiveTitle !== event.title : effectiveTitle !== published.title;
+  const pendingTags =
+    published === null ? effectiveTags.length > 0 : !tagsEqual(effectiveTags, published.tags);
+  const pendingExplanation =
+    published === null
+      ? effectiveExplanation !== null
+      : (effectiveExplanation === null) !== (published.explanation === null) ||
+        (effectiveExplanation !== null &&
+          published.explanation !== null &&
+          (effectiveExplanation.summary !== published.explanation.summary ||
+            effectiveExplanation.whyItMatters !== published.explanation.whyItMatters ||
+            effectiveExplanation.uncertainties !== published.explanation.uncertainties));
+
+  return {
+    hotEventId: event.id,
+    publicationStatus: event.publicationStatus,
+    published,
+    effective: {
+      title: effectiveTitle,
+      tags: effectiveTags,
+      explanation: effectiveExplanation,
+    },
+    pending: {
+      title: pendingTitle,
+      tags: pendingTags,
+      explanation: pendingExplanation,
+    },
+  };
+}
+
+/**
+ * Order-sensitive tag-array equality (same rule as reviseHotEvent's normalize:
+ * preserve-order dedupe, so a reordering is a real change). Shared local helper
+ * — not exported; the operator view only compares two already-normalized arrays.
+ */
+function tagsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }

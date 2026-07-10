@@ -34,6 +34,8 @@ import type {
   GetLatestExplanationOptions,
   ExplanationPartitions,
   ExplanationVersionRecord,
+  SaveExplanationOptions,
+  SaveExplanationResult,
 } from "./types.js";
 
 /**
@@ -102,17 +104,15 @@ export async function generateExplanation(
 
   const partitions = derivePartitions(event.title, records);
 
-  // APPEND a new version row. Never update or delete prior rows (AD-5).
-  const created = await prisma.explanationVersion.create({
-    data: {
-      id: newTraceId(),
-      hotEventId,
-      summary: partitions.summary,
-      whyItMatters: partitions.whyItMatters,
-      uncertainties: partitions.uncertainties,
-      source: ExplanationSource.Template,
-      traceId,
-    },
+  // APPEND a new version row (source="template"). Never update or delete prior
+  // rows (AD-5). Shared append helper so generateExplanation and saveExplanation
+  // use the identical row shape + id assignment.
+  const created = await appendExplanationVersion({
+    prisma,
+    traceId,
+    hotEventId,
+    partitions,
+    source: ExplanationSource.Template,
   });
 
   return {
@@ -121,9 +121,123 @@ export async function generateExplanation(
     summary: created.summary,
     whyItMatters: created.whyItMatters,
     uncertainties: created.uncertainties,
-    source: created.source as ExplanationSource,
+    source: created.source,
     createdAt: created.createdAt,
     traceId,
+  };
+}
+
+/**
+ * Save an operator-authored explanation revision (Story 1.9). Appends one
+ * ExplanationVersion row (source passed by caller — V1 callers pass "human")
+ * ONLY when the three partitions differ from the latest version. No change →
+ * no-op (no dirty version, no spurious source flip).
+ *
+ * This is the explanation write-point for operator revisions (1.8 deferred the
+ * "human" write path to 1.9; the ExplanationSource union reserved "human"). It
+ * only writes explanation_versions; it never writes hot_events, published_*,
+ * or hot_event_revisions. publish-orchestrator projects the latest version on
+ * republish; review-workflow computes the pending diff for the operator.
+ *
+ * Returns { appended: false, notFound: true } when the event does not exist,
+ * { appended: false } on no-change, { appended: true, explanationVersionId } on
+ * append.
+ */
+export async function saveExplanation(
+  options: SaveExplanationOptions,
+): Promise<SaveExplanationResult> {
+  const { prisma, traceId, hotEventId, summary, whyItMatters, uncertainties, source } = options;
+
+  // Read the event (must exist) + the latest version for change detection.
+  const event = await prisma.hotEvent.findUnique({
+    where: { id: hotEventId },
+    select: {
+      id: true,
+      explanationVersions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { summary: true, whyItMatters: true, uncertainties: true },
+      },
+    },
+  });
+
+  if (event === null) {
+    return { appended: false, notFound: true };
+  }
+
+  // Change detection: append ONLY when any partition differs from the latest
+  // version. Pairwise string comparison (trim-then-compare so a trailing-space-
+  // only edit is a no-op, matching how reviseHotEvent trims its inputs). When
+  // there is no prior version, any non-empty input is a change.
+  const latest = event.explanationVersions[0] ?? null;
+  const summaryChanged = latest === null || summary.trim() !== latest.summary.trim();
+  const whyChanged = latest === null || whyItMatters.trim() !== latest.whyItMatters.trim();
+  const uncChanged = latest === null || uncertainties.trim() !== latest.uncertainties.trim();
+  if (!summaryChanged && !whyChanged && !uncChanged) {
+    return { appended: false };
+  }
+
+  const created = await appendExplanationVersion({
+    prisma,
+    traceId,
+    hotEventId,
+    partitions: {
+      summary: summary.trim(),
+      whyItMatters: whyItMatters.trim(),
+      uncertainties: uncertainties.trim(),
+    },
+    source,
+  });
+
+  return { appended: true, explanationVersionId: created.id };
+}
+
+/**
+ * Private append helper — inserts one ExplanationVersion row and returns it.
+ * Shared by generateExplanation (source="template") and saveExplanation (source
+ * passed by caller, V1 "human"). Never updates or deletes prior rows (AD-5).
+ */
+async function appendExplanationVersion(args: {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  partitions: ExplanationPartitions;
+  source: ExplanationSource;
+}): Promise<{
+  id: string;
+  summary: string;
+  whyItMatters: string;
+  uncertainties: string;
+  source: ExplanationSource;
+  createdAt: Date;
+}> {
+  const { prisma, traceId, hotEventId, partitions, source } = args;
+  const created = await prisma.explanationVersion.create({
+    data: {
+      id: newTraceId(),
+      hotEventId,
+      summary: partitions.summary,
+      whyItMatters: partitions.whyItMatters,
+      uncertainties: partitions.uncertainties,
+      source,
+      traceId,
+    },
+    select: {
+      id: true,
+      summary: true,
+      whyItMatters: true,
+      uncertainties: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+  return {
+    id: created.id,
+    summary: created.summary,
+    whyItMatters: created.whyItMatters,
+    uncertainties: created.uncertainties,
+    source: created.source as ExplanationSource,
+    createdAt: created.createdAt,
   };
 }
 

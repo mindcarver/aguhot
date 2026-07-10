@@ -52,3 +52,41 @@ export interface ClusterInput {
   publishedAt: Date | null;
   ingestedAt: Date;
 }
+
+// --- Story 1.9: operator-authored title/tags revision ------------------------
+
+/**
+ * Options for reviseHotEvent. `{ prisma, traceId, hotEventId, title, tags,
+ * reviewer, note? }` mirrors the established command pattern (decideReview).
+ *
+ * `title` is the new effective title (operator overlay on the cluster-derived
+ * baseline). `tags` is the raw operator tag input — it may be a single string
+ * (paste, e.g. "A股,政策\n新闻") or a pre-split array; reviseHotEvent normalizes
+ * it (split on separators / trim / dedupe preserve-order). `reviewer` is the
+ * operator identity placeholder (V1 no real auth). `note` is an optional
+ * revision note (audit).
+ */
+export interface ReviseHotEventOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  title: string;
+  tags: string | string[];
+  reviewer: string;
+  note?: string;
+}
+
+/**
+ * Result of reviseHotEvent. `appended: true` + `revisionId` when a new
+ * HotEventRevision row was appended (the title or normalized tags changed).
+ * `appended: false` on no-op (no change vs effective — no dirty version, no
+ * pending diff). `notFound: true` when the event does not exist.
+ * `invalidTitle: true` when the trimmed title is empty (an event must keep a
+ * non-empty title).
+ */
+export interface ReviseHotEventResult {
+  appended: boolean;
+  revisionId?: string;
+  notFound?: boolean;
+  invalidTitle?: boolean;
+}

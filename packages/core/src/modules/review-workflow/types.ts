@@ -11,18 +11,24 @@
  */
 
 import type { PublicationStatus } from "../../shared/publication-status.js";
+import type { ExplanationPartitions } from "../explanation/types.js";
 
 /**
  * The outcome an operator chooses for a candidate. Stored as a String column
  * (no TS enum, per erasableSyntaxOnly). The legal transitions are:
- *   - Approve:  candidate → published
- *   - Reject:   candidate → rejected
- *   - Takedown: published → taken_down
+ *   - Approve:   candidate → published
+ *   - Reject:    candidate → rejected
+ *   - Takedown:  published → taken_down
+ *   - Republish: published → published (Story 1.9 — re-publish after an
+ *     operator title/tags/explanation revision; refreshPublishedReadModel
+ *     re-projects the effective title/tags + latest explanation into the public
+ *     read models). Re-publish of taken_down/rejected is 1.10, deferred.
  */
 export const ReviewOutcome = {
   Approve: "approve",
   Reject: "reject",
   Takedown: "takedown",
+  Republish: "republish",
 } as const;
 
 export type ReviewOutcome = (typeof ReviewOutcome)[keyof typeof ReviewOutcome];
@@ -168,4 +174,62 @@ export class CandidateNotFoundError extends Error {
     this.name = "CandidateNotFoundError";
     this.hotEventId = hotEventId;
   }
+}
+
+// --- Story 1.9: published-event revision view (operator side) ----------------
+
+/**
+ * Options for getPublishedEventForRevision — the operator-side read that powers
+ * the "published event revision" branch of /console/[eventId]. Reads the
+ * HotEvent with its published read models + the latest revision + the latest
+ * explanation version, then assembles published-vs-effective-vs-pending for the
+ * operator diff. Mirrors the established `{ prisma, traceId, hotEventId }`
+ * query pattern (same shape as getCandidateDetail). Throws CandidateNotFoundError
+ * if the event is missing.
+ */
+export interface GetPublishedEventForRevisionOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  hotEventId: string;
+}
+
+/**
+ * The assembled published-event revision view. This is the OPERATOR-side read
+ * (NOT a public read — it reads hot_events + hot_event_revisions +
+ * explanation_versions + the published_* read models to compute the pending
+ * diff). It is the same kind of cross-aggregate operator read as getCandidateDetail
+ * (which reads hot_events + evidence_records + decisions). AD-3 still holds:
+ * the PUBLIC detail page only reads published_* via getPublishedHotEventDetail.
+ *
+ *   - published: the CURRENTLY PUBLIC title/tags/explanation (from the
+ *     published_* read models) + publishedAt, or null if the event is not
+ *     currently published (e.g. taken_down — the operator can still revise
+ *     the working copy, but there is no public version to diff against).
+ *   - effective: the LATEST working title/tags/explanation (latest revision ??
+ *     baseline title + [] tags; latest ExplanationVersion ?? null). This is
+ *     what a republish would project onto the public surface.
+ *   - pending: the CONTENT DIFF between effective and published — three booleans
+ *     (title/tags/explanation). When all three are false, there is nothing to
+ *     republish. The diff is a content comparison (string / array / partition),
+ *     NOT a timestamp comparison (timestamps are fragile; content diff is robust).
+ */
+export interface PublishedEventRevisionView {
+  hotEventId: string;
+  publicationStatus: string;
+  published: {
+    title: string;
+    tags: string[];
+    explanation: ExplanationPartitions | null;
+    publishedAt: Date;
+  } | null;
+  effective: {
+    title: string;
+    tags: string[];
+    explanation: ExplanationPartitions | null;
+  };
+  pending: {
+    title: boolean;
+    tags: boolean;
+    explanation: boolean;
+  };
 }

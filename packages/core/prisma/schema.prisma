@@ -129,6 +129,14 @@ model HotEvent {
   // publish-orchestrator owns both; these are navigation metadata only.
   publishedExplanation PublishedHotEventExplanation?
   publishedEvidence    PublishedHotEventEvidence[]
+  // Read-only reverse relation to operator-authored title/tag revisions (Story
+  // 1.9). The event-assembly module owns hot_event_revisions (it owns
+  // HotEvent clustering + this is the revision write-point per AD-2/AD-5); this
+  // navigation metadata lets review-workflow read the latest revision for the
+  // operator "pending vs published" diff and lets publish-orchestrator read the
+  // effective title/tags at projection time. It does NOT change event-assembly's
+  // write-ownership of hot_event_revisions.
+  revisions            HotEventRevision[]
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -220,6 +228,14 @@ model PublicationDecision {
 model PublishedHotEvent {
   hotEventId       String   @id @map("hot_event_id")
   title            String
+  // Operator-authored free-text tags (Story 1.9), projected from the effective
+  // HotEventRevision.tags at publish/republish time. Default [] is safe for
+  // rows created by pre-1.9 approves (no revision existed → empty tag set).
+  // V1 tags are a display attribute on the detail page only — NOT a feed filter
+  // dimension (that belongs to Epic 2.2 taxonomy). listPublishedHotEvents /
+  // PublishedHotEventSummary intentionally do NOT surface tags (1.7 feed
+  // contract unchanged); only getPublishedHotEventDetail returns them.
+  tags             String[] @default([])
   evidenceCount    Int      @map("evidence_count")
   latestEvidenceAt DateTime @map("latest_evidence_at")
   publishedAt      DateTime @default(now()) @map("published_at")
@@ -319,4 +335,39 @@ model PublishedHotEventEvidence {
 
   @@index([hotEventId])
   @@map("published_hot_event_evidence")
+}
+
+// An append-only operator-authored title/tags revision for a HotEvent (AD-5,
+// Story 1.9). The event-assembly module is the sole writer of this table (via
+// reviseHotEvent). Each row is the COMPLETE effective snapshot of (title, tags)
+// at one operator revision — NOT a delta. Rows are NEVER updated or deleted;
+// effective title/tags = latest row (createdAt desc, id desc) ?? the baseline
+// (HotEvent.title for the title, [] for tags — clustering does not derive tags).
+//
+// `title` is the operator's revised title (an overlay on the cluster-derived
+// baseline HotEvent.title; the baseline is never overwritten — see AD-5 and
+// the field-level write-ownership note in the HotEvent comment). `tags` is a
+// free-text operator tag array (PostgreSQL text[]); V1 has NO taxonomy, NO
+// tag-level metadata, and NO feed filtering by tag (those belong to Epic 2.2).
+// Normalization (trim / split on separators / dedupe preserve-order) happens in
+// the application layer before append.
+//
+// FK onDelete matches ReviewDecision's audit-preserve semantics (Restrict) so
+// deleting a HotEvent can never silently erase revision history. `reviewer` is
+// the operator identity placeholder (V1 no real auth, same as ReviewDecision).
+model HotEventRevision {
+  id         String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId String   @map("hot_event_id")
+  title      String
+  tags       String[] @default([])
+  reviewer   String
+  note       String?
+  traceId    String?  @map("trace_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id])
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("hot_event_revisions")
 }

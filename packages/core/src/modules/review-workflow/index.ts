@@ -14,7 +14,7 @@
  * evidence_records / evidence_sources.
  */
 
-export { decideReview, listPendingCandidates, getCandidateDetail } from "./review-service.js";
+export { decideReview, listPendingCandidates, getCandidateDetail, getPublishedEventForRevision } from "./review-service.js";
 export type {
   DecideReviewOptions,
   DecideReviewResult,
@@ -24,6 +24,8 @@ export type {
   CandidateDetail,
   CandidateEvidenceItem,
   CandidateDecisionEntry,
+  GetPublishedEventForRevisionOptions,
+  PublishedEventRevisionView,
 } from "./types.js";
 export { resolveTransition, LEGAL_TRANSITIONS } from "./transitions.js";
 export {

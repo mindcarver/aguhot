@@ -118,6 +118,15 @@ export interface GetPublishedHotEventDetailOptions {
 export interface PublishedHotEventDetail {
   hotEventId: string;
   title: string;
+  /**
+   * Operator-authored free-text tags (Story 1.9), projected from the effective
+   * HotEventRevision.tags at publish/republish time. Empty array when no
+   * revision exists or the revision's tag set is empty. Detail-page display
+   * only — NOT surfaced on the feed (listPublishedHotEvents /
+   * PublishedHotEventSummary intentionally do NOT carry tags; 1.7 feed contract
+   * unchanged). Feed filtering by tag is Epic 2.2 taxonomy.
+   */
+  tags: string[];
   evidenceCount: number;
   latestEvidenceAt: Date;
   publishedAt: Date;

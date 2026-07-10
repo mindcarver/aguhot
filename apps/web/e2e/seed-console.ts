@@ -26,8 +26,12 @@ export async function seedConsoleCandidates(): Promise<{ candidateTitles: string
 
   const prisma = getPrisma();
 
-  // Clean any prior seed state so re-runs are deterministic.
+  // Clean any prior seed state so re-runs are deterministic. hot_event_revisions
+  // (Story 1.9) has a Restrict FK on hot_events, so it must be cleared before
+  // hot_events (this seed does not create revisions, but prior runs of other
+  // seeds may have).
   await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
   await prisma.publicationDecision.deleteMany({});
   await prisma.reviewDecision.deleteMany({});
   await prisma.hotEventEvidence.deleteMany({});

@@ -345,9 +345,12 @@ function sleep(ms: number): Promise<void> {
 async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
   // Order matters for FK constraints. explanation_versions + published_* new
   // tables reference hot_events; hot_event_evidence references both.
+  // hot_event_revisions (Story 1.9) has a Restrict FK on hot_events, so it must
+  // be cleared before hot_events.
   await prisma.publishedHotEventEvidence.deleteMany({});
   await prisma.publishedHotEventExplanation.deleteMany({});
   await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
   await prisma.explanationVersion.deleteMany({});
   await prisma.publicationDecision.deleteMany({});
   await prisma.reviewDecision.deleteMany({});

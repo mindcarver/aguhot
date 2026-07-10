@@ -51,10 +51,13 @@ export async function seedDetailEvents(): Promise<{
   const prisma = getPrisma();
 
   // Clean the full table set (same superset as verify-* scripts, order respects
-  // FK constraints). Deterministic re-runs; does NOT touch seed-console/feed.
+  // FK constraints). hot_event_revisions (Story 1.9) has a Restrict FK on
+  // hot_events, so it must be cleared before hot_events. Deterministic re-runs;
+  // does NOT touch seed-console/feed.
   await prisma.publishedHotEventEvidence.deleteMany({});
   await prisma.publishedHotEventExplanation.deleteMany({});
   await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
   await prisma.explanationVersion.deleteMany({});
   await prisma.publicationDecision.deleteMany({});
   await prisma.reviewDecision.deleteMany({});

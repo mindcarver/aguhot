@@ -1,37 +1,34 @@
 import Link from "next/link";
 
-import { listPendingCandidates, getPrisma, newTraceId } from "@aguhot/core";
+import { listPendingCandidates, listPublishedHotEvents, getPrisma, newTraceId } from "@aguhot/core";
 
 /**
- * Operator review console — candidate queue. Story 1.6.
+ * Operator review console — candidate queue + published events. Story 1.6 +
+ * Story 1.9 (published-events entry).
  *
- * Server component reading pending candidates via @aguhot/core's
- * listPendingCandidates. This is the first web route to consume @aguhot/core:
+ * Server component reading pending candidates + published events via
+ * @aguhot/core. force-dynamic so the route is request-time evaluated (getPrisma
+ * reads DATABASE_URL at runtime), keeping the public web build DATABASE_URL-free.
  *
- *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
- *     evaluates it at request time (getPrisma reads DATABASE_URL at runtime),
- *     not at build time. This keeps the public web build DATABASE_URL-free:
- *     public routes are static and never import core; operator routes are
- *     dynamic and do.
- *   - The route is under `(operator)` whose layout sets `robots noindex`
- *     (operator pages are never indexed).
+ *   - Candidate queue (AC1, Story 1.6): pending candidates with a link into the
+ *     review page.
+ *   - Published events (Story 1.9): a section listing currently-published events
+ *     so the operator can enter the revision branch of /console/[eventId]
+ *     (revise title/tags/explanation + republish). Reuses the public read query
+ *     (listPublishedHotEvents) — operator-side read of the published read model
+ *     is legitimate (same data the public feed sees).
  *
- * Renders the candidate queue (AC1): title, evidence count, latest evidence
- * time, status (always "candidate" for this query), with a link into each
- * candidate's detail/review page. Empty state renders a clear message, no fake
- * data (NFR: empty states never render placeholder data).
- *
- * V1 has no auth (deferred to user-profile module); the layout is the drop-in
- * point for future auth.
+ * NFR: empty states render a clear message, no fake data. V1 has no auth
+ * (deferred to user-profile); the layout is the drop-in point.
  */
 export const dynamic = "force-dynamic";
 
 export default async function ConsolePage() {
   const prisma = getPrisma();
-  const candidates = await listPendingCandidates({
-    prisma,
-    traceId: newTraceId(),
-  });
+  const [candidates, published] = await Promise.all([
+    listPendingCandidates({ prisma, traceId: newTraceId() }),
+    listPublishedHotEvents({ prisma, traceId: newTraceId() }),
+  ]);
 
   return (
     <main className="min-h-screen">
@@ -51,7 +48,7 @@ export default async function ConsolePage() {
               <li key={c.id}>
                 <Link
                   href={`/console/${c.id}`}
-                  className="block rounded-lg border border-line-subtle bg-surface px-5 py-4 transition hover:border-ink-secondary"
+                  className="block rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition hover:border-ink-secondary"
                 >
                   <div className="flex items-baseline justify-between gap-4">
                     <h2 className="text-lg font-semibold">{c.title}</h2>
@@ -74,6 +71,47 @@ export default async function ConsolePage() {
             ))}
           </ul>
         )}
+
+        {/* Published events — Story 1.9. Entry into the revision UI. Each links
+            to /console/{id} where the published branch renders the revision
+            form + republish + pending diff. */}
+        <section className="mt-16 space-y-2">
+          <h2 className="text-xl font-bold">已发布热点</h2>
+          <p className="text-ink-secondary">
+            已发布热点 · {published.length} 条 · 可修正标题/标签/解释后重新发布
+          </p>
+          {published.length === 0 ? (
+            <p className="mt-6 text-ink-secondary">暂无已发布热点。</p>
+          ) : (
+            <ul className="mt-6 space-y-3" role="list">
+              {published.map((e) => (
+                <li key={e.hotEventId}>
+                  <Link
+                    href={`/console/${e.hotEventId}`}
+                    className="block rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition hover:border-ink-secondary"
+                  >
+                    <div className="flex items-baseline justify-between gap-4">
+                      <h3 className="text-base font-semibold">{e.title}</h3>
+                      <span className="shrink-0 font-mono text-sm text-ink-secondary">
+                        {e.evidenceCount} 来源
+                      </span>
+                    </div>
+                    <dl className="mt-2 flex gap-6 font-mono text-xs text-ink-tertiary">
+                      <div>
+                        <dt className="inline">最近证据 </dt>
+                        <dd className="inline">{formatDate(e.latestEvidenceAt)}</dd>
+                      </div>
+                      <div>
+                        <dt className="inline">状态 </dt>
+                        <dd className="inline">published</dd>
+                      </div>
+                    </dl>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
     </main>
   );

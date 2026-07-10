@@ -105,3 +105,36 @@ export interface ExplanationVersionRecord extends ExplanationPartitions {
   source: ExplanationSource;
   createdAt: Date;
 }
+
+// --- Story 1.9: operator-authored explanation revision -----------------------
+
+/**
+ * Options for saveExplanation — the operator-authored explanation write-point.
+ * The caller passes the three partitions verbatim (operator hand-typed text;
+ * NOT LLM-generated — real LLM is deferred, see generateExplanation). `source`
+ * is required: V1 callers pass `ExplanationSource.Human` so the provenance is
+ * recorded (the public read model then DROPS the uniform <AiLabel> for human-
+ * sourced partitions — AC3 + 1.8 defer, gated by `source !== "human"`).
+ *
+ * saveExplanation appends one ExplanationVersion row ONLY when the three
+ * partitions differ from the latest version (change detection: no dirty
+ * version, no spurious source flip). A no-op submit (same text) writes nothing.
+ */
+export interface SaveExplanationOptions extends ExplanationPartitions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  source: ExplanationSource;
+}
+
+/**
+ * Result of saveExplanation. `appended: true` + `explanationVersionId` when a
+ * new ExplanationVersion row was appended (the three partitions changed vs the
+ * latest version). `appended: false` on no-op (no change — no dirty version, no
+ * spurious source flip). `notFound: true` when the event does not exist.
+ */
+export interface SaveExplanationResult {
+  appended: boolean;
+  explanationVersionId?: string;
+  notFound?: boolean;
+}

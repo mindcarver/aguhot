@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { AiLabel } from "@/components/chips";
+import { AiLabel, TagChip } from "@/components/chips";
 import { getPrisma, getPublishedHotEventDetail, newTraceId } from "@aguhot/core";
 
 export const metadata: Metadata = {
@@ -76,6 +76,14 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
   }
 
   const hasExplanation = detail.explanation !== null;
+  // AC3 + 1.8 defer: the uniform <AiLabel> marks SYSTEM-derived content only.
+  // An operator-authored (source="human") explanation is NOT system-derived, so
+  // it must NOT carry the AI label (gating: source !== "human"). template/ai
+  // sources carry the label (uniform, identical on public and operator). When
+  // there is no explanation (degraded state), no label is shown.
+  const isAiSourced =
+    detail.explanation !== null && detail.explanation.source !== "human";
+  const hasTags = detail.tags.length > 0;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -91,6 +99,17 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
       <h1 className="mt-4 font-display text-3xl font-bold leading-tight text-ink-primary">
         {detail.title}
       </h1>
+
+      {/* Operator-authored tags (Story 1.9). Display-only chips under the title.
+          Rendered ONLY when the projected tag set is non-empty (NFR: empty state
+          never renders placeholder chips). Not a feed filter (Epic 2.2). */}
+      {hasTags ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {detail.tags.map((tag) => (
+            <TagChip key={tag}>{tag}</TagChip>
+          ))}
+        </div>
+      ) : null}
 
       {/* 发生了什么 — facts partition. Source count + times, always rendered. */}
       <section className="mt-8 space-y-3 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
@@ -119,7 +138,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
             为什么重要
           </h2>
-          {hasExplanation ? <AiLabel /> : null}
+          {isAiSourced ? <AiLabel /> : null}
         </div>
         {hasExplanation ? (
           <p className="text-base leading-relaxed text-ink-primary">
@@ -136,7 +155,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
             当前仍不确定什么
           </h2>
-          {hasExplanation ? <AiLabel /> : null}
+          {isAiSourced ? <AiLabel /> : null}
         </div>
         {hasExplanation ? (
           <p className="text-base leading-relaxed text-ink-primary">
