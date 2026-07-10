@@ -4,9 +4,8 @@
  * Run with: pnpm --filter core verify:review-logic
  *           (tsx src/modules/review-workflow/transitions.selfcheck.ts)
  *
- * Asserts the three legal transitions resolve to the correct target status +
- * read-model action, and that four illegal transitions (reject published /
- * approve taken_down / takedown candidate / approve rejected) throw
+ * Asserts the six legal transitions resolve to the correct target status +
+ * read-model action, and that the illegal transitions throw
  * IllegalTransitionError. This is the safety-critical transition logic — the
  * kind that silently regresses without a check — and this self-check needs no
  * PG/Redis so it can run in any gate.
@@ -41,6 +40,10 @@ function main(): void {
     // action (re-project effective title/tags + latest explanation). It reuses
     // the publish gate (decideReview) — the same refresh runs.
     { from: "published", outcome: "republish", expectTo: "published", expectAction: "publish" },
+    // Story 1.10: re-publish of a taken_down / rejected event lands on published
+    // with a publish action (refresh upsert create branch → publishedAt = now()).
+    { from: "taken_down", outcome: "republish", expectTo: "published", expectAction: "publish" },
+    { from: "rejected", outcome: "republish", expectTo: "published", expectAction: "publish" },
   ];
 
   for (const c of legalCases) {
@@ -55,8 +58,8 @@ function main(): void {
   // LEGAL_TRANSITIONS table matches the cases exactly (guard against the table
   // drifting from resolveTransition).
   assertions.push({
-    name: "LEGAL_TRANSITIONS table has exactly the 4 legal paths",
-    ok: LEGAL_TRANSITIONS.length === 4 &&
+    name: "LEGAL_TRANSITIONS table has exactly the 6 legal paths",
+    ok: LEGAL_TRANSITIONS.length === 6 &&
       LEGAL_TRANSITIONS.every(
         (lt) => resolveTransition(lt.from, lt.outcome).to === lt.to &&
           resolveTransition(lt.from, lt.outcome).action === lt.action,
@@ -71,12 +74,22 @@ function main(): void {
     { from: "taken_down", outcome: "approve", label: "approve taken-down" },
     { from: "candidate", outcome: "takedown", label: "takedown never-published candidate" },
     { from: "rejected", outcome: "approve", label: "approve already-rejected" },
-    // Story 1.9: republish is ONLY legal on a published event. Re-publish of
-    // taken_down / rejected is 1.10 (deferred); republish on a candidate makes
-    // no sense (nothing has been published to refresh).
+    // Story 1.9: republish is illegal on a candidate (nothing has been published
+    // to refresh). Story 1.10: republish is now legal on taken_down + rejected
+    // (re-publish / correct-erroneous-reject), so those two moved OUT of the
+    // illegal list. The remaining illegal republish case is the candidate.
     { from: "candidate", outcome: "republish", label: "republish never-published candidate" },
-    { from: "taken_down", outcome: "republish", label: "republish taken-down (1.10)" },
-    { from: "rejected", outcome: "republish", label: "republish rejected (1.10)" },
+    // Story 1.10: lock the terminal boundary. taken_down is re-published via
+    // republish ONLY — approve/reject/takedown on a taken_down event are illegal
+    // (taken_down is terminal except for the republish path; approve would skip
+    // the review gate; reject is meaningless on something already off-public;
+    // takedown on an already-taken-down event is a no-op that dirties the chain).
+    { from: "taken_down", outcome: "reject", label: "reject taken-down" },
+    { from: "taken_down", outcome: "takedown", label: "takedown taken-down (no-op)" },
+    // rejected is re-published via republish ONLY — approve/takedown on a
+    // rejected event are illegal (approve would be a second chance via the wrong
+    // path; takedown on something never public is meaningless).
+    { from: "rejected", outcome: "takedown", label: "takedown rejected (never public)" },
   ];
 
   for (const c of illegalCases) {

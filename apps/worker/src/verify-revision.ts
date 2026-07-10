@@ -419,49 +419,50 @@ async function main(): Promise<void> {
       detail: `${explanationVersionCount} rows`,
     });
 
-    // --- 8. Illegal republish on non-published event throws -----------------
-    // Take down the event, then attempt republish on taken_down → must throw.
+    // --- 8. taken_down+republish is LEGAL as of Story 1.10 (re-publish path) --
+    // Story 1.9 deferred taken_down+republish to 1.10; Story 1.10 makes it a
+    // legal transition (taken_down → published, action=publish). So this section
+    // now asserts the LEGAL path: after takedown, a republish succeeds and
+    // re-creates the published_* row. The candidate+republish illegal case is
+    // covered in 8b below (candidate was never published, republish makes no
+    // sense and stays illegal).
     await decideReview({
       prisma,
       traceId: newTraceId(),
       hotEventId: candidate.id,
       outcome: "takedown",
       reviewer: "verify-revision",
-      note: "takedown to test illegal republish",
+      note: "takedown before 1.10 taken_down republish",
     });
-    // capture counts before the illegal attempt.
+    // capture counts before the republish (now legal, should write one of each).
     const reviewBefore = await prisma.reviewDecision.count();
     const pubDecBefore = await prisma.publicationDecision.count();
 
-    let illegalThrew = false;
-    let illegalThrewRight = false;
-    try {
-      await decideReview({
-        prisma,
-        traceId: newTraceId(),
-        hotEventId: candidate.id,
-        outcome: "republish",
-        reviewer: "verify-revision",
-      });
-    } catch (error) {
-      illegalThrew = true;
-      illegalThrewRight = error instanceof IllegalTransitionError;
-    }
+    const takenDownRepublish = await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "republish",
+      reviewer: "verify-revision",
+      note: "1.10 taken_down republish",
+    });
     assertions.push({
-      name: "8. illegal: republish on taken_down throws IllegalTransitionError",
-      ok: illegalThrew && illegalThrewRight,
-      detail: illegalThrew ? (illegalThrewRight ? "(IllegalTransitionError)" : "(wrong error)") : "(did not throw)",
+      name: "8. taken_down+republish: from=taken_down, to=published, action=publish (1.10 legal)",
+      ok: takenDownRepublish.fromStatus === "taken_down" &&
+          takenDownRepublish.toStatus === "published" &&
+          takenDownRepublish.action === "publish",
+      detail: `${takenDownRepublish.fromStatus}→${takenDownRepublish.toStatus} (${takenDownRepublish.action})`,
     });
     const reviewAfter = await prisma.reviewDecision.count();
     const pubDecAfter = await prisma.publicationDecision.count();
     assertions.push({
-      name: "8. illegal republish wrote no ReviewDecision rows",
-      ok: reviewAfter === reviewBefore,
+      name: "8. taken_down republish appended exactly one ReviewDecision row",
+      ok: reviewAfter === reviewBefore + 1,
       detail: `before=${reviewBefore}, after=${reviewAfter}`,
     });
     assertions.push({
-      name: "8. illegal republish wrote no PublicationDecision rows",
-      ok: pubDecAfter === pubDecBefore,
+      name: "8. taken_down republish appended exactly one PublicationDecision row",
+      ok: pubDecAfter === pubDecBefore + 1,
       detail: `before=${pubDecBefore}, after=${pubDecAfter}`,
     });
 

@@ -22,7 +22,9 @@ import type { ExplanationPartitions } from "../explanation/types.js";
  *   - Republish: published → published (Story 1.9 — re-publish after an
  *     operator title/tags/explanation revision; refreshPublishedReadModel
  *     re-projects the effective title/tags + latest explanation into the public
- *     read models). Re-publish of taken_down/rejected is 1.10, deferred.
+ *     read models). taken_down → published and rejected → published (Story 1.10
+ *     — re-publish an event taken down after it had been published, or correct
+ *     an erroneous reject; refresh goes through the upsert create branch).
  */
 export const ReviewOutcome = {
   Approve: "approve",

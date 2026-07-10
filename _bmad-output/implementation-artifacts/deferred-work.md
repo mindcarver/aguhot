@@ -186,3 +186,33 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 标题/标签修订与解释修订分两个 server action、各模块 append 各自原子、整体非跨模块事务
   evidence: Story 1.9 `submitRevision` 顺序调 `reviseHotEvent`（event-assembly 写 `hot_event_revisions`）+ `saveExplanation`（explanation 写 `explanation_versions`）——各模块写归属内、各自 append 原子，但两者非跨模块事务（web 层顺序调）。若标题 append 后解释 append 前崩溃，留部分修订——但追加式无损坏（运营重提交）。强制跨模块事务需重构模块函数接受 `tx` 或引入 core 编排器，超 V1 最小。
   resolution: 已于 Story 1.9 登记为非原子 defer——待真实跨模块一致性需求出现时，引入 core 层编排器（接受 `PrismaTransaction` 的 revise+save 复合命令）或 saga 补偿。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-10-published-event-merge-split-and-unpublish.md`
+  summary: 拆分出的新事件落地为 candidate，不自动发布——auto-publish 为架构 spine 未决 defer
+  evidence: Story 1.10 `splitHotEvent` 新建 candidate HotEvent（`publicationStatus: Candidate`），运营需经既有 1.6 复核队列 approve 后才公开。架构 spine AD「是否对低风险事件自动发布」明示「先保留 review-workflow 闸门，自动发布策略等真实运营负载后再下放」。拆分出的子集是新内容面向公开，必经闸门。若未来观察拆分子集普遍低风险，可引入「拆分自动 approve」自动发布策略。
+  resolution: 已于 Story 1.10 登记为 auto-publish 未决——待真实运营负载观察后，评估拆分自动发布策略（spine defer）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-10-published-event-merge-split-and-unpublish.md`
+  summary: 合并后 target 标题/解释不由合并自动改——运营要改标题/解释走 1.9 修订表单 + republish
+  evidence: Story 1.10 `mergeHotEvents` 只搬证据链 + 重算 target `cluster_signature`，**不**写 `hot_events.title`、**不**自动 append `HotEventRevision`、**不**改解释。合并后 target 标题仍是聚类派生基线（或 1.9 revision overlay），解释仍是最新 ExplanationVersion。运营若要在合并后同步改标题/解释，需在合并后走 1.9 修订表单（submitRevision）+ republish。自动同步标题/解释超 V1 最小（合并语义是证据重组，非内容重写）。
+  resolution: 已于 Story 1.10 登记为 defer——待真实运营反馈「合并后总需手改标题」时，评估合并时自动派生新标题/解释或提示运营修订。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-10-published-event-merge-split-and-unpublish.md`
+  summary: 合并/拆分跨模块非原子——mergeHotEvents/splitHotEvent（event-assembly）与 decideReview（review-workflow）非跨模块事务
+  evidence: Story 1.10 `submitMerge` 顺序调 `mergeHotEvents`（搬证据）→ `decideReview(target, republish)`（刷新 target 读模型）→ `decideReview(source, takedown)`（删 source 读模型）；`submitSplit` 顺序调 `splitHotEvent`（建 candidate + 搬子集）→ `decideReview(source, republish)`（刷新 source 读模型）。各步各自原子，但整体非跨模块事务（web 层顺序调）。若 mergeHotEvents 成功后 decideReview(republish) 崩溃，证据已搬但 target 读模型仍显旧——但追加式 + 幂等链搬迁无损坏（运营重提 republish）。强制跨模块事务需重构模块函数接受 `tx` 或引入 core 编排器，超 V1 最小（沿用 1.9 非原子 defer 同型）。
+  resolution: 已于 Story 1.10 登记为非原子 defer——待真实跨模块一致性需求出现时，引入 core 层编排器（接受 `PrismaTransaction` 的 merge+republish+takedown 复合命令）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-10-published-event-merge-split-and-unpublish.md`
+  summary: 运营台鉴权沿用 1.6 占位——/console 公开可达，任何人可合并/拆分/下线/重发布
+  evidence: Story 1.10 运营 UI（合并/拆分表单、重发布按钮、submitMerge/submitSplit server action）沿用 1.6/1.9 的 `/console` 公开可达占位（`(operator)/layout.tsx` 仅 noindex、无认证）。真实运营认证依赖 `user-profile` 模块（未建，后续 epic）。reviewer 字段为占位 `"operator"`。开发态 `/console` 公开可达（安全含义：任何人可合并/拆分/下线/重发布已发布热点）。
+  resolution: 已于 Story 1.10 沿用 1.6/1.9 defer——真实认证随 user-profile 落地时接入 `(operator)` layout 门，reviewer 字段流经验证身份。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-10-published-event-merge-split-and-unpublish.md`
+  summary: 按标签的 feed 筛选 / 分类维度归 Epic 2.2——1.10 不做标签筛选
+  evidence: Story 1.10 合并/拆分/重发布复用 1.9 标签投影（published_hot_events.tags），但标签仍是详情页展示属性、非 feed 筛选维度。epic 卡片「分类筛选维度」与 deferred-work 1.7/1.9 条目明示分类筛选归 Epic 2.2（概念/行业关联、派生分类、筛选器）。1.10 不向 `listPublishedHotEvents`/`PublishedHotEventSummary` 加 tags（不改 1.7 feed 契约）。
+  resolution: 已于 Story 1.10 沿用 1.9 defer——按标签/分类筛选随 Epic 2.2 分类关联落地时评估。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-10-published-event-merge-split-and-unpublish.md`
+  summary: 真实 LLM 沿用 1.8 defer——1.10 不接真实 LLM，LLMAdapter port 仍不预建
+  evidence: Story 1.10 合并/拆分/重发布不涉及解释生成（解释沿用 1.8 `generateExplanation` 确定性派生 + 1.9 `saveExplanation` 运营手输）。`LLMAdapter` port 沿用 1.8/1.9 defer（当前唯一 explanation 实现是确定性派生 + 人工手输，无第三方 SDK，预建 port 属「单一实现接口」反模式）。真实 LLM 生成（source="ai"）+ port 抽取待真实 LLM 引入。
+  resolution: 已于 Story 1.10 沿用 1.8 defer——真实 LLM 引入时在 worker 层抽 `LLMAdapter` port。

@@ -68,7 +68,12 @@ export type { ClusterGroup } from "./modules/event-assembly/clustering.js";
 // only writes hot_event_revisions (append-only, AD-5); effective title/tags =
 // latest revision ?? baseline. publish-orchestrator projects the effective on
 // republish; review-workflow computes the pending diff.
+// Story 1.10: operator-driven merge & split (mergeHotEvents / splitHotEvent).
+// Only writes hot_event_evidence (move/dedupe links) + hot_events (cluster_
+// signature recompute; new candidate on split). Status transitions + read-model
+// refresh go through decideReview afterward (reuse the publish gate).
 export { reviseHotEvent, normalizeTags } from "./modules/event-assembly/revise-service.js";
+export { mergeHotEvents, splitHotEvent } from "./modules/event-assembly/merge-split-service.js";
 export {
   SIMILARITY_THRESHOLD,
   TIME_WINDOW_MS,
@@ -83,6 +88,10 @@ export type {
   ClusterOptions,
   ReviseHotEventOptions,
   ReviseHotEventResult,
+  MergeHotEventsOptions,
+  MergeHotEventsResult,
+  SplitHotEventOptions,
+  SplitHotEventResult,
 } from "./modules/event-assembly/types.js";
 
 // review-workflow module (Story 1.6 — the publish gate; Story 1.9 — republish +

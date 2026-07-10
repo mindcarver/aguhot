@@ -72,7 +72,11 @@ test.describe("已发布热点的文案与标签修正 (Story 1.9) @revision", (
     // --- Step 1: submit the revision on /console/{id} ------------------------
     await page.goto(`/console/${published.hotEventId}`);
 
-    const titleInput = page.locator('input[name="title"]');
+    // Scope to #title (the revision form's title input has id="title"). Story
+    // 1.10 added a MergeSplitBranch to the published page whose split form also
+    // has an input[name="title"] (id="splitTitle"), so the generic name selector
+    // is now ambiguous — the id scopes to the revision form unambiguously.
+    const titleInput = page.locator("#title");
     await titleInput.fill("新能源车销量再创新高（运营修订标题）");
 
     const tagsInput = page.locator('textarea[name="tags"]');

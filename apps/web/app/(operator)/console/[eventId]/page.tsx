@@ -5,12 +5,13 @@ import {
   getCandidateDetail,
   getPublishedEventForRevision,
   getPrisma,
+  listPublishedHotEvents,
   CandidateNotFoundError,
   newTraceId,
 } from "@aguhot/core";
 
 import { AiLabel } from "@/components/chips";
-import { submitReview, submitRevision } from "./actions";
+import { submitReview, submitRevision, submitMerge, submitSplit } from "./actions";
 
 /**
  * Candidate / published-event detail + review page. Story 1.6 + Story 1.9
@@ -64,9 +65,11 @@ export default async function CandidateDetailPage({
   }
 
   // For published events, also read the operator revision view (published-vs-
-  // effective-vs-pending). For non-published events this stays undefined and
-  // the page renders the existing 1.6 ReviewForm unchanged.
+  // effective-vs-pending) AND the list of other published events (for the merge
+  // source dropdown). For non-published events these stay undefined/null and the
+  // page renders the existing 1.6 ReviewForm unchanged.
   let revisionView = null;
+  let otherPublished: { hotEventId: string; title: string }[] = [];
   if (detail.publicationStatus === "published") {
     try {
       revisionView = await getPublishedEventForRevision({
@@ -79,6 +82,15 @@ export default async function CandidateDetailPage({
       // back to the ReviewForm-only view rather than crashing the whole page.
       revisionView = null;
     }
+    // Load the other published events for the merge-source <select>. Exclude the
+    // current event (merging an event into itself is rejected by submitMerge +
+    // mergeHotEvents, so it is not offered). Reuses the public read query —
+    // operator-side read of the published read model is legitimate (same data
+    // the public feed sees, same as the /console published-events section).
+    const allPublished = await listPublishedHotEvents({ prisma, traceId: newTraceId() });
+    otherPublished = allPublished
+      .filter((e) => e.hotEventId !== eventId)
+      .map((e) => ({ hotEventId: e.hotEventId, title: e.title }));
   }
 
   return (
@@ -140,6 +152,17 @@ export default async function CandidateDetailPage({
             public version, the pending diff, and the revision + republish form. */}
         {detail.publicationStatus === "published" && revisionView !== null ? (
           <RevisionBranch eventId={eventId} view={revisionView!} />
+        ) : null}
+
+        {/* Merge / split branch (Story 1.10). Rendered alongside the revision
+            branch for published events. Merge absorbs another published event's
+            evidence into this one (then retires the source via takedown); split
+            carves a checked evidence subset into a new candidate (lands in the
+            review queue, not auto-published). Both reuse the publish gate
+            (decideReview) for the read-model refresh; mergeHotEvents/splitHotEvent
+            only move evidence links + recompute signatures. */}
+        {detail.publicationStatus === "published" ? (
+          <MergeSplitBranch eventId={eventId} evidence={detail.evidence} otherPublished={otherPublished} />
         ) : null}
 
         {/* Decision audit chain */}
@@ -430,11 +453,12 @@ function RevisionForm({
 }
 
 /**
- * The decision form (1.6 — candidate/rejected/taken_down). The available
- * outcomes depend on the current status:
- *   candidate  → approve / reject
- *   published  → handled by RevisionBranch above (not this form)
- *   rejected / taken_down → none (terminal in V1; re-publish is 1.10)
+ * The decision form (1.6 — candidate/rejected/taken_down; 1.10 — republish for
+ * taken_down/rejected). The available outcomes depend on the current status:
+ *   candidate   → approve / reject
+ *   published   → handled by RevisionBranch above (not this form)
+ *   taken_down  → republish (1.10: re-publish after takedown)
+ *   rejected    → republish (1.10: correct an erroneous reject)
  *
  * The form posts to the submitReview server action. The server action validates
  * the transition legality via decideReview → resolveTransition, so even if the
@@ -450,12 +474,16 @@ function ReviewForm({
 }) {
   const canApprove = currentStatus === "candidate";
   const canReject = currentStatus === "candidate";
+  // Story 1.10: taken_down + rejected both get a republish button (re-publish
+  // after takedown / correct an erroneous reject). candidate republish is illegal
+  // (nothing has been published to refresh) and stays absent here.
+  const canRepublish = currentStatus === "taken_down" || currentStatus === "rejected";
 
-  if (!canApprove && !canReject) {
+  if (!canApprove && !canReject && !canRepublish) {
     return (
       <section className="mt-10">
         <p className="text-ink-secondary">
-          该事件状态为 {currentStatus}，无可执行的复核操作（再发布属后续迭代）。
+          该事件状态为 {currentStatus}，无可执行的复核操作。
         </p>
       </section>
     );
@@ -499,7 +527,157 @@ function ReviewForm({
               驳回
             </button>
           ) : null}
+          {canRepublish ? (
+            <button
+              type="submit"
+              name="outcome"
+              value="republish"
+              className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-brand-foreground hover:opacity-90"
+            >
+              重新发布
+            </button>
+          ) : null}
         </div>
+      </form>
+    </section>
+  );
+}
+
+/**
+ * The merge / split branch for published events (Story 1.10). Two operator
+ * actions, both reusing the publish gate for the read-model refresh:
+ *
+ *   - Merge: select another published event as the source; submitMerge moves
+ *     its evidence into the current event (shared deduped), refreshes the
+ *     current event's read model (republish), and retires the source (takedown).
+ *   - Split: check a non-empty, non-full subset of evidence + provide a title;
+ *     submitSplit creates a new candidate from the subset, moves the links, and
+ *     refreshes the current event's read model (republish). The new candidate
+ *     lands in the /console review queue (not auto-published).
+ *
+ * Tokens: REAL resolving tokens (bg-surface-raised/bg-surface-base/border-
+ * border-hairline/ink-*), NOT the 1.6 drifted bg-surface/border-line-subtle/
+ * bg-brand-strong.
+ */
+function MergeSplitBranch({
+  eventId,
+  evidence,
+  otherPublished,
+}: {
+  eventId: string;
+  evidence: { evidenceRecordId: string; sourceName: string; title: string | null; publishedAt: Date | null }[];
+  otherPublished: { hotEventId: string; title: string }[];
+}) {
+  return (
+    <section className="mt-10 space-y-6">
+      <h2 className="text-xl font-semibold">合并 / 拆分</h2>
+
+      {/* Merge form. Lists other published events as the source to absorb. The
+          source's evidence moves into this event; the source is retired. */}
+      <form action={submitMerge} className="space-y-4 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
+        <input type="hidden" name="targetId" value={eventId} />
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+          合并（吸收另一已发布热点）
+        </h3>
+        <p className="text-xs text-ink-tertiary">
+          选择一个已发布热点作为来源，其证据将合并到当前事件（共享证据自动去重），来源事件将被下线。
+        </p>
+        {otherPublished.length === 0 ? (
+          <p className="text-sm text-ink-tertiary">（暂无其它已发布热点可合并。）</p>
+        ) : (
+          <div>
+            <label htmlFor="sourceId" className="block text-sm font-medium text-ink-secondary">
+              来源事件
+            </label>
+            <select
+              id="sourceId"
+              name="sourceId"
+              defaultValue=""
+              className="mt-1 block w-full rounded-md border border-border-hairline bg-surface-raised px-3 py-2 text-sm text-ink-primary"
+            >
+              <option value="" disabled>
+                选择要合并的已发布热点…
+              </option>
+              {otherPublished.map((e) => (
+                <option key={e.hotEventId} value={e.hotEventId}>
+                  {e.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div>
+          <button
+            type="submit"
+            disabled={otherPublished.length === 0}
+            className="rounded-md border border-border-hairline bg-surface-raised px-4 py-2 text-sm font-medium text-ink-primary hover:border-ink-secondary disabled:opacity-50"
+          >
+            执行合并
+          </button>
+        </div>
+      </form>
+
+      {/* Split form. Check a subset of the current event's evidence + provide a
+          title for the new candidate. The subset must be non-empty and not the
+          full set (mergeHotEvents/splitHotEvent guards; submitSplit redirects
+          back on rejection). The new candidate lands in the review queue. */}
+      <form action={submitSplit} className="space-y-4 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
+        <input type="hidden" name="sourceId" value={eventId} />
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+          拆分（把勾选证据子集拆为新候选）
+        </h3>
+        <p className="text-xs text-ink-tertiary">
+          勾选要拆出的证据子集（至少留 1 条给当前事件）并填写新标题。新事件以 candidate 进入复核队列，经复核后才公开。
+        </p>
+        {evidence.length <= 1 ? (
+          <p className="text-sm text-ink-tertiary">（当前证据不足 2 条，无法拆分。）</p>
+        ) : (
+          <>
+            <div>
+              <label htmlFor="splitTitle" className="block text-sm font-medium text-ink-secondary">
+                新候选标题
+              </label>
+              <input
+                id="splitTitle"
+                name="title"
+                type="text"
+                className="mt-1 block w-full rounded-md border border-border-hairline bg-surface-raised px-3 py-2 text-sm text-ink-primary"
+                placeholder="拆分出的新候选标题"
+              />
+            </div>
+            <fieldset className="space-y-2">
+              <legend className="block text-sm font-medium text-ink-secondary">勾选要拆出的证据</legend>
+              {evidence.map((e) => (
+                <label
+                  key={e.evidenceRecordId}
+                  className="flex items-start gap-3 rounded-md border border-border-hairline bg-surface-raised px-3 py-2 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    name="evidenceRecordId"
+                    value={e.evidenceRecordId}
+                    className="mt-0.5"
+                  />
+                  <span className="flex-1">
+                    <span className="font-semibold">{e.sourceName}</span>
+                    {e.title ? <span className="ml-2 text-ink-secondary">{e.title}</span> : null}
+                    <span className="ml-2 font-mono text-xs text-ink-tertiary">
+                      {e.publishedAt ? formatDate(e.publishedAt) : "时间未知"}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <div>
+              <button
+                type="submit"
+                className="rounded-md border border-border-hairline bg-surface-raised px-4 py-2 text-sm font-medium text-ink-primary hover:border-ink-secondary"
+              >
+                执行拆分
+              </button>
+            </div>
+          </>
+        )}
       </form>
     </section>
   );

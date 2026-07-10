@@ -11,6 +11,9 @@ import {
   newTraceId,
   reviseHotEvent,
   saveExplanation,
+  mergeHotEvents,
+  splitHotEvent,
+  listPublishedHotEvents,
   ExplanationSource,
 } from "@aguhot/core";
 
@@ -174,6 +177,210 @@ export async function submitRevision(formData: FormData): Promise<void> {
   revalidatePath(`/console/${eventId}`);
   revalidatePath(`/events/${eventId}`);
   redirect(`/console/${eventId}`);
+}
+
+/**
+ * Server action: merge another published hot event into the current one. Story 1.10.
+ *
+ * Parses the form (target=current eventId, source=the published event to absorb),
+ * validates source≠target and source is currently published (checked against
+ * listPublishedHotEvents), then sequences:
+ *   1. mergeHotEvents(source→target) — move source's evidence links to target
+ *      (shared deduped), clear source's links, recompute target's signature.
+ *   2. decideReview(target, republish) — refresh target's read model (shows union).
+ *   3. decideReview(source, takedown, note="merged into {target}") — retire source
+ *      (delete source's read model; audit chain keeps the reason).
+ *
+ * This is NOT a cross-module transaction (web layer calls them in sequence). If
+ * step 1 succeeds and step 2 crashes, source's evidence has moved to target but
+ * target's public read model still shows the old count — the operator re-submits
+ * the republish. Append-only + idempotent link moves mean no corruption.
+ *
+ * Validation failures (source=target, source not published) redirect back with
+ * no writes. IllegalTransitionError on the republish/takedown (status changed
+ * between render and submit) also redirects back — the revalidated page shows
+ * the true state.
+ *
+ * V1 reviewer identity is a placeholder ("operator"); real auth drops into the
+ * (operator) layout when user-profile lands.
+ */
+export async function submitMerge(formData: FormData): Promise<void> {
+  const targetId = formData.get("targetId");
+  const sourceId = formData.get("sourceId");
+
+  if (typeof targetId !== "string" || targetId.trim() === "") {
+    redirect("/console");
+  }
+  if (typeof sourceId !== "string" || sourceId.trim() === "") {
+    revalidatePath(`/console/${targetId}`);
+    redirect(`/console/${targetId}`);
+  }
+  // source=target is rejected before any module call (mergeHotEvents also guards,
+  // but we front-load it so no prisma round-trip is wasted).
+  if (sourceId === targetId) {
+    revalidatePath(`/console/${targetId}`);
+    redirect(`/console/${targetId}`);
+  }
+
+  const prisma = getPrisma();
+  const traceId = newTraceId();
+
+  // Validate source is currently published (the merge form lists published events
+  // only, but the status could have changed between render and submit). Reading
+  // the published read model is the authoritative visibility check.
+  const published = await listPublishedHotEvents({ prisma, traceId: newTraceId() });
+  const sourceIsPublished = published.some((e) => e.hotEventId === sourceId);
+  if (!sourceIsPublished) {
+    revalidatePath(`/console/${targetId}`);
+    redirect(`/console/${targetId}`);
+  }
+
+  try {
+    // 1. Move source's evidence into target (event-assembly domain; only writes
+    //    hot_event_evidence + target cluster_signature).
+    await mergeHotEvents({ prisma, traceId, sourceId, targetId });
+
+    // 2. Refresh target's read model to show the union evidence (publish gate).
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: targetId,
+      outcome: "republish",
+      reviewer: "operator",
+      note: "merge: absorbed source evidence",
+    });
+
+    // 3. Retire the source (publish gate: takedown deletes its read model). The
+    //    note records the merge intent for the audit chain.
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: sourceId,
+      outcome: "takedown",
+      reviewer: "operator",
+      note: `merged into ${targetId}`,
+    });
+  } catch (error) {
+    if (error instanceof IllegalTransitionError) {
+      // The status changed between render and submit (e.g. source was taken down
+      // by another operator). Nothing the operator can't retry — revalidate so
+      // the page reflects the true state, then redirect back to the target.
+      revalidatePath("/console");
+      revalidatePath(`/console/${targetId}`);
+      revalidatePath(`/console/${sourceId}`);
+      redirect(`/console/${targetId}`);
+    }
+    if (error instanceof CandidateNotFoundError) {
+      revalidatePath("/console");
+      redirect("/console");
+    }
+    if (isPrismaNotFound(error)) {
+      revalidatePath("/console");
+      redirect("/console");
+    }
+    throw error;
+  }
+
+  // Success: revalidate everything that changed. Target now shows the union;
+  // source is gone from public + console published list.
+  revalidatePath("/console");
+  revalidatePath(`/console/${targetId}`);
+  revalidatePath(`/console/${sourceId}`);
+  revalidatePath(`/events/${targetId}`);
+  revalidatePath(`/events/${sourceId}`);
+  redirect(`/console/${targetId}`);
+}
+
+/**
+ * Server action: split a subset of the current event's evidence into a new
+ * candidate. Story 1.10.
+ *
+ * Parses the form (source=current eventId, evidenceRecordIds[]=the checked
+ * subset, title=the new candidate's title), validates the subset is non-empty
+ * and not the full set, then sequences:
+ *   1. splitHotEvent(source, subset, title) — create a new candidate HotEvent,
+ *      move the selected links source→new, recompute both signatures.
+ *   2. decideReview(source, republish, note="split") — refresh source's read
+ *      model to show the remaining evidence.
+ *
+ * The new candidate lands as `candidate` (NOT auto-published — the publish gate
+ * stays mandatory). The operator approves it via the existing 1.6 review queue.
+ *
+ * Validation failures (empty/full-set selection, empty title) redirect back with
+ * no writes. This is NOT a cross-module transaction (same append-only + idempotent
+ * link-move safety as submitMerge).
+ */
+export async function submitSplit(formData: FormData): Promise<void> {
+  const sourceId = formData.get("sourceId");
+  const title = formData.get("title");
+  // formData.getAll returns all values for the repeated `evidenceRecordId` key
+  // (one per checked checkbox). Filter to non-empty strings.
+  const evidenceRecordIds = formData
+    .getAll("evidenceRecordId")
+    .filter((v): v is string => typeof v === "string" && v.trim() !== "");
+
+  if (typeof sourceId !== "string" || sourceId.trim() === "") {
+    redirect("/console");
+  }
+  if (typeof title !== "string" || title.trim() === "") {
+    revalidatePath(`/console/${sourceId}`);
+    redirect(`/console/${sourceId}`);
+  }
+
+  const prisma = getPrisma();
+  const traceId = newTraceId();
+
+  try {
+    // 1. Create the new candidate + move the selected subset (event-assembly
+    //    domain; only writes hot_event_evidence + hot_events). splitHotEvent
+    //    guards empty/full-set selection internally; if it rejects, redirect back.
+    const splitResult = await splitHotEvent({
+      prisma,
+      traceId,
+      sourceId,
+      evidenceRecordIds,
+      title: title.trim(),
+      reviewer: "operator",
+    });
+    if (!splitResult.split) {
+      // emptySelection / fullSetSelected / invalidTitle — front-load validation
+      // failed inside the service. Revalidate + redirect back (no public change).
+      revalidatePath(`/console/${sourceId}`);
+      redirect(`/console/${sourceId}`);
+    }
+
+    // 2. Refresh source's read model to show the remaining evidence (publish gate).
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: sourceId,
+      outcome: "republish",
+      reviewer: "operator",
+      note: `split: moved ${splitResult.movedLinks ?? 0} to ${splitResult.newHotEventId ?? "new"}`,
+    });
+  } catch (error) {
+    if (error instanceof IllegalTransitionError) {
+      revalidatePath("/console");
+      revalidatePath(`/console/${sourceId}`);
+      redirect(`/console/${sourceId}`);
+    }
+    if (error instanceof CandidateNotFoundError) {
+      revalidatePath("/console");
+      redirect("/console");
+    }
+    if (isPrismaNotFound(error)) {
+      revalidatePath("/console");
+      redirect("/console");
+    }
+    throw error;
+  }
+
+  // Success: revalidate. Source shows remaining evidence; the new candidate
+  // appears in the /console review queue (not yet public).
+  revalidatePath("/console");
+  revalidatePath(`/console/${sourceId}`);
+  revalidatePath(`/events/${sourceId}`);
+  redirect(`/console/${sourceId}`);
 }
 
 function isPrismaNotFound(error: unknown): boolean {

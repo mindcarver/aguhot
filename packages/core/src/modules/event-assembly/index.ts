@@ -27,6 +27,12 @@ export {
 } from "./clustering.js";
 export type { ClusterGroup } from "./clustering.js";
 export { reviseHotEvent, normalizeTags } from "./revise-service.js";
+// Story 1.10: operator-driven merge & split of published hot events. Only
+// writes hot_event_evidence (move/dedupe links) + hot_events (cluster_signature
+// recompute; new candidate on split). Status transitions + read-model refresh
+// are driven by the server action calling decideReview afterward (reuse, not
+// rebuild, the publish gate).
+export { mergeHotEvents, splitHotEvent } from "./merge-split-service.js";
 export {
   PublicationStatus,
   SIMILARITY_THRESHOLD,
@@ -38,4 +44,8 @@ export type {
   PublicationStatus as PublicationStatusType,
   ReviseHotEventOptions,
   ReviseHotEventResult,
+  MergeHotEventsOptions,
+  MergeHotEventsResult,
+  SplitHotEventOptions,
+  SplitHotEventResult,
 } from "./types.js";

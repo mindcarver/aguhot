@@ -90,3 +90,83 @@ export interface ReviseHotEventResult {
   notFound?: boolean;
   invalidTitle?: boolean;
 }
+
+// --- Story 1.10: operator-driven merge & split of published hot events -------
+
+/**
+ * Options for mergeHotEvents — move source's evidence links into target,
+ * dedupe shared evidence, clear source's links, and recompute target's
+ * cluster_signature. `{ prisma, traceId, sourceId, targetId }` mirrors the
+ * established command pattern. The server action calls this BEFORE
+ * decideReview(target, republish) + decideReview(source, takedown) — the
+ * evidence move is event-assembly's job; the status transitions + read-model
+ * refresh are the publish gate's job (reuse, not rebuild).
+ */
+export interface MergeHotEventsOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  /** The event whose evidence is absorbed (retired via takedown afterward). */
+  sourceId: string;
+  /** The event that receives the absorbed evidence (refreshed via republish). */
+  targetId: string;
+}
+
+/**
+ * Result of mergeHotEvents.
+ *   - merged: true + counts + targetSignature on success.
+ *   - merged: false + sameId: true when sourceId === targetId (rejected before
+ *     any write; the server action surfaces an error to the operator).
+ *
+ * movedLinks = records that were newly linked to target (not already there).
+ * dedupedLinks = records that were already on target (shared evidence) — their
+ * source link is deleted, no duplicate created on target (the @@unique guard).
+ */
+export interface MergeHotEventsResult {
+  merged: boolean;
+  movedLinks?: number;
+  dedupedLinks?: number;
+  targetSignature?: string;
+  sameId?: boolean;
+}
+
+/**
+ * Options for splitHotEvent — create a new candidate from a selected subset of
+ * source's evidence, move the selected links source→new, and recompute both
+ * signatures. `{ prisma, traceId, sourceId, evidenceRecordIds, title, reviewer }`
+ * mirrors the established command pattern. The server action calls this BEFORE
+ * decideReview(source, republish) — the evidence move is event-assembly's job;
+ * the source read-model refresh is the publish gate's job. The new candidate is
+ * published later through the standard approve gate (1.6), NOT auto-published
+ * (the publish gate stays mandatory; auto-publish is an undecided defer).
+ */
+export interface SplitHotEventOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  /** The event whose evidence subset is carved out into the new candidate. */
+  sourceId: string;
+  /** The evidence record ids to move to the new candidate (the subset). */
+  evidenceRecordIds: string[];
+  /** The title for the new candidate (operator-provided). */
+  title: string;
+  /** Operator identity placeholder (V1 no real auth). */
+  reviewer: string;
+}
+
+/**
+ * Result of splitHotEvent.
+ *   - split: true + newHotEventId + movedLinks on success.
+ *   - split: false + a flag explaining the rejection (invalidTitle /
+ *     emptySelection / fullSetSelected) — each is enforced before any write.
+ *
+ * fullSetSelected = every source record was selected (that's a takedown, not a
+ * split — the operator should use the takedown button to retire source entirely).
+ */
+export interface SplitHotEventResult {
+  split: boolean;
+  newHotEventId?: string;
+  movedLinks?: number;
+  reviewer?: string;
+  invalidTitle?: boolean;
+  emptySelection?: boolean;
+  fullSetSelected?: boolean;
+}
