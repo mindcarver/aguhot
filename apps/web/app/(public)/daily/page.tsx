@@ -106,7 +106,10 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      {/* Return link to the homepage (stable back path; originating-context retention is 2.5). */}
+      {/* Return link to the homepage. daily→home is a list→list secondary
+          navigation (not a UX-DR12 detail return), so it stays a bare <Link>;
+          the UX-DR12 reading-context restoration landing point is the detail
+          page BackLink (Story 2.5). href unchanged. */}
       <Link
         href="/"
         className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"

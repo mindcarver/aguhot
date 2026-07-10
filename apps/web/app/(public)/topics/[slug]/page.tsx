@@ -123,8 +123,10 @@ export default async function ThemeContinuityPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      {/* Return link to the /topics directory (basic navigation; full
-          UX-DR12 scroll/filter context restoration is 2.5). */}
+      {/* Return link to the /topics directory. theme[slug]→/topics is a
+          list→directory secondary navigation (not a UX-DR12 detail return), so
+          it stays a bare <Link>; the UX-DR12 reading-context restoration
+          landing point is the detail page BackLink (Story 2.5). href unchanged. */}
       <Link
         href="/topics"
         className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"

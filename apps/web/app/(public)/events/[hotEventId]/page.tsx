@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AiLabel, FilterPill, ReactionChip, TagChip } from "@/components/chips";
@@ -9,6 +8,8 @@ import {
   newTraceId,
   type AssociationItem,
 } from "@aguhot/core";
+
+import { BackLink } from "../../_components/back-link";
 
 export const metadata: Metadata = {
   title: "热点事件详情",
@@ -123,13 +124,18 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      {/* Return link to the feed (stable back path; originating-context retention is 2.5). */}
-      <Link
-        href="/"
+      {/* Detail return path — UX-DR12 reading-context restoration (Story 2.5);
+          BackLink restores the originating list URL + scroll via sessionStorage.
+          Direct load / external referrer / private mode → falls back to "/"
+          (byte-identical to the prior bare link), so existing href assertions
+          stay green. SSR renders href={fallback} (fromHref starts null); the
+          captured originating URL is read in an effect post-hydration. */}
+      <BackLink
+        fallback="/"
         className="inline-flex items-center gap-1 text-sm text-ink-secondary hover:text-ink-primary"
       >
         <span aria-hidden>←</span> 返回首页
-      </Link>
+      </BackLink>
 
       {/* Title — a fact, not system-derived, so no AiLabel here. */}
       <h1 className="mt-4 font-display text-3xl font-bold leading-tight text-ink-primary">

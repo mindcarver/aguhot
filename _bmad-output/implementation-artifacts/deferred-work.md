@@ -501,3 +501,49 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: `ADVICE_KEYWORDS` 同义词不全——缺 加仓/减仓/建仓/清仓/止损/止盈/荐股 等；V1 stub 不触发，真实 LLM 落地后建议词可能漏检
   evidence: Story 2.4 `digest-service.ts` 的 `ADVICE_KEYWORDS`（`noInvestAdvice`）列 买入/卖出/目标价/持仓/增持/减持/建议买/建议卖，缺常见同义词（加仓/减仓/建仓/清仓/止损/止盈/荐股/抄底/逃顶）。V1 `StubDigestAdapter` 返回固定安全 conclusion，永不触发检查；真实 LLM provider 落地后，结论含「加仓」「止损」等会漏过 NFR 检查流入公开 /daily 页。检查列表跨 4 文件镜像（digest-service + verify-digest + verify-themes + verify-associations），加词需同步。
   resolution: 已于 Story 2.4 登记为 LLM 策略 defer——待真实日报 LLM provider 落地、有真实结论语料后，统一建议词策略（扩同义词清单或改用分类器），并把 4 文件的镜像清单收敛为单一来源（避免漂移）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: nav 级跨列表上下文（home↔daily↔topics 间切换）恢复未做——UX-DR12 的「返回」语义特指「进入详情后返回原消费上下文」，main-nav 切换是全局导航非阅读返回
+  evidence: Story 2.5 `<ListContextMemory/>` 的捕获监听只在目标为 `/events/` 时写 returnContext，nav 链（首页/日报/主题/收藏）间的跳转不捕获/不恢复。读者经主图 nav 从 `/?window=7d` 切到 `/daily` 再切回 `/?window=7d` 时，filter 态靠 URL原生保留（nav 链不带 `?window=` 故丢失），scroll 不恢复。epic-2-context 明示「nav 为全局导航，非阅读上下文返回」——UX-DR12 不要求 nav 级恢复。主图 nav 切换的 filter+scroll 上下文恢复属独立 concern（需让 nav 链带当前 filter 或引入 nav-level context provider）。
+  resolution: 已于 Story 2.5 登记为 nav 级跨列表上下文 defer——待真实读者反馈「nav 切换丢 filter 态」时，让 nav 链 honor 当前活动 filter（如 `/daily?date=` ↔ `/?window=` 互带）或引入 nav-level context restoration。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: 详情→关联 pill 前向跳转的 `?window=` 保留未做——详情「关联」pill 链 `/?concept=X` 丢当前 window filter（已知 context-leak）
+  evidence: Story 2.5 只恢复「列表→详情→列表」返回路径的 query+scroll；详情「关联」section 的 FilterPill 链 `/?concept=半导体`（Story 2.2）不带当前 `?window=`，点入后 feed 的 window filter 丢失（从 7 日变全部）。这是前向探索跳转（详情→feed 过滤视图），非 UX-DR12 返回路径。2.2 落地时已知此 context-leak，defer 到统一处理。
+  resolution: 已于 Story 2.5 登记为前向 pill context-leak defer——待真实读者反馈「关联 pill 丢 window」时，让详情 FilterPill 链 honor 当前 URL 的 window（或引入 feed-filter 合并而非覆盖语义）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: 多级返回栈 / 面包屑 / 前进（forward）恢复未做——UX-DR12 深度上限一层，超过一层的返回历史 defer
+  evidence: Story 2.5 `RETURN_CONTEXT_KEY` 只存最近一跳的「列表→详情」上下文（单 slot，新值覆盖旧值）。读者若列表A→详情A→主题页→详情B→列表B 多层跳转，BackLink 只恢复到最近的来源（详情B 的 BackLink 回列表B，非递归回退到列表A）。面包屑（显示「首页 > 主题 > 详情」路径）+ 前进恢复（返回后点浏览器「前进」恢复详情态）均未做。UX-DR12 明示「navigation depth is capped at one level」——一层上限是 V1 设计选择，多层栈是 V2+ 扩展。
+  resolution: 已于 Story 2.5 登记为多层栈 defer——待真实读者反馈「想回到两层前的列表」时，引入返回栈（数组 sessionStorage）+ 面包屑 UI（需先定义信息架构层级）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: 跨会话 scroll 持久化（localStorage）未做——V1 sessionStorage 会话级足矣，跨会话 scroll 恢复 defer
+  evidence: Story 2.5 用 `sessionStorage` 存 returnContext + scroll（会话级，关闭标签页即失）。读者若隔天回访同一列表页想恢复昨日的 scroll 位，sessionStorage 已清。localStorage 可跨会话持久，但 V1 无此需求（阅读上下文是即时会话语义，非长期书签）。跨会话 scroll 持久化 + 隐私/清理策略 defer。
+  resolution: 已于 Story 2.5 登记为跨会话 defer——待真实读者反馈「想恢复上次阅读位置」时，评估 localStorage 持久化（含过期/容量/隐私清理策略）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: epic-3 `/search` 路由落地后需扩 `isValidListReturn` allowlist——当前 allowlist 含 `/`、`/daily`、`/topics/`，不含 `/search`
+  evidence: Story 2.5 `isValidListReturn` 的 pathname allowlist 为 `/` + `/daily` 精确、`/topics/` 前缀。`/search` 路由未落地（epic-3 搜索入口），故 allowlist 暂不含 `/search`。待 epic-3 `/search` 落地后，从搜索结果进详情再返回时，BackLink 会因 `/search` 非 allowlist 而回退 `/`（搜索上下文丢失）。需在 epic-3 落地时扩 allowlist。
+  resolution: 已于 Story 2.5 登记为 epic-3 扩 allowlist defer——`/search` 路由落地时，把 `/search`（或 `/search` 前缀）加入 `LIST_PATH_EXACT`/`LIST_PATH_PREFIXES`，使搜索→详情→搜索返回路径恢复 filter+scroll。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: scroll 恢复假设 `window` 为滚动容器——若 `(public)/layout.tsx` 改为内层 overflow 容器，需适配 scrollTo 目标
+  evidence: Story 2.5 `<ListContextMemory/>` 的 scroll 捕获用 `window.scrollY`、恢复用 `window.scrollTo({top, behavior:"instant"})`，假设 `<html>/<body>` 是滚动容器（document scroll）。当前 `(public)/layout.tsx` 是 `min-h-screen` 的 document flow（无内层 overflow 容器），故正确。若未来 layout 改为内层 overflow 容器（如 sticky nav + 内层 `overflow-y-auto` 主内容区），scrollY 需改为读该容器的 scrollTop、scrollTo 需针对该容器。
+  resolution: 已于 Story 2.5 登记为 layout-适配 defer——若 layout 改为内层 overflow 容器，把 `window.scrollY`/`window.scrollTo` 改为该容器的 scrollTop/scrollTo（需先确定滚动容器的稳定选择器或 ref）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: sessionStorage 禁用环境（隐私模式/cookies-blocked）的无恢复降级已实现，但无可观测埋点——运营无法区分「正常返回」vs「降级无恢复」
+  evidence: Story 2.5 所有 sessionStorage 读写包 try/catch 静默 no-op（隐私模式降级）。读者在隐私模式下进详情再返回时，BackLink 回退 `/`、scroll 不恢复——页面正常渲染但功能静默降级。无埋点/log 让运营无法区分「读者主动放弃」vs「存储被禁用导致无恢复」。这是 observability 缺口，非功能缺陷（降级行为正确）。
+  resolution: 已于 Story 2.5 登记为 observability defer——待真实生产观测需要时，在 sessionStorage 写失败时加结构化日志/埋点（区分「存储禁用」降级路径），与既有 generators 降级日志一并补。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: 捕获监听对带 `target=_blank` / `download` / 修饰键点击的语义边界——cmd/ctrl 新开标签页、`target=_blank` 新标签页、`download` 下载均非「离开当前列表」导航，原列表页保留→无返回需恢复
+  evidence: Story 2.5 `<ListContextMemory/>` 的 click handler 已显式 skip `metaKey/ctrlKey/shiftKey/altKey` + `button !== 0`（修饰键点击不捕获，因原列表页保留→无返回需恢复）。review 追加修复：handler 在解析 anchor 后、写 returnContext 前新增 `if (anchor.target === "_blank" || anchor.hasAttribute("download")) return;`——`target="_blank"` 新标签页打开与 `download` 属性下载均不导航原标签页，故原列表页保留、无返回需恢复（与修饰键 skip 同语义）。detail 页外链（证据原文链接）已有 `target="_blank"` 但 href 非 `/events/` 故原本就不触发；feed/theme/daily 卡链目前无 `target="_blank"`/`download`。该 skip 是 defense-in-depth（未来若详情链加 `target="_blank"`/`download`，handler 不再误写 returnContext）。
+  resolution: 已于 Story 2.5 review 修复——handler 在 capture boundary 对 `anchor.target === "_blank"` 或 `anchor.hasAttribute("download")` 直接 skip（return），与既有修饰键 skip 同语义边界。无残留 defer。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5-cross-surface-context-return-loop.md`
+  summary: 浏览器原生 back/forward（history/bfcache）的 scroll 恢复未做——当前设计仅经显式 BackLink 点击恢复，浏览器 back 经原生 history 恢复 URL（filter 态）但不恢复 scroll
+  evidence: Story 2.5 的 scroll 恢复一次性 `RESTORE_MARKER` 由 BackLink onClick 写入——即只有点击「← 返回」链（客户端导航）才触发 scroll 恢复。读者若用浏览器 back 按钮（history traversal / bfcache restore）从详情返回列表，filter 态（URL query）经原生 history 恢复（`?window=`/`?date=` 在 history entry 里），但 scroll 不恢复（无 marker——marker 仅由 BackLink 点击写；且 bfcache restore 可能不重新触发 React effect）。这是 UX-DR12「returning from detail to a list」的另一种返回方式（浏览器 back）下的 scroll 缺口；spec 的 AC 与机制显式聚焦 BackLink 点击路径（该路径已测全绿）。浏览器 back 的 scroll 恢复是独立、更难的 concern（Next App Router + scroll restoration 交互复杂）。
+  resolution: 已于 Story 2.5 review 登记为 defer——待真实读者反馈「浏览器 back 不恢复 scroll」或 UX-DR12 扩展到 back 按钮路径时，评估加 `pageshow`（`event.persisted`）/ `history.scrollRestoration` 机制，或在 BackLink 之外让浏览器 back 也写 restoreMarker。V1 显式返回链已覆盖 UX-DR12 的测试返回路径。
+
