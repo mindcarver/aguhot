@@ -9,7 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "eslint .",
-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop\"",
+    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search\"",
     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
@@ -20,6 +20,7 @@
     "e2e:themes": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @themes",
     "e2e:daily": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @daily",
     "e2e:loop": "tsx e2e/seed-loop.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @loop",
+    "e2e:search": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search",
     "seed:console": "tsx e2e/seed-console.ts",
     "seed:feed": "tsx e2e/seed-feed.ts",
     "seed:detail": "tsx e2e/seed-detail.ts",
@@ -29,7 +30,8 @@
     "seed:associations": "tsx e2e/seed-associations.ts",
     "seed:themes": "tsx e2e/seed-themes.ts",
     "seed:daily": "tsx e2e/seed-daily.ts",
-    "seed:loop": "tsx e2e/seed-loop.ts"
+    "seed:loop": "tsx e2e/seed-loop.ts",
+    "seed:search": "tsx e2e/seed-search.ts"
   },
   "dependencies": {
     "@aguhot/config": "workspace:*",

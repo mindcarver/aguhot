@@ -1,0 +1,1844 @@
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index 889a372..4456d40 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -547,3 +547,33 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   evidence: Story 2.5 的 scroll 恢复一次性 `RESTORE_MARKER` 由 BackLink onClick 写入——即只有点击「← 返回」链（客户端导航）才触发 scroll 恢复。读者若用浏览器 back 按钮（history traversal / bfcache restore）从详情返回列表，filter 态（URL query）经原生 history 恢复（`?window=`/`?date=` 在 history entry 里），但 scroll 不恢复（无 marker——marker 仅由 BackLink 点击写；且 bfcache restore 可能不重新触发 React effect）。这是 UX-DR12「returning from detail to a list」的另一种返回方式（浏览器 back）下的 scroll 缺口；spec 的 AC 与机制显式聚焦 BackLink 点击路径（该路径已测全绿）。浏览器 back 的 scroll 恢复是独立、更难的 concern（Next App Router + scroll restoration 交互复杂）。
+   resolution: 已于 Story 2.5 review 登记为 defer——待真实读者反馈「浏览器 back 不恢复 scroll」或 UX-DR12 扩展到 back 按钮路径时，评估加 `pageshow`（`event.persisted`）/ `history.scrollRestoration` 机制，或在 BackLink 之外让浏览器 back 也写 restoreMarker。V1 显式返回链已覆盖 UX-DR12 的测试返回路径。
+ 
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
++  summary: 搜索引擎升级（Postgres FTS/tsvector + GIN、ILIKE SQL 下推、或专用搜索引擎）defer——V1 用 JS 内存子串匹配（沿用 1.7/2.2/2.3 in-memory filter 既定模式），真实查询负载出现前不引入 FTS
++  evidence: Story 3.1 `searchPublished`（`packages/core/src/modules/search-read/search-service.ts`）并发取三个 filter-free sibling list fn（listPublishedHotEvents + listPublishedHotEventExplanations + listPublishedThemeMemberships），在 JS 内存做大小写不敏感子串匹配（`toLowerCase().includes()`）。epic-3-context 明示「Search engine choice is intentionally deferred: V1 may use PostgreSQL full-text capabilities and only adopt a dedicated search stack once real query load appears」。当前 `schema.prisma` 与全部 migration 零 FTS 痕迹；Postgres FTS 对中文需 zhparser/pg_jieba 扩展（默认 Postgres 无中文分词）；ILIKE 下推需改既有 filter-free fn 签名或新建 SQL 查询 fn。V1 published 体量极小（每次搜索三次全表读 + JS join），规模可接受。升级路径明确：把 `searchPublished` 内部换成 FTS/ILIKE，调用面（签名/返回类型）不变，页面与 e2e 无感。
++  resolution: 已于 Story 3.1 登记为搜索引擎升级 defer——待真实查询负载出现（已发布集体量增长致搜索有可测延迟）时，把 `searchPublished` 内部换为 Postgres FTS（tsvector + GIN + zhparser/jieba 中文分词扩展 + 一个新 prisma migration）或 ILIKE SQL 下推或专用搜索引擎（Meilisearch/Algolia 等），调用面保持不变。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
++  summary: 搜索分页 / 高亮 / 搜索建议 / 搜索历史 defer——V1 一次返回全部分组命中、无高亮、无建议、无历史
++  evidence: Story 3.1 `/search` 一次渲染全部分组命中（events + themes），无分页（V1 命中数极小）、无关键词高亮、无搜索建议（输入时下拉）、无搜索历史。epic-3-context 未列这些为 V1 AC。分页需引入结果计数上限 + 分页 UI；高亮需在 EventCard/FilterPill 内 dangerouslySet 或拆词渲染（不改组件本体的约束下不可行）；建议/历史需客户端状态或 user-profile 模块（3.2/3.3 own）。
++  resolution: 已于 Story 3.1 登记为搜索 UX 丰富化 defer——待真实搜索负载反馈时，引入分页（结果上限 + 翻页）、关键词高亮（需 EventCard/FilterPill 扩展或包装）、搜索建议（客户端/服务端建议 API）、搜索历史（user-profile 关联）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
++  summary: 搜索语料扩展（tags / whyItMatters / uncertainties / 证据 summary）defer——FR12 点名「标题、解释摘要、主题名称」三样；扩展语料到其他字段 defer
++  evidence: Story 3.1 `searchPublished` 仅匹配三语料：(a) `published_hot_events.title`、(b) `published_hot_event_explanations.summary`（经新增 sibling `listPublishedHotEventExplanations`）、(c) `published_hot_event_themes.items[].label`（经 `listPublishedThemeMemberships`）。FR12 字面点名这三样。扩展到 `tags` / `whyItMatters` / `uncertainties` / 证据 `summary`（`published_hot_event_evidence.summary`）需 search-read 内加读 + 加匹配分支，且语料权重/分层需重新设计（tags 可能比 summary 更强或更弱）。epic-3-context 未列扩展为 V1。
++  resolution: 已于 Story 3.1 登记为语料扩展 defer——待真实搜索反馈「想搜标签/为什么重要/证据原文」时，扩 `searchPublished` 读取范围 + 加匹配分支 + 重新设计语料权重分层。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
++  summary: 拼音 / 模糊匹配 defer——V1 仅做大小写不敏感精确子串匹配，中文无分词、无拼音、无编辑距离模糊
++  evidence: Story 3.1 `searchPublished` 用 `haystack.toLowerCase().includes(q.toLowerCase())`。拉丁 toLowerCase 归一、中文子串字符级命中（无需分词）。但「xinpian」搜「芯片」（拼音）、「芯朋」搜「芯片」（编辑距离/模糊）不支持。拼音需引入 pinyin 转换库（pinyin-pro 等）+ 双向索引；模糊需编辑距离/相似度计算（成本高）。V1 无此需求。
++  resolution: 已于 Story 3.1 登记为拼音/模糊 defer——待真实搜索反馈「想用拼音搜中文」或「想容错拼写」时，引入拼音转换 + 索引或模糊匹配（编辑距离/embedding 相似度）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
++  summary: 全局 header 内联搜索框样式增强 / SearchBox 自动补全 defer——V1 搜索框在 NavList 内（原生 form），无 header 内联框、无自动补全
++  evidence: Story 3.1 `SearchBox` 渲染在 `NavList` 顶部（桌面 aside + 移动抽屉），为原生 HTML form GET 提交。移动 header `h-16` 空间紧（汉堡+logo 占满），未在 header 内联搜索框（需重构 header 布局，回归面大）。SearchBox 无自动补全（输入时下拉建议）——需客户端状态 + 建议 API。V1 原生 form 足覆盖 AC3（键盘 Enter + 触控提交）。
++  resolution: 已于 Story 3.1 登记为 header 内联框/自动补全 defer——待真实读者反馈「想在 header 直接搜」或「想要搜索建议下拉」时，评估 header 内联搜索框（重构 header 布局）+ 自动补全（客户端/服务端建议 API）。
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
++  summary: 搜索→详情→返回的显式「返回搜索结果」入口与 bfcache 不可恢复兜底 defer（3.4 own）——3.1 仅扩 allowlist 使既有 BackLink 恢复搜索 URL，3.4 再补显式入口与不可恢复边案
++  evidence: Story 3.1 把 `/search` 加入 `isValidListReturn` 的 `LIST_PATH_EXACT` allowlist（与 `/`、`/daily` 并列），使既有 `<BackLink/>` 经客户端导航从详情返回时恢复搜索 URL（query 保留）。但浏览器 back 经 bfcache 不可恢复时（`RESTORE_MARKER` 未写、bfcache restore 不重新触发 effect），scroll 可能丢；且 3.1 无独立「← 返回搜索结果」显式入口（语义复用「← 返回首页」BackLink，其文案在搜索来源下不变）。epic-3-context 明示「Story 3.4 ... search → detail → search return-path contract ... explicit back-to-search-results entry」归 3.4。
++  resolution: 已于 Story 3.1 登记为 3.4 own——Story 3.4 补显式「返回搜索结果」入口（文案/图标区分搜索来源）+ bfcache 不可恢复边案（`pageshow`/`history.scrollRestoration` 机制），并加专属 e2e 断言。
++
+diff --git a/apps/web/app/(public)/_components/list-context-memory.tsx b/apps/web/app/(public)/_components/list-context-memory.tsx
+index 132eda2..25a50e5 100644
+--- a/apps/web/app/(public)/_components/list-context-memory.tsx
++++ b/apps/web/app/(public)/_components/list-context-memory.tsx
+@@ -42,7 +42,7 @@ import { usePathname } from "next/navigation";
+  * `isValidListReturn` parses it with `new URL(raw, "http://localhost")` and
+  * requires `origin === "http://localhost"` (blocks `https://evil.com`,
+  * `//evil.com` protocol-relative, full external URLs) + pathname in an
+- * allowlist (`/`, `/daily` exact; `/topics/` prefix). Anything else
++ * allowlist (`/`, `/daily`, `/search` exact; `/topics/` prefix). Anything else
+  * (`/console/…`, `/events/…`, `/favorites`) is rejected → BackLink falls back
+  * to `/`. Tampered return-context never produces an off-site jump.
+  *
+@@ -97,10 +97,13 @@ export const SCROLL_KEY_PREFIX = "aguhot:scroll:" as const;
+ const LIST_PATH_PREFIXES = ["/topics/"] as const;
+ 
+ /**
+- * Exact list pathnames. `/` (homepage feed) and `/daily` (daily digest) are
+- * exact matches (they have no dynamic segment).
++ * Exact list pathnames. `/` (homepage feed), `/daily` (daily digest), and
++ * `/search` (search results, Story 3.1) are exact matches (they have no
++ * dynamic segment). `/search` was added in 3.1 to honor the 2.5 defer:
++ * navigating search → detail → BackLink must restore the originating search
++ * URL (query intact) rather than falling back to `/`.
+  */
+-const LIST_PATH_EXACT = ["/", "/daily"] as const;
++const LIST_PATH_EXACT = ["/", "/daily", "/search"] as const;
+ 
+ // --- pure helpers (sessionStorage wrapped in try/catch) ----------------------
+ 
+@@ -123,7 +126,7 @@ export function scrollKey(href: string): string {
+  *   - `raw` is a non-empty string,
+  *   - it parses to `origin === "http://localhost"` (same-origin under our
+  *     base),
+- *   - pathname is exactly `/` or `/daily`, OR starts with `/topics/`.
++ *   - pathname is exactly `/`, `/daily`, or `/search`, OR starts with `/topics/`.
+  *
+  * Any parse failure / disallowed pathname / cross-origin → false (BackLink
+  * falls back to `/`). This is the trust boundary; it cannot be simplified to
+diff --git a/apps/web/app/(public)/_components/public-nav.tsx b/apps/web/app/(public)/_components/public-nav.tsx
+index abd084e..83c3aa5 100644
+--- a/apps/web/app/(public)/_components/public-nav.tsx
++++ b/apps/web/app/(public)/_components/public-nav.tsx
+@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
+ import { useCallback, useEffect, useId, useRef, useState } from "react";
+ import { cn } from "@/lib/utils";
+ 
++import { SearchBox } from "./search-box";
++
+ /**
+  * Responsive public navigation — Story 1.2.
+  *
+@@ -56,6 +58,20 @@ function isActive(pathname: string, href: string): boolean {
+ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+   return (
+     <nav aria-label="主导航">
++      {/*
++        Global search entry (Story 3.1, FR12 AC3). A native HTML form (GET
++        /search) rendered at the TOP of NavList so it appears in BOTH the
++        desktop left-rail aside AND the mobile drawer (they share NavList).
++        This is NOT a PRIMARY_NAV_ITEMS entry — the navigation.spec asserts
++        "四个一级入口" (four primary entries); a `<form>` inside `<nav>` is not a
++        primary link, so the existing navigation e2e assertions stay green. The
++        form submits natively on Enter (keyboard) and the button meets min-h-11
++        (touch target, UX-DR13). See search-box.tsx for the implicit-label /
++        id-free rationale (two simultaneous instances).
++      */}
++      <div className="mb-4">
++        <SearchBox />
++      </div>
+       <ul className="space-y-1">
+         {PRIMARY_NAV_ITEMS.map((item) => (
+           <li key={item.href}>
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 9511ed9..2bf188c 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -9,7 +9,7 @@
+     "start": "next start",
+     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+     "lint": "eslint .",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search\"",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+     "e2e:detail": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @detail",
+@@ -20,6 +20,7 @@
+     "e2e:themes": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @themes",
+     "e2e:daily": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @daily",
+     "e2e:loop": "tsx e2e/seed-loop.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @loop",
++    "e2e:search": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search",
+     "seed:console": "tsx e2e/seed-console.ts",
+     "seed:feed": "tsx e2e/seed-feed.ts",
+     "seed:detail": "tsx e2e/seed-detail.ts",
+@@ -29,7 +30,8 @@
+     "seed:associations": "tsx e2e/seed-associations.ts",
+     "seed:themes": "tsx e2e/seed-themes.ts",
+     "seed:daily": "tsx e2e/seed-daily.ts",
+-    "seed:loop": "tsx e2e/seed-loop.ts"
++    "seed:loop": "tsx e2e/seed-loop.ts",
++    "seed:search": "tsx e2e/seed-search.ts"
+   },
+   "dependencies": {
+     "@aguhot/config": "workspace:*",
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 0a2a9de..45ad713 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -133,12 +133,15 @@ export type {
+ // Story 2.4 — published_daily_digests projection (sibling refreshPublishedDailyDigest,
+ // coverageDate-keyed) + getPublishedDailyDigest / listPublishedDailyDigestCoverageDates
+ // /daily-page queries).
++// Story 3.1 — listPublishedHotEventExplanations (sibling list fn surfacing
++// published_hot_event_explanations.summary for the search-read 3rd corpus).
+ export {
+   refreshPublishedReadModel,
+   listPublishedHotEvents,
+   getPublishedHotEventDetail,
+   listPublishedAssociations,
+   listPublishedThemeMemberships,
++  listPublishedHotEventExplanations,
+   refreshPublishedDailyDigest,
+   getPublishedDailyDigest,
+   listPublishedDailyDigestCoverageDates,
+@@ -161,6 +164,8 @@ export type {
+   PublishedHotEventTheme,
+   PublishedThemeMembershipRow,
+   ListPublishedThemeMembershipsOptions,
++  PublishedHotEventExplanationSummaryRow,
++  ListPublishedHotEventExplanationsOptions,
+   DailyDigestEntry,
+   PublishedDailyDigest,
+   RefreshPublishedDailyDigestOptions,
+@@ -278,3 +283,19 @@ export type {
+   GetLatestDigestOptions,
+   DigestRecord,
+ } from "./modules/digest/index.js";
++
++// search-read module (Story 3.1 — public search over published_* read models;
++// FR12 three-corpus coverage: published_hot_events.title +
++// published_hot_event_explanations.summary + published_hot_event_themes label.
++// Pure read: joins three filter-free sibling list fns from publish-orchestrator
++// and matches + ranks in JS — V1 in-memory filter pattern, FTS/tsvector deferred).
++export { searchPublished } from "./modules/search-read/index.js";
++export { SearchHitKind, EventMatchedField } from "./modules/search-read/index.js";
++export type {
++  SearchHitKindType,
++  EventMatchedFieldType,
++  SearchPublishedOptions,
++  EventSearchHit,
++  ThemeSearchHit,
++  SearchPublishedResult,
++} from "./modules/search-read/index.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/index.ts b/packages/core/src/modules/publish-orchestrator/index.ts
+index a64d98c..13326a8 100644
+--- a/packages/core/src/modules/publish-orchestrator/index.ts
++++ b/packages/core/src/modules/publish-orchestrator/index.ts
+@@ -22,6 +22,7 @@ export {
+   getPublishedHotEventDetail,
+   listPublishedAssociations,
+   listPublishedThemeMemberships,
++  listPublishedHotEventExplanations,
+   refreshPublishedDailyDigest,
+   getPublishedDailyDigest,
+   listPublishedDailyDigestCoverageDates,
+@@ -44,6 +45,8 @@ export type {
+   PublishedHotEventTheme,
+   PublishedThemeMembershipRow,
+   ListPublishedThemeMembershipsOptions,
++  PublishedHotEventExplanationSummaryRow,
++  ListPublishedHotEventExplanationsOptions,
+   DailyDigestEntry,
+   PublishedDailyDigest,
+   RefreshPublishedDailyDigestOptions,
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index dd68944..c52d9fe 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -72,12 +72,14 @@ import type {
+   GetPublishedHotEventDetailOptions,
+   ListPublishedAssociationsOptions,
+   ListPublishedDailyDigestCoverageDatesOptions,
++  ListPublishedHotEventExplanationsOptions,
+   ListPublishedHotEventsOptions,
+   ListPublishedThemeMembershipsOptions,
+   PublishedAssociationRow,
+   PublishedDailyDigest,
+   PublishedEvidenceRow,
+   PublishedHotEventDetail,
++  PublishedHotEventExplanationSummaryRow,
+   PublishedHotEventSummary,
+   PublishedThemeMembershipRow,
+   RefreshPublishedDailyDigestOptions,
+@@ -856,6 +858,50 @@ export async function listPublishedThemeMemberships(
+   }));
+ }
+ 
++/**
++ * List all currently-published explanation summaries — the hotEventId→summary
++ * map the public search-read path uses to match against explanation summary text
++ * (Story 3.1).
++ *
++ * This is a SIBLING list fn to listPublishedAssociations /
++ * listPublishedThemeMemberships: the search-read module (Story 3.1) joins all
++ * three corpora (event titles from listPublishedHotEvents, explanation summaries
++ * from this fn, theme labels from listPublishedThemeMemberships) in JS and
++ * applies case-insensitive substring matching (mirroring the 1.7 filterByWindow
++ * / 2.2 association-join / 2.3 theme-derive in-memory filter pattern). FR12 names
++ * "标题、解释摘要和主题名称" as the three search corpora; without this fn the
++ * explanation summary corpus would be unreachable from the public read path.
++ *
++ * `listPublishedHotEvents` / `listPublishedAssociations` /
++ * `listPublishedThemeMemberships` signatures stay filter-free and unchanged.
++ * V1 published volume is tiny, so a full read is the ponytail choice over a SQL
++ * filter (FTS/tsvector/GIN deferred — real query load has not appeared).
++ *
++ * Returns `{ hotEventId, summary }` for every published_hot_event_explanations
++ * row. It only SELECTs published_hot_event_explanations — never
++ * explanation_versions / hot_events / evidence_* (AD-3). Row existence =
++ * currently published explanation (no status column). An event with no projected
++ * explanation has no row here, so it is simply absent from the summary corpus
++ * (its title/theme can still match via the other two corpora).
++ */
++export async function listPublishedHotEventExplanations(
++  options: ListPublishedHotEventExplanationsOptions,
++): Promise<PublishedHotEventExplanationSummaryRow[]> {
++  const { prisma } = options;
++
++  const rows = await prisma.publishedHotEventExplanation.findMany({
++    select: {
++      hotEventId: true,
++      summary: true,
++    },
++  });
++
++  return rows.map((r) => ({
++    hotEventId: r.hotEventId,
++    summary: r.summary,
++  }));
++}
++
+ // --- Story 2.4: daily-digest projection + reads -------------------------------
+ 
+ /**
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index 4434320..188f494 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -323,6 +323,38 @@ export interface ListPublishedThemeMembershipsOptions {
+   traceId: string;
+ }
+ 
++// --- Story 3.1: public explanation summary read types (search 3rd corpus) -----
++
++/**
++ * One row of listPublishedHotEventExplanations — the hotEventId→summary
++ * projection the public search-read path uses to match explanation summaries
++ * (Story 3.1). FR12 names three search corpora: event titles, explanation
++ * summaries, and theme names. The first corpus comes from
++ * listPublishedHotEvents (title); the third from listPublishedThemeMemberships
++ * (theme label). This sibling list fn surfaces `published_hot_event_explanations.summary`
++ * so the search-read module can join all three corpora in JS (mirroring the
++ * 2.2 association + 2.3 theme sibling-list pattern). Row existence = currently
++ * published explanation (no status column, AD-3).
++ */
++export interface PublishedHotEventExplanationSummaryRow {
++  hotEventId: string;
++  summary: string;
++}
++
++/**
++ * Options for listPublishedHotEventExplanations. `{ prisma, traceId }` mirrors
++ * ListPublishedAssociationsOptions / ListPublishedThemeMembershipsOptions. There
++ * is deliberately NO filter parameter: the query returns all published
++ * explanation summary rows and the caller (search-read) joins + matches in JS
++ * (same design as the other sibling list fns — V1 scale is tiny, filtering is
++ * a search-read concern). ponytail: no pre-embedded consumerless filter
++ * parameter.
++ */
++export interface ListPublishedHotEventExplanationsOptions {
++  prisma: PrismaClient;
++  traceId: string;
++}
++
+ // --- Story 2.4: public daily-digest read types --------------------------------
+ 
+ /**
+diff --git a/packages/core/src/modules/search-read/types.ts b/packages/core/src/modules/search-read/types.ts
+new file mode 100644
+index 0000000..3ff255f
+--- /dev/null
++++ b/packages/core/src/modules/search-read/types.ts
+@@ -0,0 +1,99 @@
++/**
++ * search-read domain types: the public search over published_* read models
++ * (Story 3.1, FR12).
++ *
++ * FR12: "用户可以搜索热点事件、主题页或相关关键词，结果覆盖标题、解释摘要和
++ * 主题名称". searchPublished reads three corpora from the published_* read models
++ * (AD-3) and returns grouped results { events, themes } ranked by a blend of
++ * relevance (title hit > summary hit) and recency (latestEvidenceAt DESC within
++ * each tier).
++ *
++ * This module never writes anything (pure read). It only orchestrates reads of
++ * listPublishedHotEvents + listPublishedHotEventExplanations +
++ * listPublishedThemeMemberships (all filter-free sibling list fns owned by
++ * publish-orchestrator), then matches + ranks in JS. Chinese-friendly: substring
++ * match via String.prototype.includes + toLowerCase (no FTS/tsvector/ILIKE —
++ * deferred; Chinese substring character-level match is correct without word
++ * segmentation).
++ */
++
++import type { PrismaClient } from "../../../generated/client.js";
++
++/**
++ * Options for searchPublished. `{ prisma, traceId, query }` — `query` is the
++ * raw search string the caller intends to match (the web layer trims + truncates
++ * before calling; this fn also trims defensively and short-circuits on empty).
++ */
++export interface SearchPublishedOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  query: string;
++}
++
++/**
++ * The kind of hit — "event" (matched title or explanation summary) or "theme"
++ * (matched theme label). Drives the grouped { events, themes } return shape.
++ */
++export const SearchHitKind = {
++  Event: "event",
++  Theme: "theme",
++} as const;
++
++export type SearchHitKindType = (typeof SearchHitKind)[keyof typeof SearchHitKind]
++
++/**
++ * Which corpus field an event hit matched. Drives the two-tier relevance ranking:
++ * a "title" hit is tier 0 (strong — the user's query is in the event name), a
++ * "summary" hit is tier 1 (weaker — the query is in the AI-generated explanation
++ * body). An event matching both title and summary counts once at tier 0
++ * (strongest signal wins, no duplicates).
++ */
++export const EventMatchedField = {
++  Title: "title",
++  Summary: "summary",
++} as const;
++
++export type EventMatchedFieldType =
++  (typeof EventMatchedField)[keyof typeof EventMatchedField]
++
++/**
++ * One published hot-event search hit. Carries the EventCard-needed fields
++ * (hotEventId / title / evidenceCount / latestEvidenceAt / publishedAt) plus
++ * `matchedField` so the page could (in a future highlight tier) distinguish
++ * title vs summary hits. Tier-0 (title) hits rank above tier-1 (summary) hits;
++ * within each tier, latestEvidenceAt DESC (recency).
++ */
++export interface EventSearchHit {
++  kind: typeof SearchHitKind.Event;
++  hotEventId: string;
++  title: string;
++  evidenceCount: number;
++  latestEvidenceAt: Date;
++  publishedAt: Date;
++  matchedField: EventMatchedFieldType;
++}
++
++/**
++ * One published theme search hit. `memberCount` is the number of published
++ * events whose theme membership includes this slug (the theme's live breadth).
++ * Themes rank by memberCount DESC (broader themes first), then label ASC
++ * (stable, alphabetical within equal breadth).
++ */
++export interface ThemeSearchHit {
++  kind: typeof SearchHitKind.Theme;
++  slug: string;
++  label: string;
++  memberCount: number;
++}
++
++/**
++ * The grouped search result. `events` and `themes` are each already ranked
++ * (events: tier ASC then latestEvidenceAt DESC; themes: memberCount DESC then
++ * label ASC). Empty arrays when there are no hits (the page renders the no-match
++ * state). `query` echoes the matched query (trimmed) for display + shareability.
++ */
++export interface SearchPublishedResult {
++  query: string;
++  events: EventSearchHit[];
++  themes: ThemeSearchHit[];
++}
+diff --git a/packages/core/src/modules/search-read/search-service.ts b/packages/core/src/modules/search-read/search-service.ts
+new file mode 100644
+index 0000000..cab71c0
+--- /dev/null
++++ b/packages/core/src/modules/search-read/search-service.ts
+@@ -0,0 +1,211 @@
++/**
++ * searchPublished: public search over published_* read models — Story 3.1 (FR12).
++ *
++ * Reads THREE corpora (FR12: "标题、解释摘要和主题名称"):
++ *   - event titles from listPublishedHotEvents (published_hot_events.title)
++ *   - explanation summaries from listPublishedHotEventExplanations
++ *     (published_hot_event_explanations.summary — the sibling list fn 3.1 adds
++ *     to surface this corpus)
++ *   - theme labels from listPublishedThemeMemberships
++ *     (published_hot_event_themes.items[].label)
++ *
++ * All three reads are filter-free sibling list fns owned by publish-orchestrator
++ * (AD-3: public reads only published_* read models). searchPublished joins them
++ * in JS and applies case-insensitive substring matching — the same V1 in-memory
++ * filter pattern as 1.7 filterByWindow / 2.2 association join / 2.3 theme derive
++ * ("V1 published volume is tiny, filtering is a UI concern"). Chinese-friendly:
++ * `haystack.toLowerCase().includes(q.toLowerCase())` — Chinese has no case so
++ * toLowerCase is a no-op on CJK and normalizes Latin; substring character-level
++ * match is correct without word segmentation (deferred: FTS/tsvector/GIN +
++ * zhparser/jieba when real query load appears).
++ *
++ * Ranking (FR12 AC1 "按相关性与时间综合排序"):
++ *   - events: two tiers — tier 0 (title hit, strong) before tier 1 (summary hit,
++ *     weaker); within a tier, latestEvidenceAt DESC (recency). An event matching
++ *     both title and summary counts once at tier 0 (strongest signal wins, no
++ *     duplicate).
++ *   - themes: memberCount DESC (broader themes first), then label ASC (stable
++ *     alphabetical tiebreaker).
++ *
++ * Only published_* read models are read — never hot_events / explanation_versions
++ * / event_theme_sets / evidence_* (AD-3). Row existence = currently published
++ * (no status column). A taken-down event's row is deleted from published_* → it
++ * automatically disappears from search (no extra filter, AD-8).
++ */
++
++import {
++  listPublishedHotEventExplanations,
++  listPublishedHotEvents,
++  listPublishedThemeMemberships,
++} from "../publish-orchestrator/index.js";
++import type {
++  EventMatchedFieldType,
++  EventSearchHit,
++  SearchPublishedOptions,
++  SearchPublishedResult,
++  ThemeSearchHit,
++} from "./types.js";
++import { EventMatchedField, SearchHitKind } from "./types.js";
++
++/**
++ * Search published events + themes by case-insensitive substring match.
++ *
++ * Returns grouped { events, themes } ranked by relevance + recency. An empty
++ * query (after trim) short-circuits to empty result (the page layer also guards,
++ * but this is a defensive double-check so the core fn is safe to call directly).
++ */
++export async function searchPublished(
++  options: SearchPublishedOptions,
++): Promise<SearchPublishedResult> {
++  const q = options.query.trim();
++  if (q === "") {
++    return { query: "", events: [], themes: [] };
++  }
++  const qLower = q.toLowerCase();
++
++  // Concurrently read all three corpora (all filter-free sibling list fns; V1
++  // published volume is tiny so three reads + an in-memory join is the ponytail
++  // choice over SQL union / FTS / per-corpus indexes).
++  const [events, explanations, memberships] = await Promise.all([
++    listPublishedHotEvents({ prisma: options.prisma, traceId: options.traceId }),
++    listPublishedHotEventExplanations({
++      prisma: options.prisma,
++      traceId: options.traceId,
++    }),
++    listPublishedThemeMemberships({
++      prisma: options.prisma,
++      traceId: options.traceId,
++    }),
++  ]);
++
++  // Build a hotEventId → summary lookup for the explanation corpus. Events
++  // without a projected explanation row simply have no summary to match (their
++  // title/theme can still hit via the other corpora).
++  const summaryByEvent = new Map<string, string>();
++  for (const row of explanations) {
++    summaryByEvent.set(row.hotEventId, row.summary);
++  }
++
++  // --- Event hits: two-tier relevance (title > summary), recency within tier ---
++  const eventHits: EventSearchHit[] = [];
++  for (const ev of events) {
++    const matchedField = matchEvent(
++      ev.title,
++      summaryByEvent.get(ev.hotEventId) ?? null,
++      qLower,
++    );
++    if (matchedField !== null) {
++      eventHits.push({
++        kind: SearchHitKind.Event,
++        hotEventId: ev.hotEventId,
++        title: ev.title,
++        evidenceCount: ev.evidenceCount,
++        latestEvidenceAt: ev.latestEvidenceAt,
++        publishedAt: ev.publishedAt,
++        matchedField,
++      });
++    }
++  }
++  eventHits.sort(rankEventHit);
++
++  // --- Theme hits: aggregate slug → { label, memberEventIds }, match label ---
++  // First pass: aggregate across all membership rows. A slug shared by multiple
++  // events is one theme hit with memberCount = number of published events that
++  // carry it (the theme's live breadth). label takes the first-seen ThemeRef.label
++  // for that slug (listPublishedThemeMemberships is ordered hotEventId ASC so
++  // first-seen is deterministic across loads).
++  const slugToLabel = new Map<string, string>();
++  const slugToMembers = new Map<string, Set<string>>();
++  for (const m of memberships) {
++    for (const item of m.items) {
++      // Skip items with an empty label/slug (defensive; normalizeThemeItems
++      // already enforces non-empty at write time, so this is belt-and-suspenders
++      // against any corrupt Json read).
++      if (
++        typeof item.slug !== "string" ||
++        item.slug === "" ||
++        typeof item.label !== "string" ||
++        item.label === ""
++      ) {
++        continue;
++      }
++      if (!slugToLabel.has(item.slug)) {
++        slugToLabel.set(item.slug, item.label);
++      }
++      let memberSet = slugToMembers.get(item.slug);
++      if (memberSet === undefined) {
++        memberSet = new Set<string>();
++        slugToMembers.set(item.slug, memberSet);
++      }
++      memberSet.add(m.hotEventId);
++    }
++  }
++
++  const themeHits: ThemeSearchHit[] = [];
++  for (const [slug, label] of slugToLabel) {
++    if (!matchTheme(label, qLower)) continue;
++    const members = slugToMembers.get(slug);
++    themeHits.push({
++      kind: SearchHitKind.Theme,
++      slug,
++      label,
++      memberCount: members?.size ?? 0,
++    });
++  }
++  themeHits.sort((a, b) => {
++    // memberCount DESC (broader themes first).
++    const byCount = b.memberCount - a.memberCount;
++    if (byCount !== 0) return byCount;
++    // label ASC (stable alphabetical tiebreaker).
++    return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
++  });
++
++  return { query: q, events: eventHits, themes: themeHits };
++}
++
++/**
++ * Decide whether an event matches the query, and on which field. Returns
++ * "title" (tier 0, strong) if the title contains q, else "summary" (tier 1,
++ * weaker) if the explanation summary contains q, else null (no hit). A title
++ * hit takes precedence over a summary hit so an event matching both counts
++ * once at the stronger tier (no duplicate).
++ *
++ * `qLower` is the already-lowercased query (caller pre-computes once).
++ */
++function matchEvent(
++  title: string,
++  summary: string | null,
++  qLower: string,
++): EventMatchedFieldType | null {
++  if (title.toLowerCase().includes(qLower)) {
++    return EventMatchedField.Title;
++  }
++  if (summary !== null && summary.toLowerCase().includes(qLower)) {
++    return EventMatchedField.Summary;
++  }
++  return null;
++}
++
++/**
++ * Case-insensitive substring match for a theme label. Chinese substring
++ * character-level match (toLowerCase is a no-op on CJK); Latin normalized via
++ * toLowerCase.
++ */
++function matchTheme(label: string, qLower: string): boolean {
++  return label.toLowerCase().includes(qLower);
++}
++
++/**
++ * Tier-then-recency comparator for event hits. tier 0 (title) sorts before
++ * tier 1 (summary); within a tier, latestEvidenceAt DESC (more recently updated
++ * first). Deterministic tiebreaker by hotEventId ASC so two events sharing the
++ * same tier + same latestEvidenceAt resolve to a stable DOM order across loads.
++ */
++function rankEventHit(a: EventSearchHit, b: EventSearchHit): number {
++  const tierA = a.matchedField === EventMatchedField.Title ? 0 : 1;
++  const tierB = b.matchedField === EventMatchedField.Title ? 0 : 1;
++  if (tierA !== tierB) return tierA - tierB;
++  const byTime = b.latestEvidenceAt.getTime() - a.latestEvidenceAt.getTime();
++  if (byTime !== 0) return byTime;
++  return a.hotEventId < b.hotEventId ? -1 : a.hotEventId > b.hotEventId ? 1 : 0;
++}
+diff --git a/packages/core/src/modules/search-read/index.ts b/packages/core/src/modules/search-read/index.ts
+new file mode 100644
+index 0000000..a102df3
+--- /dev/null
++++ b/packages/core/src/modules/search-read/index.ts
+@@ -0,0 +1,26 @@
++/**
++ * search-read module barrel — Story 3.1 (FR12 public search).
++ *
++ * Owns the public search read path over the published_* read models. Exposes
++ * searchPublished, which joins listPublishedHotEvents +
++ * listPublishedHotEventExplanations + listPublishedThemeMemberships (all
++ * filter-free sibling list fns owned by publish-orchestrator) and matches +
++ * ranks in JS. The Prisma client lives one level up and is re-exported from the
++ * package barrel.
++ *
++ * This module NEVER writes anything (pure read) and never reads raw
++ * hot_events / explanation_versions / event_theme_sets / evidence_* tables —
++ * only the published_* read models (AD-3). Row existence = currently published
++ * (no status column); a taken-down event automatically disappears from search.
++ */
++
++export { searchPublished } from "./search-service.js";
++export { SearchHitKind, EventMatchedField } from "./types.js";
++export type {
++  SearchHitKindType,
++  EventMatchedFieldType,
++  SearchPublishedOptions,
++  EventSearchHit,
++  ThemeSearchHit,
++  SearchPublishedResult,
++} from "./types.js";
+diff --git a/apps/web/app/(public)/_components/search-box.tsx b/apps/web/app/(public)/_components/search-box.tsx
+new file mode 100644
+index 0000000..972a6d8
+--- /dev/null
++++ b/apps/web/app/(public)/_components/search-box.tsx
+@@ -0,0 +1,87 @@
++import { cn } from "@/lib/utils";
++
++/**
++ * Global search entry — Story 3.1 (FR12).
++ *
++ * A native HTML `<form method="get" action="/search">` with an
++ * `<input type="search" name="q">`. No client JS, no "use client" — this is a
++ * server component rendered as a static JSX subtree inside public-nav.tsx (which
++ * is itself "use client" but treats SearchBox as a static child). Keyboard Enter
++ * triggers the browser's native form submission → `GET /search?q=…` → the
++ * server-rendered search results page. The query lives entirely in the URL
++ * (`?q=`): shareable, back/forward works, refresh keeps the query, zero
++ * useState/useReducer (consistent with the feed's `?window=` URL-driven filter).
++ *
++ * Rendered at the TOP of NavList (both the desktop left-rail aside AND the
++ * mobile drawer — they share NavList), so the search entry is globally reachable
++ * from either surface (AC3 keyboard + touch). It is NOT a PRIMARY_NAV_ITEMS
++ * entry: the navigation.spec asserts "四个一级入口" (four primary entries) and
++ * adding a fifth would break that. A `<form>` inside `<nav>` is not a primary
++ * link, so the existing navigation e2e assertions stay green.
++ *
++ * Implicit label wrapping: `<label className="sr-only">搜索 <input …/></label>`.
++ * Explicit `htmlFor`/`id` is avoided because SearchBox renders in TWO places
++ * simultaneously (desktop aside + mobile drawer) — duplicate ids would be
++ * invalid HTML. Implicit wrapping needs no id and works for both instances.
++ * `useId()` is unavailable here (server component, no hooks), so implicit
++ * wrapping is the id-free choice.
++ *
++ * Touch target (UX-DR13 / FR12 AC3): both the input and the submit button have
++ * `min-h-11` (44px) so the tap target meets the minimum on mobile. Tokens use
++ * the existing resolved surface/ink/border tokens (bg-surface-raised /
++ * border-border-hairline / ink-*).
++ */
++
++export interface SearchBoxProps {
++  /**
++   * Prefilled query (uncontrolled). Used on the /search page so the reader can
++   * change the word in place. `defaultValue` (NOT `value`) keeps this an
++   * uncontrolled input — SSR-safe (no hydration mismatch) and no client state.
++   * Omitted on the nav instances (no prefill).
++   */
++  defaultValue?: string;
++  /**
++   * Optional id suffix. Unused today (implicit-label form is id-free); reserved
++   * for a future single-instance variant. When omitted, no id is emitted.
++   */
++  className?: string;
++}
++
++export function SearchBox({ defaultValue, className }: SearchBoxProps) {
++  return (
++    <form
++      role="search"
++      method="get"
++      action="/search"
++      aria-label="搜索热点与主题"
++      className={cn("space-y-1", className)}
++    >
++      {/*
++        Implicit label wrapping the input: the `<label>` text "搜索" is
++        sr-only (visible to screen readers, invisible visually). No `htmlFor`/
++        `id` — avoids duplicate-id invalid HTML when SearchBox renders in both
++        the desktop aside and the mobile drawer at once. Implicit wrapping
++        associates the label with the nested input.
++      */}
++      <label className="sr-only">搜索热点事件与主题</label>
++      <input
++        name="q"
++        type="search"
++        defaultValue={defaultValue ?? ""}
++        placeholder="搜索热点 / 主题"
++        autoComplete="off"
++        className={cn(
++          "block min-h-11 w-full rounded-md border border-border-hairline bg-surface-raised px-3 py-2 text-base text-ink-primary placeholder:text-ink-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
++        )}
++      />
++      <button
++        type="submit"
++        className={cn(
++          "block min-h-11 w-full rounded-md bg-brand px-3 py-2 text-base font-semibold text-brand-foreground hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
++        )}
++      >
++        搜索
++      </button>
++    </form>
++  );
++}
+diff --git a/apps/web/app/(public)/search/page.tsx b/apps/web/app/(public)/search/page.tsx
+new file mode 100644
+index 0000000..9207a7e
+--- /dev/null
++++ b/apps/web/app/(public)/search/page.tsx
+@@ -0,0 +1,200 @@
++import type { Metadata } from "next";
++import Link from "next/link";
++
++import { FilterPill } from "@/components/chips";
++import {
++  getPrisma,
++  newTraceId,
++  searchPublished,
++} from "@aguhot/core";
++
++import { EventCard } from "../_components/event-card";
++import { SearchBox } from "../_components/search-box";
++
++export const dynamic = "force-dynamic";
++
++export const metadata: Metadata = {
++  title: "搜索",
++};
++
++/**
++ * Maximum query length after trim. Queries longer than this are truncated
++ * (silent — no error). Guards against pathological input amplifying in-memory
++ * match cost, and bounds the URL length. 128 chars is generous for a hot-event
++ * / theme keyword search (Chinese or Latin).
++ */
++const MAX_QUERY_LEN = 128 as const;
++
++interface PageProps {
++  searchParams: Promise<{ q?: string }>;
++}
++
++/**
++ * Trim + truncate the raw `q` search param to a safe matchable query. Returns
++ * the empty string for absent / whitespace-only / empty-after-trim input (the
++ * page renders the empty-query guide state and does NOT call searchPublished).
++ * This is the trust-boundary input validation: public input, never trust raw.
++ */
++function parseSearchQuery(raw: string | undefined): string {
++  if (typeof raw !== "string") return "";
++  const trimmed = raw.trim();
++  if (trimmed === "") return "";
++  // Truncate to MAX_QUERY_LEN (silent — no error surfaced). Slice works on
++  // UTF-16 code units which for Chinese BMP characters is correct (one code
++  // unit per CJK character).
++  return trimmed.length > MAX_QUERY_LEN ? trimmed.slice(0, MAX_QUERY_LEN) : trimmed;
++}
++
++/**
++ * Public search results page — Story 3.1 (FR12).
++ *
++ * Reads ONLY published_* read models (AD-3) via searchPublished (which joins
++ * listPublishedHotEvents + listPublishedHotEventExplanations +
++ * listPublishedThemeMemberships in JS). Never reads hot_events /
++ * explanation_versions / event_theme_sets / evidence_* (AD-3). Anonymous by
++ * default (AD-8): no login dependency anywhere on the search path.
++ *
++ * Why force-dynamic + @aguhot/core import is safe for the build:
++ *   - force-dynamic marks the route dynamic so Next evaluates it at REQUEST
++ *     time, not BUILD time. getPrisma() reads DATABASE_URL at runtime; that
++ *     call is never reached during `next build`, so the build stays
++ *     DATABASE_URL-free (same mechanism as the home / detail / topics / daily
++ *     routes).
++ *
++ * Three honest states (NFR: never fabricate):
++ *   (1) Empty query (no q / empty / pure whitespace) → render SearchBox +
++ *       "输入关键词搜索热点事件与主题。" guide. Does NOT render results or
++ *       no-match text.
++ *   (2) Non-empty query, zero hits → "未找到与「{q}」相关的热点或主题。"
++ *       no-match text + a link back home + a SearchBox (so the reader can try a
++ *       different word in place).
++ *   (3) Non-empty query with hits → grouped "热点事件 (N)" section mapping
++ *       EventCard (reused, link /events/{id}) + "主题 (N)" section mapping
++ *       FilterPill (reused, link /topics/{slug}). Event hits are ranked by
++ *       searchPublished (title tier 0 > summary tier 1, recency within tier);
++ *       theme hits by memberCount DESC, label ASC.
++ *
++ * getPrisma throws when DATABASE_URL is missing at runtime → loud failure (the
++ * error propagates to a route error), NOT a silent empty state. DB is core
++ * infra; its absence is an incident, not graceful degradation (same as home /
++ * detail / topics / daily).
++ */
++export default async function SearchPage({ searchParams }: PageProps) {
++  const { q: raw } = await searchParams;
++  const q = parseSearchQuery(raw);
++
++  // Empty query → guide state. Do NOT call searchPublished (no DB read needed).
++  if (q === "") {
++    return (
++      <div className="mx-auto max-w-3xl px-6 py-12">
++        <header className="space-y-4">
++          <h1 className="text-4xl font-bold tracking-tight text-ink-primary">
++            搜索
++          </h1>
++          <p className="text-lg text-ink-secondary">搜索热点事件与主题。</p>
++        </header>
++        <section className="mt-8">
++          <SearchBox />
++        </section>
++        <p className="mt-8 text-sm text-ink-tertiary">
++          输入关键词搜索热点事件与主题。
++        </p>
++      </div>
++    );
++  }
++
++  // Request-time DB read. getPrisma() throws loudly if DATABASE_URL is missing —
++  // that is intentional (DB is core infra, not graceful-degradation territory).
++  const prisma = getPrisma();
++  const traceId = newTraceId();
++  const result = await searchPublished({ prisma, traceId, query: q });
++
++  const hasHits = result.events.length > 0 || result.themes.length > 0;
++
++  // No-match state (AC2): honest no-result feedback + a path back home + an
++  // in-place SearchBox so the reader can change keywords.
++  if (!hasHits) {
++    return (
++      <div className="mx-auto max-w-3xl px-6 py-12">
++        <header className="space-y-4">
++          <h1 className="text-4xl font-bold tracking-tight text-ink-primary">
++            搜索
++          </h1>
++        </header>
++        <section className="mt-8">
++          <SearchBox defaultValue={q} />
++        </section>
++        <div className="mt-12 space-y-3">
++          <p className="text-ink-secondary">
++            未找到与「{q}」相关的热点或主题。
++          </p>
++          <Link
++            href="/"
++            className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
++          >
++            返回首页
++          </Link>
++        </div>
++      </div>
++    );
++  }
++
++  // Hit state: grouped events + themes.
++  const now = new Date();
++  return (
++    <div className="mx-auto max-w-3xl px-6 py-12">
++      <header className="space-y-4">
++        <h1 className="text-4xl font-bold tracking-tight text-ink-primary">
++          搜索
++        </h1>
++      </header>
++
++      {/* Persistent search box so the reader can refine the query in place. */}
++      <section className="mt-8">
++        <SearchBox defaultValue={q} />
++      </section>
++
++      {/* Event hits (AC1): title tier 0 > summary tier 1, recency within tier. */}
++      {result.events.length > 0 ? (
++        <section className="mt-10">
++          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
++            热点事件 ({result.events.length})
++          </h2>
++          <ul role="list" className="mt-4 space-y-3">
++            {result.events.map((ev) => (
++              <EventCard
++                key={ev.hotEventId}
++                hotEventId={ev.hotEventId}
++                title={ev.title}
++                evidenceCount={ev.evidenceCount}
++                latestEvidenceAt={ev.latestEvidenceAt}
++                publishedAt={ev.publishedAt}
++                now={now}
++              />
++            ))}
++          </ul>
++        </section>
++      ) : null}
++
++      {/* Theme hits (AC1): memberCount DESC, label ASC. FilterPill links to
++          /topics/{slug}. */}
++      {result.themes.length > 0 ? (
++        <section className="mt-10">
++          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
++            主题 ({result.themes.length})
++          </h2>
++          <div className="mt-4 flex flex-wrap gap-2">
++            {result.themes.map((th) => (
++              <FilterPill
++                key={th.slug}
++                href={`/topics/${encodeURIComponent(th.slug)}`}
++              >
++                {th.label} · {th.memberCount}
++              </FilterPill>
++            ))}
++          </div>
++        </section>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/apps/web/e2e/seed-search.ts b/apps/web/e2e/seed-search.ts
+new file mode 100644
+index 0000000..e302a04
+--- /dev/null
++++ b/apps/web/e2e/seed-search.ts
+@@ -0,0 +1,427 @@
++/**
++ * Seed script for the @search e2e — Story 3.1 (FR12 public search).
++ *
++ * Run with: pnpm --filter web seed:search
++ *           (tsx e2e/seed-search.ts)
++ *
++ * Self-contained: produces published events that cover the three FR12 search
++ * corpora + the relevance-tier ranking row + Latin case-insensitivity + a
++ * dedicated takedown target:
++ *   - (A) 标题命中 (title hit): a published event whose TITLE contains the
++ *     title-query word 「芯片」 AND the shared tiering word 「稀土」. Tier 0
++ *     (strong). Carrying 「稀土」 in the title lets the same event serve as the
++ *     TITLE-tier side of the relevance-tiering assertion (it is the OLDER
++ *     event). 「芯片」 still backs the standalone title-hit test.
++ *   - (B) 摘要命中 (summary hit): a published event whose title does NOT contain
++ *     「稀土」 but whose explanation summary DOES. Tier 1 (weaker). This requires
++ *     a SEED-ONLY deterministic rewrite: `generateExplanation` derives its
++ *     summary from the title + latest evidence summary (deterministic template),
++ *     so to guarantee the summary contains 「稀土」 while the title does not, we
++ *     run the full pipeline (clusterEvents → generateExplanation →
++ *     decideReview(approve) → refreshPublishedReadModel(publish)) and then
++ *     DIRECTLY upsert the `published_hot_event_explanations` row with a
++ *     deterministic summary containing 「稀土」. This is a TEST-ONLY seed
++ *     fixture, NOT a production behavior (production explanations are always
++ *     derived via generateExplanation + operator review; the seed bypasses that
++ *     purely to create a deterministic summary-hit corpus). Comment below flags
++ *     this clearly. Event (B) is the NEWER event and serves as the SUMMARY-tier
++ *     side of the relevance-tiering assertion.
++ *   - (C) 主题命中 (theme hit): published events themed via StubThemeAdapter
++ *     (test-only) so the stub theme label 「芯片供应链」 is reachable by
++ *     searching 「半导体」 — wait, the stub label does not contain 「半导体」.
++ *     Instead we theme event (A) and search for a substring of the stub label
++ *     (「芯片」) so the theme hit is reachable via the theme corpus. The theme
++ *     member count = number of published events sharing the stub slug.
++ *   - (D) 拉丁大小写 (Latin case-insensitivity): a published event whose TITLE
++ *     contains the Latin token 「GPU」. Searching 「gpu」 (lowercase) or 「GPU」
++ *     must both hit it (toLowerCase normalization). Chinese has no case, so a
++ *     Latin token is required to exercise this matrix row.
++ *   - (E) 下线目标 (takedown target): a DEDICATED published event used only by
++ *     the takedown test (AD-3/AD-8). Its title contains takedownQuery 「光伏」.
++ *     The takedown test (run LAST in the serial describe) searches it, then
++ *     calls refreshPublishedReadModel({ action: "takedown" }) to delete its
++ *     published_* rows, then re-searches and asserts it is gone. No other test
++ *     depends on it, so taking it down cannot break siblings.
++ *
++ * Ranking row (AC1 relevance tiering): the shared tiering word 「稀土」 hits
++ * event (A) in its TITLE (tier 0) AND event (B) only in its explanation SUMMARY
++ * (tier 1); event (A) is OLDER than event (B). The spec asserts (A) renders
++ * BEFORE (B) — proving title tier > summary tier regardless of recency.
++ *
++ * Returns the dynamic ids + titles + the deterministic query strings so
++ * search.spec.ts can drive the assertions.
++ *
++ * Requires DATABASE_URL pointing at local PG. Does NOT touch seed-console.ts,
++ * seed-feed.ts, seed-detail.ts, seed-market-reaction.ts, seed-associations.ts,
++ * seed-themes.ts, seed-daily.ts, seed-loop.ts, or any other seed (zero-change
++ * contract). Clears the full table set so re-runs are deterministic.
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateExplanation,
++  generateThemes,
++  getPrisma,
++  listPendingCandidates,
++  newTraceId,
++  refreshPublishedReadModel,
++  resetPrisma,
++  STUB_THEME_LABEL,
++  STUB_THEME_SLUG,
++  StubThemeAdapter,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++const HOUR = 60 * 60 * 1000;
++const DAY = 24 * HOUR;
++
++/**
++ * Query strings used by the spec. Kept as exported consts so the spec can
++ * import them and stay in sync with the seed.
++ */
++export const TITLE_QUERY = "芯片";
++export const SUMMARY_QUERY = "稀土";
++/**
++ * Shared tiering word: appears in event (A)'s TITLE (tier 0) AND event (B)'s
++ * explanation SUMMARY (tier 1), but NOT in event (B)'s title. Event (A) is
++ * OLDER than event (B). Searching this word must render (A) before (B) — title
++ * tier overrides recency.
++ */
++export const TIERING_QUERY = "稀土";
++/**
++ * Substring of STUB_THEME_LABEL (「芯片供应链」) — exercises theme corpus.
++ */
++export const THEME_QUERY = "供应链";
++/** Latin token seeded into a published event's title for case-insensitive tests. */
++export const LATIN_TOKEN = "GPU";
++/** Query matching the dedicated takedown-target event's title. */
++export const TAKEDOWN_QUERY = "光伏";
++/** Deterministic summary injected into the summary-hit event's published row. */
++const SUMMARY_HIT_INJECTED_SUMMARY = "本轮稀土出口配额调整影响下游磁材与电机供应链。";
++
++export async function seedSearchContext(): Promise<{
++  titleHitId: string;
++  titleHitTitle: string;
++  summaryHitId: string;
++  summaryHitTitle: string;
++  tieringTitleHitId: string;
++  tieringSummaryHitId: string;
++  tieringQuery: string;
++  latinToken: string;
++  latinHitId: string;
++  takedownHitId: string;
++  takedownQuery: string;
++  themeSlug: string;
++  themeLabel: string;
++  themeMemberCount: number;
++  titleQuery: string;
++  summaryQuery: string;
++  themeQuery: string;
++}> {
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  // Clean the full table set (same superset as seed-themes / seed-loop, order
++  // respects FK constraints). The 2.4 digest tables are included for uniform
++  // reset even though search does not read them. Deterministic re-runs; does
++  // NOT touch other seeds.
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++
++  const source = await prisma.evidenceSource.create({
++    data: {
++      id: newTraceId(),
++      name: "search-e2e-source",
++      kind: "rss",
++      feedUrl: "file:///unused",
++      enabled: true,
++    },
++  });
++
++  // Two distinct-event record groups → 2 candidates. Event (A) has an EARLIER
++  // latestEvidenceAt (so event B is newer — the ranking test asserts the
++  // title-tier-0 event A ranks ABOVE the summary-tier-1 event B despite B being
++  // newer). Event (A)'s title contains TITLE_QUERY 「芯片」. Event (B)'s title
++  // does NOT contain SUMMARY_QUERY 「稀土」 (its summary will be deterministically
++  // rewritten to contain it — see SUMMARY_HIT_INJECTED_SUMMARY below).
++  const twoDaysAgo = new Date(Date.now() - 2 * DAY);
++  const recentAgo = new Date(Date.now() - 2 * HOUR);
++
++  // Group A: 稀土芯片短缺 (title contains BOTH 「芯片」 for the title-hit test
++  // AND 「稀土」 for the shared tiering word; earlier evidence → older
++  // latestEvidenceAt). Carrying 「稀土」 in the title lets event A serve as the
++  // TITLE-tier side of the relevance-tiering assertion while「芯片」 still backs
++  // the standalone title-hit test.
++  await seedRecord(prisma, source.id, {
++    title: "稀土芯片短缺加剧全球供应链紧张",
++    summary: "全球芯片供应链短缺影响汽车与手机行业",
++    url: `https://verify.test/稀土芯片短缺-1`,
++    publishedAt: twoDaysAgo,
++  });
++  // Add a second record in group A so its evidence count is > 1 (older record
++  // keeps latestEvidenceAt at twoDaysAgo; this second record has the same times-
++  // tamp to keep the event's latestEvidenceAt deterministic). Title also carries
++  // both 「芯片」 and 「稀土」 so the cluster's canonical title keeps the shared
++  // tiering word.
++  await seedRecord(prisma, source.id, {
++    title: "稀土芯片短缺加剧全球供应链紧张持续蔓延",
++    summary: "芯片代工产能覆盖多个下游行业",
++    url: `https://verify.test/稀土芯片短缺-2`,
++    publishedAt: twoDaysAgo,
++  });
++
++  // Group B: 锂矿 (title does NOT contain 稀土; summary will be rewritten to
++  // contain 稀土). Later evidence → newer latestEvidenceAt than event A.
++  await seedRecord(prisma, source.id, {
++    title: "锂矿资源储量勘探数据公布",
++    summary: "锂矿储量勘探数据影响下游电池材料",
++    url: `https://verify.test/锂矿`,
++    publishedAt: recentAgo,
++  });
++
++  // Group D: GPU (Latin token in title for case-insensitive matching). Distinct
++  // vocabulary so it clusters into its own event.
++  await seedRecord(prisma, source.id, {
++    title: "GPU算力需求推动先进制程扩产",
++    summary: "AI训练与推理拉动GPU出货量增长",
++    url: `https://verify.test/GPU算力`,
++    publishedAt: recentAgo,
++  });
++
++  // Group E: 光伏 (dedicated takedown target; used ONLY by the takedown test
++  // which runs LAST in the serial describe and mutates DB). Distinct vocabulary
++  // so it clusters into its own event and no other test depends on it.
++  await seedRecord(prisma, source.id, {
++    title: "光伏组件价格波动影响装机预期",
++    summary: "光伏产业链硅料价格调整传导至组件端",
++    url: `https://verify.test/光伏价格`,
++    publishedAt: recentAgo,
++  });
++
++  await clusterEvents({ prisma, traceId: newTraceId() });
++
++  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++  if (pending.length < 4) {
++    throw new Error(
++      `[seed-search] expected >= 4 candidates after cluster, got ${pending.length}`,
++    );
++  }
++
++  // Identify the candidates by their title vocabulary. Event A = title
++  // containing 「芯片短缺」. Event B = title containing 「锂矿」. Event D = title
++  // containing 「GPU」. Event E = title containing 「光伏」.
++  const titleCandidate = pending.find((c) => c.title.includes("芯片短缺"));
++  const summaryCandidate = pending.find((c) => c.title.includes("锂矿"));
++  const latinCandidate = pending.find((c) => c.title.includes("GPU"));
++  const takedownCandidate = pending.find((c) => c.title.includes("光伏"));
++  if (
++    titleCandidate === undefined ||
++    summaryCandidate === undefined ||
++    latinCandidate === undefined ||
++    takedownCandidate === undefined
++  ) {
++    throw new Error(
++      `[seed-search] could not identify all 4 candidates among: ${pending.map((p) => p.title).join(" | ")}`,
++    );
++  }
++
++  // --- Event A: title hit + theme membership (so theme corpus also resolves) ---
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: titleCandidate.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: titleCandidate.id,
++    outcome: "approve",
++    reviewer: "search-e2e-seeder",
++    note: "seed published with title-hit + theme for search e2e",
++  });
++  // Add theme membership (StubThemeAdapter, test-only) so the stub slug/label is
++  // reachable via the theme corpus.
++  await generateThemes({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: titleCandidate.id,
++    adapter: new StubThemeAdapter(),
++  });
++  await refreshPublishedReadModel({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: titleCandidate.id,
++    action: "publish",
++  });
++
++  // --- Event B: summary hit (deterministic rewrite of published explanation) ---
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: summaryCandidate.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: summaryCandidate.id,
++    outcome: "approve",
++    reviewer: "search-e2e-seeder",
++    note: "seed published with summary-hit for search e2e",
++  });
++  // refreshPublishedReadModel runs inside decideReview's transaction; no extra
++  // generateThemes here (event B is NOT a theme member — keeps the theme member
++  // count deterministic at 1, attributable solely to event A).
++
++  // --- Event D: Latin token in title (case-insensitive matching) ---
++  // Published so its title (containing 「GPU」) enters the published_hot_events
++  // read model and is reachable by both 「gpu」 and 「GPU」 queries.
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: latinCandidate.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: latinCandidate.id,
++    outcome: "approve",
++    reviewer: "search-e2e-seeder",
++    note: "seed published with Latin title token for search e2e",
++  });
++
++  // --- Event E: dedicated takedown target (used ONLY by the takedown test) ---
++  // Published so it initially appears in search; the takedown test (run LAST in
++  // the serial describe) will call refreshPublishedReadModel({ action:
++  // "takedown" }) to delete its published_* rows and assert it disappears.
++  await generateExplanation({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: takedownCandidate.id,
++  });
++  await decideReview({
++    prisma,
++    traceId: newTraceId(),
++    hotEventId: takedownCandidate.id,
++    outcome: "approve",
++    reviewer: "search-e2e-seeder",
++    note: "seed published as dedicated takedown target for search e2e",
++  });
++
++  // SEED-ONLY DETERMINISTIC SUMMARY REWRITE (NOT a production behavior).
++  //
++  // generateExplanation derives summary from title + latest evidence summary
++  // (deterministic template), so the derived summary for event B would NOT
++  // contain SUMMARY_QUERY 「稀土」. To create a deterministic summary-hit corpus
++  // (title excludes 「稀土」 but summary includes it), we directly upsert the
++  // published_hot_event_explanations row with a fixed summary containing 「稀土」.
++  // This bypasses the normal explanation pipeline PURELY to construct the test
++  // fixture — production never writes published_* outside publish-orchestrator's
++  // projectors, and the summary content here is an honest fixture (the word is
++  // genuinely in the summary, matching what a real explanation might say about
++  // a lithium/rare-earth-adjacent event).
++  await prisma.publishedHotEventExplanation.upsert({
++    where: { hotEventId: summaryCandidate.id },
++    create: {
++      hotEventId: summaryCandidate.id,
++      summary: SUMMARY_HIT_INJECTED_SUMMARY,
++      whyItMatters: "稀土与锂矿同属关键矿物，供应链调整影响下游。",
++      uncertainties: "具体配额比例尚未公布。",
++      explanationSource: "template",
++      generatedAt: new Date(),
++      traceId: newTraceId(),
++    },
++    update: {
++      summary: SUMMARY_HIT_INJECTED_SUMMARY,
++      traceId: newTraceId(),
++    },
++  });
++
++  // Determine the actual publishedAt / latestEvidenceAt of the two events (read
++  // from the published read model so the spec reasons about the same values the
++  // search page sees). Event A is OLDER (twoDaysAgo evidence), event B is NEWER
++  // (recentAgo evidence) — the ranking test asserts title-tier-0 A still ranks
++  // above summary-tier-1 B despite B's recency.
++
++  resetPrisma();
++
++  // Theme member count: only event A has theme membership, so memberCount = 1.
++  // (If future seeds add more members to STUB_THEME_SLUG, re-derive; for now
++  // the deterministic count is 1.)
++  return {
++    titleHitId: titleCandidate.id,
++    titleHitTitle: titleCandidate.title,
++    summaryHitId: summaryCandidate.id,
++    summaryHitTitle: summaryCandidate.title,
++    tieringTitleHitId: titleCandidate.id,
++    tieringSummaryHitId: summaryCandidate.id,
++    tieringQuery: TIERING_QUERY,
++    latinToken: LATIN_TOKEN,
++    latinHitId: latinCandidate.id,
++    takedownHitId: takedownCandidate.id,
++    takedownQuery: TAKEDOWN_QUERY,
++    themeSlug: STUB_THEME_SLUG,
++    themeLabel: STUB_THEME_LABEL,
++    themeMemberCount: 1,
++    titleQuery: TITLE_QUERY,
++    summaryQuery: SUMMARY_QUERY,
++    themeQuery: THEME_QUERY,
++  };
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++// Run directly (tsx e2e/seed-search.ts) — but NOT when imported by the e2e spec
++// (which calls seedSearchContext() itself in a beforeAll to capture the ids). ESM
++// direct-run detection: only auto-run + exit when this module is the entry.
++if (import.meta.url === `file://${process.argv[1]}`) {
++  const result = await seedSearchContext();
++  console.log(
++    `[seed-search] titleHit: ${result.titleHitId} (${result.titleHitTitle}) | summaryHit: ${result.summaryHitId} (${result.summaryHitTitle}) | tiering: title=${result.tieringTitleHitId} summary=${result.tieringSummaryHitId} q=${result.tieringQuery} | latin: ${result.latinHitId} (${result.latinToken}) | takedown: ${result.takedownHitId} (${result.takedownQuery}) | theme: ${result.themeSlug} (${result.themeLabel}, members=${result.themeMemberCount})`,
++  );
++  process.exit(0);
++}
+diff --git a/apps/web/e2e/search.spec.ts b/apps/web/e2e/search.spec.ts
+new file mode 100644
+index 0000000..ed4ccb8
+--- /dev/null
++++ b/apps/web/e2e/search.spec.ts
+@@ -0,0 +1,427 @@
++import { expect, test } from "@playwright/test";
++
++import { getPrisma, newTraceId, refreshPublishedReadModel } from "@aguhot/core";
++
++import { seedSearchContext } from "./seed-search";
++
++/**
++ * Public hot-event + theme search e2e — Story 3.1 (FR12). Tagged @search so it
++ * runs only under `pnpm --filter web e2e:search` (DB-backed + seed) and does NOT
++ * run under the public `pnpm --filter web e2e` (whose --grep-invert excludes
++ * @console, @feed, @detail, @revision, @merge-split, @market-reaction,
++ * @associations, @themes, @daily, @loop, AND @search).
++ *
++ * The beforeAll imports and runs seedSearchContext() (the same function
++ * `pnpm --filter web seed:search` runs) to capture the dynamic title-hit +
++ * summary-hit hotEventIds + titles + the stub theme slug/label + the
++ * deterministic query strings.
++ *
++ * Requires request-time DATABASE_URL: the /search route is force-dynamic and
++ * reads the published read models via searchPublished → getPrisma at request
++ * time.
++ *
++ * Covers:
++ *   - AC1 title hit: GET /search?q={titleQuery} → 200, the 「热点事件」 section
++ *     renders an EventCard linking /events/{titleHitId}.
++ *   - AC1 summary hit: GET /search?q={summaryQuery} → EventCard linking
++ *     /events/{summaryHitId} (the event whose title excludes the word but whose
++ *     explanation summary contains it).
++ *   - AC1 theme hit: GET /search?q={themeQuery} → the 「主题」 section renders a
++ *     FilterPill linking /topics/{themeSlug}.
++ *   - AC1 relevance tiering: GET /search?q={tieringQuery} (「稀土」) hits event
++ *     X in its TITLE (tier 0, OLDER) AND event Y only in its explanation SUMMARY
++ *     (tier 1, NEWER) — asserts X renders BEFORE Y in DOM order, proving the
++ *     title tier overrides recency (real DOM-order assertion, not a single-hit
++ *     proxy).
++ *   - Latin case-insensitive: GET /search?q=gpu and q=GPU both hit the event
++ *     whose title contains 「GPU」 (toLowerCase normalization; Chinese has no
++ *     case so a Latin token is required to exercise this).
++ *   - Overlong query truncation (trust boundary): GET /search?q= + 200 chars →
++ *     200, no-match feedback renders, and the echoed query in the 「未找到与「{q}」
++ *     相关的...」 text is ≤ 128 chars (parseSearchQuery truncated it).
++ *   - Takedown event (AD-3/AD-8): GET /search?q={takedownQuery} hits the
++ *     dedicated event; after refreshPublishedReadModel({ action:"takedown" })
++ *     deletes its published_* rows, re-searching returns no such link. Run LAST
++ *     (mutates DB; only removes its own target).
++ *   - AC2 no-match: GET /search?q={bogus} → the 「未找到」 feedback renders +
++ *     a 「返回首页」 link renders + a SearchBox renders (to change keywords).
++ *   - Empty query: GET /search (no q) → the guide text renders + NO 「未找到」
++ *     text + NO results sections.
++ *   - AC3 desktop keyboard: focus the aside SearchBox → type → Enter → native
++ *     form submit lands on /search?q=… with results.
++ *   - AC3 mobile touch: open the mobile drawer → the SearchBox is visible and
++ *     submittable (the input + button meet min-h-11 hit targets).
++ *   - Return-path restore (2.5 defer honored): /search?q={titleQuery} → click
++ *     event card → detail → click BackLink → the URL contains q={titleQuery}
++ *     (NOT the bare homepage).
++ *   - Anonymous reachability (AD-8): the entire flow is 200 with no /login
++ *     redirect.
++ *   - No-regression: /search renders inside the public shell (the nav is
++ *     present).
++ */
++
++test.describe("热点与主题搜索 (Story 3.1) @search", () => {
++  // Serial mode: beforeAll seeds the DB exactly once and the tests share the
++  // captured ids. Without this, fullyParallel would run beforeAll per worker
++  // and the concurrent seeds would race on the same DB.
++  test.describe.configure({ mode: "serial" });
++
++  let titleHitId: string;
++  let titleHitTitle: string;
++  let summaryHitId: string;
++  let tieringTitleHitId: string;
++  let tieringSummaryHitId: string;
++  let tieringQuery: string;
++  let latinToken: string;
++  let latinHitId: string;
++  let takedownHitId: string;
++  let takedownQuery: string;
++  let themeSlug: string;
++  let titleQuery: string;
++  let summaryQuery: string;
++  let themeQuery: string;
++
++  test.beforeAll(async () => {
++    const seeded = await seedSearchContext();
++    titleHitId = seeded.titleHitId;
++    titleHitTitle = seeded.titleHitTitle;
++    summaryHitId = seeded.summaryHitId;
++    tieringTitleHitId = seeded.tieringTitleHitId;
++    tieringSummaryHitId = seeded.tieringSummaryHitId;
++    tieringQuery = seeded.tieringQuery;
++    latinToken = seeded.latinToken;
++    latinHitId = seeded.latinHitId;
++    takedownHitId = seeded.takedownHitId;
++    takedownQuery = seeded.takedownQuery;
++    themeSlug = seeded.themeSlug;
++    titleQuery = seeded.titleQuery;
++    summaryQuery = seeded.summaryQuery;
++    themeQuery = seeded.themeQuery;
++  });
++
++  test("AC1 标题命中：/search?q={titleQuery} 含 EventCard 链 /events/{titleHitId}", async ({ page }) => {
++    const response = await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
++    expect(response, "/search should respond").not.toBeNull();
++    expect(response!.status(), "/search status should be 200").toBe(200);
++
++    // The 「热点事件」 section heading renders.
++    await expect(
++      page.getByRole("heading", { level: 2, name: /热点事件/ }),
++    ).toBeVisible();
++
++    // The title-hit event's EventCard link is present.
++    const eventLink = page.locator(`a[href="/events/${titleHitId}"]`);
++    await expect(eventLink).toBeVisible();
++
++    // The title-hit event title is visible (the card body).
++    await expect(page.getByText(titleHitTitle).first()).toBeVisible();
++  });
++
++  test("AC1 摘要命中：/search?q={summaryQuery} 含 EventCard 链 /events/{summaryHitId}", async ({ page }) => {
++    const response = await page.goto(`/search?q=${encodeURIComponent(summaryQuery)}`);
++    expect(response!.status(), "summary-hit search status should be 200").toBe(200);
++
++    // The summary-hit event's EventCard link is present (title does NOT contain
++    // the query, but the explanation summary does).
++    const eventLink = page.locator(`a[href="/events/${summaryHitId}"]`);
++    await expect(eventLink).toBeVisible();
++  });
++
++  test("AC1 主题命中：/search?q={themeQuery} 含 FilterPill 链 /topics/{themeSlug}", async ({ page }) => {
++    const response = await page.goto(`/search?q=${encodeURIComponent(themeQuery)}`);
++    expect(response!.status(), "theme-hit search status should be 200").toBe(200);
++
++    // The 「主题」 section heading renders.
++    await expect(
++      page.getByRole("heading", { level: 2, name: /主题/ }),
++    ).toBeVisible();
++
++    // The theme FilterPill link to /topics/{slug} is present.
++    const themeLink = page.locator(
++      `a[href="/topics/${encodeURIComponent(themeSlug)}"]`,
++    );
++    await expect(themeLink).toBeVisible();
++  });
++
++  test("AC1 相关性分层排序：tieringQuery 同时命中标题（旧）+ 摘要（新）→ 标题层在前", async ({ page }) => {
++    // The shared tiering word 「稀土」 hits event X (tieringTitleHitId) in its
++    // TITLE (tier 0) AND event Y (tieringSummaryHitId) only in its explanation
++    // SUMMARY (tier 1). X is OLDER than Y. Relevance tiering must render X
++    // BEFORE Y in DOM order — title tier overrides recency.
++    const response = await page.goto(`/search?q=${encodeURIComponent(tieringQuery)}`);
++    expect(response!.status(), "tiering search status should be 200").toBe(200);
++
++    // BOTH event links must be present (the query genuinely matches both tiers).
++    const main = page.getByRole("main");
++    const titleTierLink = main.locator(`a[href="/events/${tieringTitleHitId}"]`);
++    const summaryTierLink = main.locator(`a[href="/events/${tieringSummaryHitId}"]`);
++    await expect(titleTierLink, "title-tier event link should render").toHaveCount(1);
++    await expect(summaryTierLink, "summary-tier event link should render").toHaveCount(1);
++
++    // Read the hrefs of every event link inside <main> in DOM order, then assert
++    // the title-tier event's index is strictly less than the summary-tier one's.
++    // This is the real tiering assertion: relevance tier overrides recency even
++    // though the summary-tier event is NEWER.
++    const hrefs = await main
++      .locator('a[href^="/events/"]')
++      .evaluateAll((els) => els.map((e) => (e as HTMLAnchorElement).getAttribute("href") ?? ""));
++    const titleIdx = hrefs.indexOf(`/events/${tieringTitleHitId}`);
++    const summaryIdx = hrefs.indexOf(`/events/${tieringSummaryHitId}`);
++    expect(titleIdx, "title-tier event must be in DOM").toBeGreaterThanOrEqual(0);
++    expect(summaryIdx, "summary-tier event must be in DOM").toBeGreaterThanOrEqual(0);
++    expect(
++      titleIdx,
++      `title-tier (idx=${titleIdx}) must render BEFORE summary-tier (idx=${summaryIdx})`,
++    ).toBeLessThan(summaryIdx);
++  });
++
++  test("AC2 无结果反馈：/search?q={bogus} 含「未找到」+ 返回首页链 + SearchBox", async ({ page }) => {
++    // Use a query that will not match any seeded corpus.
++    const response = await page.goto("/search?q=不存在的词xyz123");
++    expect(response!.status(), "no-match search status should be 200").toBe(200);
++
++    // The no-match feedback text renders (contains the query for context).
++    await expect(page.getByText(/未找到/)).toBeVisible();
++
++    // A link back home renders.
++    const homeLink = page.getByRole("link", { name: "返回首页" });
++    await expect(homeLink).toBeVisible();
++    expect(await homeLink.getAttribute("href")).toBe("/");
++
++    // The page-content SearchBox renders (so the reader can try a different
++    // keyword in place). Scope to <main> so this does NOT match the nav
++    // SearchBox (aside) — there are two SearchBox instances on /search: one in
++    // the nav (always present) and one in the page content (prefilled with the
++    // failed query). The main one is the prefilled in-place refine box.
++    const main = page.getByRole("main");
++    const searchInput = main.locator('input[name="q"]');
++    await expect(searchInput).toBeVisible();
++    expect(await searchInput.inputValue()).toContain("不存在");
++
++    // No EventCard / theme links should render in the page content (zero hits).
++    // Scope to main to exclude the nav links.
++    await expect(main.locator('a[href^="/events/"]')).toHaveCount(0);
++    await expect(main.locator('a[href^="/topics/"]')).toHaveCount(0);
++  });
++
++  test("空 query 引导态：/search（无 q）含引导文案、不含「未找到」", async ({ page }) => {
++    const response = await page.goto("/search");
++    expect(response!.status(), "empty-query search status should be 200").toBe(200);
++
++    // The guide text renders.
++    await expect(page.getByText("输入关键词搜索热点事件与主题。")).toBeVisible();
++
++    // The page-content SearchBox renders (empty — no prefill). Scope to main to
++    // distinguish from the nav SearchBox (both render on /search).
++    const main = page.getByRole("main");
++    const searchInput = main.locator('input[name="q"]');
++    await expect(searchInput).toBeVisible();
++    expect(await searchInput.inputValue()).toBe("");
++
++    // The no-match text must NOT render (empty query ≠ no match).
++    await expect(page.getByText(/未找到/)).toHaveCount(0);
++
++    // No results sections render.
++    await expect(
++      page.getByRole("heading", { level: 2, name: /热点事件/ }),
++    ).toHaveCount(0);
++    await expect(
++      page.getByRole("heading", { level: 2, name: /^主题/ }),
++    ).toHaveCount(0);
++  });
++
++  test("大小写不敏感（拉丁）：q=gpu 与 q=GPU 均命中 latinHitId 事件", async ({ page }) => {
++    // The seeded event's title contains the Latin token 「GPU」. Chinese has no
++    // case, so a Latin token is required to exercise toLowerCase normalization.
++    // Lowercase query must hit it.
++    const lower = await page.goto(`/search?q=${latinToken.toLowerCase()}`);
++    expect(lower!.status(), "lowercase latin search status should be 200").toBe(200);
++    await expect(
++      page.locator(`a[href="/events/${latinHitId}"]`),
++      "lowercase gpu should hit the GPU-titled event",
++    ).toBeVisible();
++
++    // Uppercase query must hit the same event.
++    const upper = await page.goto(`/search?q=${latinToken}`);
++    expect(upper!.status(), "uppercase latin search status should be 200").toBe(200);
++    await expect(
++      page.locator(`a[href="/events/${latinHitId}"]`),
++      "uppercase GPU should hit the same event",
++    ).toBeVisible();
++  });
++
++  test("超长 query 截断（信任边界）：200 字符 → 200 + 无结果反馈 + 回显 ≤ 128 字符", async ({ page }) => {
++    // parseSearchQuery truncates to MAX_QUERY_LEN (128) before matching. A
++    // 200-char query of a repeated uncommon character yields zero hits (the
++    // truncated 128-char string is still gibberish) AND the echoed query in the
++    // 「未找到与「{q}」相关的...」text must be ≤ 128 chars (proving truncation
++    // happened at the trust boundary, not just at match time).
++    const longQuery = "钋".repeat(200);
++    const response = await page.goto(`/search?q=${encodeURIComponent(longQuery)}`);
++    expect(response!.status(), "overlong query status should be 200").toBe(200);
++
++    // The no-match feedback renders (the overlong query has zero hits).
++    await expect(page.getByText(/未找到/)).toBeVisible();
++
++    // Extract the echoed query from the feedback text. The page renders:
++    //   未找到与「{q}」相关的热点或主题。
++    // The text inside the corner brackets is the echoed (truncated) query.
++    const feedback = page.getByText(/未找到与「/);
++    await expect(feedback).toBeVisible();
++    const feedbackText = (await feedback.textContent()) ?? "";
++    const match = feedbackText.match(/未找到与「([^」]*)」/);
++    expect(match, "feedback text should contain the echoed query in corner brackets").not.toBeNull();
++    // match[1] is `string | undefined` under noUncheckedIndexedAccess; guard with
++    // a TS-visible runtime check so the narrowing flows to the assertions below.
++    const echoed = match?.[1];
++    if (echoed === undefined) {
++      throw new Error("feedback text matched but the echoed-query capture group was undefined");
++    }
++    expect(
++      echoed.length,
++      `echoed query must be truncated to ≤ 128 chars (got ${echoed.length})`,
++    ).toBeLessThanOrEqual(128);
++
++    // The echoed query is the first 128 chars of the submitted 200-char string.
++    expect(echoed).toBe(longQuery.slice(0, 128));
++  });
++
++  test("AC3 桌面键盘提交：aside SearchBox 输入 → Enter → /search?q=… 含结果", async ({ page }) => {
++    // Desktop viewport so the left-rail aside + its SearchBox are visible.
++    await page.setViewportSize({ width: 1280, height: 800 });
++    await page.goto("/");
++
++    // The desktop aside SearchBox input is visible.
++    const aside = page.getByRole("complementary");
++    const searchInput = aside.locator('input[name="q"]').first();
++    await expect(searchInput).toBeVisible();
++
++    // Type the title query + submit via Enter (native form submission).
++    await searchInput.fill(titleQuery);
++    await searchInput.press("Enter");
++
++    // Landed on /search?q=… and the result rendered.
++    await expect(page).toHaveURL(new RegExp(`/search\\?q=${encodeURIComponent(titleQuery)}`));
++    await expect(
++      page.locator(`a[href="/events/${titleHitId}"]`),
++    ).toBeVisible();
++  });
++
++  test("AC3 移动触控提交：抽屉内 SearchBox 可见、输入 + 提交可达 /search?q=…", async ({ page }) => {
++    // Mobile viewport so the desktop aside is hidden + the drawer is the nav.
++    await page.setViewportSize({ width: 375, height: 667 });
++    await page.goto("/");
++
++    // Open the mobile drawer.
++    const hamburger = page.getByRole("banner").getByRole("button", { name: /导航菜单/ });
++    await hamburger.click();
++    const drawer = page.getByRole("dialog", { name: "导航菜单" });
++    await expect(drawer).toBeVisible();
++
++    // The drawer SearchBox input + submit button are visible. Both meet min-h-11
++    // touch targets (CSS class assertion is impractical in e2e; visibility +
++    // submittability is the observable proxy).
++    const drawerInput = drawer.locator('input[name="q"]').first();
++    await expect(drawerInput).toBeVisible();
++    const drawerSubmit = drawer.getByRole("button", { name: "搜索" });
++    await expect(drawerSubmit).toBeVisible();
++
++    // Type the title query + click submit (touch-style click).
++    await drawerInput.fill(titleQuery);
++    await drawerSubmit.click();
++
++    // Landed on /search?q=… and the result rendered.
++    await expect(page).toHaveURL(new RegExp(`/search\\?q=${encodeURIComponent(titleQuery)}`));
++    await expect(
++      page.locator(`a[href="/events/${titleHitId}"]`),
++    ).toBeVisible();
++  });
++
++  test("返回恢复：/search?q={titleQuery} → event → BackLink 落回含 q= 的 URL", async ({ page }) => {
++    await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
++
++    // Click the title-hit event card to enter the detail page.
++    await page.locator(`a[href="/events/${titleHitId}"]`).click();
++    await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
++
++    // The detail page BackLink is present. After hydration it should resolve to
++    // the originating /search?q=… URL (the 2.5 capture listener wrote it on the
++    // click, and /search is now in the allowlist).
++    // Poll for the hydrated href (useSyncExternalStore reads sessionStorage
++    // post-mount; allow a brief retry for the effect to settle).
++    const backLink = page.getByRole("link", { name: /返回首页/ }).first();
++    await expect(backLink).toBeVisible();
++    await expect
++      .poll(async () => backLink.getAttribute("href"), {
++        timeout: 5000,
++        message: "BackLink href should hydrate to /search?q=…",
++      })
++      .toContain("/search");
++
++    // Click BackLink → the URL restored contains the original q= (NOT the bare
++    // homepage).
++    await backLink.click();
++    await expect(page).toHaveURL(new RegExp(`q=${encodeURIComponent(titleQuery)}`));
++    // Sanity: it's NOT just the homepage.
++    expect(page.url(), "should not fall back to bare /").not.toMatch(/\/$/);
++  });
++
++  test("匿名可达：全程未登录、无 /login 重定向", async ({ page }) => {
++    const response = await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
++    expect(response!.status(), "anonymous search status should be 200").toBe(200);
++    expect(page.url(), "search should not redirect to login").not.toMatch(/\/login/);
++  });
++
++  test("不回归：/search 在公共壳内（nav 可见）", async ({ page }) => {
++    await page.setViewportSize({ width: 1280, height: 800 });
++    await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
++
++    // The public shell nav (aside) is present — /search is inside the (public)
++    // route group.
++    const aside = page.getByRole("complementary");
++    await expect(aside).toBeVisible();
++
++    // The primary nav entries are reachable from /search.
++    await expect(aside.getByRole("link", { name: "首页" }).first()).toBeVisible();
++    await expect(aside.getByRole("link", { name: "日报" }).first()).toBeVisible();
++    await expect(aside.getByRole("link", { name: "主题" }).first()).toBeVisible();
++  });
++
++  test("下线事件不命中（AD-3/AD-8）：takedown 后再搜该事件链接消失 [LAST — 修改 DB]", async ({ page }) => {
++    // This test is run LAST in the serial describe because it MUTATES the DB:
++    // it takes down a DEDICATED seeded event (takedownHitId) used by no other
++    // test. refreshPublishedReadModel({ action: "takedown" }) deletes all of its
++    // published_* rows, so subsequent searches can no longer find it. Reset is
++    // unnecessary — the seed runs once in beforeAll and this test only removes
++    // its own target.
++
++    // (1) Before takedown: the dedicated event is published and searchable.
++    const before = await page.goto(`/search?q=${encodeURIComponent(takedownQuery)}`);
++    expect(before!.status(), "pre-takedown search status should be 200").toBe(200);
++    const mainBefore = page.getByRole("main");
++    const linkBefore = mainBefore.locator(`a[href="/events/${takedownHitId}"]`);
++    await expect(linkBefore, "dedicated event link should render before takedown").toHaveCount(1);
++
++    // (2) Take the event down via the core publish-orchestrator. This deletes its
++    // published_hot_event / published_hot_event_explanations / ... rows, so it
++    // falls out of the published_* read models search reads (AD-3 + AD-8).
++    const prisma = getPrisma();
++    await refreshPublishedReadModel({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: takedownHitId,
++      action: "takedown",
++    });
++
++    // (3) After takedown: re-searching the same query no longer surfaces the
++    // event's link in <main>. (A fresh page load is used so the response is
++    // re-rendered against the now-mutated read model.)
++    const after = await page.goto(`/search?q=${encodeURIComponent(takedownQuery)}`);
++    expect(after!.status(), "post-takedown search status should be 200").toBe(200);
++    const mainAfter = page.getByRole("main");
++    await expect(
++      mainAfter.locator(`a[href="/events/${takedownHitId}"]`),
++      "taken-down event link must NOT render after takedown",
++    ).toHaveCount(0);
++  });
++});

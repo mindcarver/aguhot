@@ -547,3 +547,68 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   evidence: Story 2.5 的 scroll 恢复一次性 `RESTORE_MARKER` 由 BackLink onClick 写入——即只有点击「← 返回」链（客户端导航）才触发 scroll 恢复。读者若用浏览器 back 按钮（history traversal / bfcache restore）从详情返回列表，filter 态（URL query）经原生 history 恢复（`?window=`/`?date=` 在 history entry 里），但 scroll 不恢复（无 marker——marker 仅由 BackLink 点击写；且 bfcache restore 可能不重新触发 React effect）。这是 UX-DR12「returning from detail to a list」的另一种返回方式（浏览器 back）下的 scroll 缺口；spec 的 AC 与机制显式聚焦 BackLink 点击路径（该路径已测全绿）。浏览器 back 的 scroll 恢复是独立、更难的 concern（Next App Router + scroll restoration 交互复杂）。
   resolution: 已于 Story 2.5 review 登记为 defer——待真实读者反馈「浏览器 back 不恢复 scroll」或 UX-DR12 扩展到 back 按钮路径时，评估加 `pageshow`（`event.persisted`）/ `history.scrollRestoration` 机制，或在 BackLink 之外让浏览器 back 也写 restoreMarker。V1 显式返回链已覆盖 UX-DR12 的测试返回路径。
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 搜索引擎升级（Postgres FTS/tsvector + GIN、ILIKE SQL 下推、或专用搜索引擎）defer——V1 用 JS 内存子串匹配（沿用 1.7/2.2/2.3 in-memory filter 既定模式），真实查询负载出现前不引入 FTS
+  evidence: Story 3.1 `searchPublished`（`packages/core/src/modules/search-read/search-service.ts`）并发取三个 filter-free sibling list fn（listPublishedHotEvents + listPublishedHotEventExplanations + listPublishedThemeMemberships），在 JS 内存做大小写不敏感子串匹配（`toLowerCase().includes()`）。epic-3-context 明示「Search engine choice is intentionally deferred: V1 may use PostgreSQL full-text capabilities and only adopt a dedicated search stack once real query load appears」。当前 `schema.prisma` 与全部 migration 零 FTS 痕迹；Postgres FTS 对中文需 zhparser/pg_jieba 扩展（默认 Postgres 无中文分词）；ILIKE 下推需改既有 filter-free fn 签名或新建 SQL 查询 fn。V1 published 体量极小（每次搜索三次全表读 + JS join），规模可接受。升级路径明确：把 `searchPublished` 内部换成 FTS/ILIKE，调用面（签名/返回类型）不变，页面与 e2e 无感。
+  resolution: 已于 Story 3.1 登记为搜索引擎升级 defer——待真实查询负载出现（已发布集体量增长致搜索有可测延迟）时，把 `searchPublished` 内部换为 Postgres FTS（tsvector + GIN + zhparser/jieba 中文分词扩展 + 一个新 prisma migration）或 ILIKE SQL 下推或专用搜索引擎（Meilisearch/Algolia 等），调用面保持不变。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 搜索分页 / 高亮 / 搜索建议 / 搜索历史 defer——V1 一次返回全部分组命中、无高亮、无建议、无历史
+  evidence: Story 3.1 `/search` 一次渲染全部分组命中（events + themes），无分页（V1 命中数极小）、无关键词高亮、无搜索建议（输入时下拉）、无搜索历史。epic-3-context 未列这些为 V1 AC。分页需引入结果计数上限 + 分页 UI；高亮需在 EventCard/FilterPill 内 dangerouslySet 或拆词渲染（不改组件本体的约束下不可行）；建议/历史需客户端状态或 user-profile 模块（3.2/3.3 own）。
+  resolution: 已于 Story 3.1 登记为搜索 UX 丰富化 defer——待真实搜索负载反馈时，引入分页（结果上限 + 翻页）、关键词高亮（需 EventCard/FilterPill 扩展或包装）、搜索建议（客户端/服务端建议 API）、搜索历史（user-profile 关联）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 搜索语料扩展（tags / whyItMatters / uncertainties / 证据 summary）defer——FR12 点名「标题、解释摘要、主题名称」三样；扩展语料到其他字段 defer
+  evidence: Story 3.1 `searchPublished` 仅匹配三语料：(a) `published_hot_events.title`、(b) `published_hot_event_explanations.summary`（经新增 sibling `listPublishedHotEventExplanations`）、(c) `published_hot_event_themes.items[].label`（经 `listPublishedThemeMemberships`）。FR12 字面点名这三样。扩展到 `tags` / `whyItMatters` / `uncertainties` / 证据 `summary`（`published_hot_event_evidence.summary`）需 search-read 内加读 + 加匹配分支，且语料权重/分层需重新设计（tags 可能比 summary 更强或更弱）。epic-3-context 未列扩展为 V1。
+  resolution: 已于 Story 3.1 登记为语料扩展 defer——待真实搜索反馈「想搜标签/为什么重要/证据原文」时，扩 `searchPublished` 读取范围 + 加匹配分支 + 重新设计语料权重分层。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 拼音 / 模糊匹配 defer——V1 仅做大小写不敏感精确子串匹配，中文无分词、无拼音、无编辑距离模糊
+  evidence: Story 3.1 `searchPublished` 用 `haystack.toLowerCase().includes(q.toLowerCase())`。拉丁 toLowerCase 归一、中文子串字符级命中（无需分词）。但「xinpian」搜「芯片」（拼音）、「芯朋」搜「芯片」（编辑距离/模糊）不支持。拼音需引入 pinyin 转换库（pinyin-pro 等）+ 双向索引；模糊需编辑距离/相似度计算（成本高）。V1 无此需求。
+  resolution: 已于 Story 3.1 登记为拼音/模糊 defer——待真实搜索反馈「想用拼音搜中文」或「想容错拼写」时，引入拼音转换 + 索引或模糊匹配（编辑距离/embedding 相似度）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 全局 header 内联搜索框样式增强 / SearchBox 自动补全 defer——V1 搜索框在 NavList 内（原生 form），无 header 内联框、无自动补全
+  evidence: Story 3.1 `SearchBox` 渲染在 `NavList` 顶部（桌面 aside + 移动抽屉），为原生 HTML form GET 提交。移动 header `h-16` 空间紧（汉堡+logo 占满），未在 header 内联搜索框（需重构 header 布局，回归面大）。SearchBox 无自动补全（输入时下拉建议）——需客户端状态 + 建议 API。V1 原生 form 足覆盖 AC3（键盘 Enter + 触控提交）。
+  resolution: 已于 Story 3.1 登记为 header 内联框/自动补全 defer——待真实读者反馈「想在 header 直接搜」或「想要搜索建议下拉」时，评估 header 内联搜索框（重构 header 布局）+ 自动补全（客户端/服务端建议 API）。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 搜索→详情→返回的显式「返回搜索结果」入口与 bfcache 不可恢复兜底 defer（3.4 own）——3.1 仅扩 allowlist 使既有 BackLink 恢复搜索 URL，3.4 再补显式入口与不可恢复边案
+  evidence: Story 3.1 把 `/search` 加入 `isValidListReturn` 的 `LIST_PATH_EXACT` allowlist（与 `/`、`/daily` 并列），使既有 `<BackLink/>` 经客户端导航从详情返回时恢复搜索 URL（query 保留）。但浏览器 back 经 bfcache 不可恢复时（`RESTORE_MARKER` 未写、bfcache restore 不重新触发 effect），scroll 可能丢；且 3.1 无独立「← 返回搜索结果」显式入口（语义复用「← 返回首页」BackLink，其文案在搜索来源下不变）。epic-3-context 明示「Story 3.4 ... search → detail → search return-path contract ... explicit back-to-search-results entry」归 3.4。
+  resolution: 已于 Story 3.1 登记为 3.4 own——Story 3.4 补显式「返回搜索结果」入口（文案/图标区分搜索来源）+ bfcache 不可恢复边案（`pageshow`/`history.scrollRestoration` 机制），并加专属 e2e 断言。
+
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 重复 `?q=` 查询参数（Next 16 `searchParams` 交付数组）未被守护——`/search?q=a&q=b` 时 `q` 为 `string[]`，当前 `parseSearchQuery(raw: string)` 不处理数组
+  evidence: 全仓公共路由（home `?window=`、topics、daily `?date=`、search `?q=`）均用 `searchParams: Promise<{ x?: string }>` 模式，运行时 Next.js 对重复键交付 `string[]`。search 的 `parseSearchQuery` 类型为 `string`，若收到数组会落到非预期分支（trim 失败或空 query 态）。这是 project-wide 模式问题，非 search 独有。
+  resolution: 在 search（或全仓公共路由）的 query 解析处统一 `Array.isArray(raw) ? raw[0] : raw` 归一。因波及所有公共路由，不在 3.1 单点修（避免不一致），留作 cross-cutting 统一处理。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 搜索匹配未做 Unicode NFC 归一化 / ZWJ-ZWNJ 剥离——粘贴自外部的组合字符序列（如 `e` + U+0301 vs 预组合 `é`）或含零宽连接符的 query 可能不命中预组合存储文本
+  evidence: `search-service.ts` 的 `matchEvent`/`matchTheme` 仅做 `toLowerCase().includes()`，无 `normalize("NFC")`。AI 生成的 summary 通常为 NFC，但用户粘贴的带组合符 query 可能不命中，返回误导性无结果反馈。edge case，V1 影响面小。
+  resolution: 在 `qLower` 计算前对 query 与 haystack 做 `NFC` 归一（+ 可选剥离 ZWJ/ZWNJ/U+FEFF）。低优先，按真实不命中报告再引入。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: 主题 slug 规范性未校验——case-fold 后相同或含 URL 歧义字符（`/`、`%2F`）的 slug 会在聚合时分别成键却指向同一主题
+  evidence: `search-service.ts` 主题聚合以 `item.slug` 为键，未校验 `/^[a-z0-9-]+$/`。V1 slug 来自 StubThemeAdapter（确定性、规范），但未来真实主题源可能引入大小写/歧义 slug。当前 FilterPill 用 `encodeURIComponent`，但 `/topics/[slug]` 路由匹配可能只命中其一。
+  resolution: 在主题聚合处加 slug 规范性校验（跳过非法 slug），或归一化 slug。低优先，待真实主题源落地。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: `list-context-memory.tsx`（2.5 基建）捕获的 `RETURN_CONTEXT` href 无长度上限——超长 `?q=` 会被原样写入 sessionStorage 并由 BackLink 渲染为超长 href
+  evidence: 3.1 把 `/search` 加入返回 allowlist 后，搜索→详情跳转的 `RETURN_CONTEXT` 含完整 `?q=`。`writeReturnContext` 无长度 cap；恶意/超长 query 会写入 sessionStorage 并渲染为超长 href（sessionStorage 配额 ~5MB 容忍，但 URL 栏/导航笨重）。2.5 基建行为，非 3.1 引入，search 使其可被触发。
+  resolution: 在 `writeReturnContext`/`writeScroll` 加 href 长度 cap（如 > 2048 则不写或截断 query 部分）。属 2.5 基建增强，低优先。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: sessionStorage scroll-key 无淘汰——读者频繁换不同搜索词会为每个 `?q=` 变体积累一条 scroll 槽
+  evidence: `list-context-memory.tsx` 的 `scrollKey(href)` 以完整 href（含 `?q=`）为键，每个不同搜索词一条 sessionStorage 条目，无 LRU/容量上限。极端使用可逼近 sessionStorage 配额（超限被 try/catch 静默禁用恢复）。2.5 基建行为，会话级（关 tab 清），3.1 搜索使其更易累积。
+  resolution: 给 sessionStorage scroll 槽加 LRU 淘汰或上限。属 2.5 基建增强，低优先。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: `/search` 页 `metadata.title` 固定为「搜索」——多个搜索标签页不可区分
+  evidence: `search/page.tsx` 用静态 `export const metadata = { title: "搜索" }`，不反映 `?q=`。读者开 `?q=芯片` 与 `?q=稀土` 两个标签页均显示「搜索」，无法区分（query 在 URL 但不在标题）。
+  resolution: 改用 `generateMetadata({ searchParams })` 返回 `搜索：{q}`（q 非空时）。nice-to-have，低优先。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md`
+  summary: AD-3 读作用域不变式（`listPublishedHotEventExplanations` 只读 `published_*`、不读 `explanation_versions`/`hot_events`/`evidence_*`）当前不可机器验证
+  evidence: 仓内无 `packages/core`/web 组件单测 runner，无 prisma query spy / schema 级守卫测试。AD-3 读作用域仅存于 docstring + 模块注释。takedown 测试与「只读 published_*」一致，但不能证明读作用域（一个也读 `explanation_versions` 的实现仍能通过现有测试，只要 published 行存在）。
+  resolution: 引入 `packages/core` 单测 runner（vitest）+ prisma query spy，或架构层 lint 规则守卫 publish-orchestrator 的读作用域。跨 story 基建投入，低优先。

@@ -42,7 +42,7 @@ import { usePathname } from "next/navigation";
  * `isValidListReturn` parses it with `new URL(raw, "http://localhost")` and
  * requires `origin === "http://localhost"` (blocks `https://evil.com`,
  * `//evil.com` protocol-relative, full external URLs) + pathname in an
- * allowlist (`/`, `/daily` exact; `/topics/` prefix). Anything else
+ * allowlist (`/`, `/daily`, `/search` exact; `/topics/` prefix). Anything else
  * (`/console/…`, `/events/…`, `/favorites`) is rejected → BackLink falls back
  * to `/`. Tampered return-context never produces an off-site jump.
  *
@@ -97,10 +97,13 @@ export const SCROLL_KEY_PREFIX = "aguhot:scroll:" as const;
 const LIST_PATH_PREFIXES = ["/topics/"] as const;
 
 /**
- * Exact list pathnames. `/` (homepage feed) and `/daily` (daily digest) are
- * exact matches (they have no dynamic segment).
+ * Exact list pathnames. `/` (homepage feed), `/daily` (daily digest), and
+ * `/search` (search results, Story 3.1) are exact matches (they have no
+ * dynamic segment). `/search` was added in 3.1 to honor the 2.5 defer:
+ * navigating search → detail → BackLink must restore the originating search
+ * URL (query intact) rather than falling back to `/`.
  */
-const LIST_PATH_EXACT = ["/", "/daily"] as const;
+const LIST_PATH_EXACT = ["/", "/daily", "/search"] as const;
 
 // --- pure helpers (sessionStorage wrapped in try/catch) ----------------------
 
@@ -123,7 +126,7 @@ export function scrollKey(href: string): string {
  *   - `raw` is a non-empty string,
  *   - it parses to `origin === "http://localhost"` (same-origin under our
  *     base),
- *   - pathname is exactly `/` or `/daily`, OR starts with `/topics/`.
+ *   - pathname is exactly `/`, `/daily`, or `/search`, OR starts with `/topics/`.
  *
  * Any parse failure / disallowed pathname / cross-origin → false (BackLink
  * falls back to `/`). This is the trust boundary; it cannot be simplified to

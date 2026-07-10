@@ -323,6 +323,38 @@ export interface ListPublishedThemeMembershipsOptions {
   traceId: string;
 }
 
+// --- Story 3.1: public explanation summary read types (search 3rd corpus) -----
+
+/**
+ * One row of listPublishedHotEventExplanations — the hotEventId→summary
+ * projection the public search-read path uses to match explanation summaries
+ * (Story 3.1). FR12 names three search corpora: event titles, explanation
+ * summaries, and theme names. The first corpus comes from
+ * listPublishedHotEvents (title); the third from listPublishedThemeMemberships
+ * (theme label). This sibling list fn surfaces `published_hot_event_explanations.summary`
+ * so the search-read module can join all three corpora in JS (mirroring the
+ * 2.2 association + 2.3 theme sibling-list pattern). Row existence = currently
+ * published explanation (no status column, AD-3).
+ */
+export interface PublishedHotEventExplanationSummaryRow {
+  hotEventId: string;
+  summary: string;
+}
+
+/**
+ * Options for listPublishedHotEventExplanations. `{ prisma, traceId }` mirrors
+ * ListPublishedAssociationsOptions / ListPublishedThemeMembershipsOptions. There
+ * is deliberately NO filter parameter: the query returns all published
+ * explanation summary rows and the caller (search-read) joins + matches in JS
+ * (same design as the other sibling list fns — V1 scale is tiny, filtering is
+ * a search-read concern). ponytail: no pre-embedded consumerless filter
+ * parameter.
+ */
+export interface ListPublishedHotEventExplanationsOptions {
+  prisma: PrismaClient;
+  traceId: string;
+}
+
 // --- Story 2.4: public daily-digest read types --------------------------------
 
 /**

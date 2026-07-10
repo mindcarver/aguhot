@@ -133,12 +133,15 @@ export type {
 // Story 2.4 — published_daily_digests projection (sibling refreshPublishedDailyDigest,
 // coverageDate-keyed) + getPublishedDailyDigest / listPublishedDailyDigestCoverageDates
 // /daily-page queries).
+// Story 3.1 — listPublishedHotEventExplanations (sibling list fn surfacing
+// published_hot_event_explanations.summary for the search-read 3rd corpus).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
   getPublishedHotEventDetail,
   listPublishedAssociations,
   listPublishedThemeMemberships,
+  listPublishedHotEventExplanations,
   refreshPublishedDailyDigest,
   getPublishedDailyDigest,
   listPublishedDailyDigestCoverageDates,
@@ -161,6 +164,8 @@ export type {
   PublishedHotEventTheme,
   PublishedThemeMembershipRow,
   ListPublishedThemeMembershipsOptions,
+  PublishedHotEventExplanationSummaryRow,
+  ListPublishedHotEventExplanationsOptions,
   DailyDigestEntry,
   PublishedDailyDigest,
   RefreshPublishedDailyDigestOptions,
@@ -278,3 +283,19 @@ export type {
   GetLatestDigestOptions,
   DigestRecord,
 } from "./modules/digest/index.js";
+
+// search-read module (Story 3.1 — public search over published_* read models;
+// FR12 three-corpus coverage: published_hot_events.title +
+// published_hot_event_explanations.summary + published_hot_event_themes label.
+// Pure read: joins three filter-free sibling list fns from publish-orchestrator
+// and matches + ranks in JS — V1 in-memory filter pattern, FTS/tsvector deferred).
+export { searchPublished } from "./modules/search-read/index.js";
+export { SearchHitKind, EventMatchedField } from "./modules/search-read/index.js";
+export type {
+  SearchHitKindType,
+  EventMatchedFieldType,
+  SearchPublishedOptions,
+  EventSearchHit,
+  ThemeSearchHit,
+  SearchPublishedResult,
+} from "./modules/search-read/index.js";

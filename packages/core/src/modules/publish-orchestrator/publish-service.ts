@@ -72,12 +72,14 @@ import type {
   GetPublishedHotEventDetailOptions,
   ListPublishedAssociationsOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
+  ListPublishedHotEventExplanationsOptions,
   ListPublishedHotEventsOptions,
   ListPublishedThemeMembershipsOptions,
   PublishedAssociationRow,
   PublishedDailyDigest,
   PublishedEvidenceRow,
   PublishedHotEventDetail,
+  PublishedHotEventExplanationSummaryRow,
   PublishedHotEventSummary,
   PublishedThemeMembershipRow,
   RefreshPublishedDailyDigestOptions,
@@ -853,6 +855,58 @@ export async function listPublishedThemeMemberships(
   return rows.map((r) => ({
     hotEventId: r.hotEventId,
     items: r.items as unknown as ThemeRef[],
+  }));
+}
+
+/**
+ * List all currently-published explanation summaries — the hotEventId→summary
+ * map the public search-read path uses to match against explanation summary text
+ * (Story 3.1).
+ *
+ * This is a SIBLING list fn to listPublishedAssociations /
+ * listPublishedThemeMemberships: the search-read module (Story 3.1) joins all
+ * three corpora (event titles from listPublishedHotEvents, explanation summaries
+ * from this fn, theme labels from listPublishedThemeMemberships) in JS and
+ * applies case-insensitive substring matching (mirroring the 1.7 filterByWindow
+ * / 2.2 association-join / 2.3 theme-derive in-memory filter pattern). FR12 names
+ * "标题、解释摘要和主题名称" as the three search corpora; without this fn the
+ * explanation summary corpus would be unreachable from the public read path.
+ *
+ * `listPublishedHotEvents` / `listPublishedAssociations` /
+ * `listPublishedThemeMemberships` signatures stay filter-free and unchanged.
+ * V1 published volume is tiny, so a full read is the ponytail choice over a SQL
+ * filter (FTS/tsvector/GIN deferred — real query load has not appeared).
+ *
+ * Returns `{ hotEventId, summary }` for every published_hot_event_explanations
+ * row, ordered by hotEventId ASC so the row order is deterministic across loads
+ * (mirroring the sibling listPublishedThemeMemberships contract — the current
+ * search-read caller builds a Map and does not depend on order, but the sibling
+ * contract holds for future direct-iteration callers). It only SELECTs
+ * published_hot_event_explanations — never explanation_versions / hot_events /
+ * evidence_* (AD-3). Row existence = currently published explanation (no status
+ * column). An event with no projected explanation has no row here, so it is
+ * simply absent from the summary corpus (its title/theme can still match via
+ * the other two corpora).
+ */
+export async function listPublishedHotEventExplanations(
+  options: ListPublishedHotEventExplanationsOptions,
+): Promise<PublishedHotEventExplanationSummaryRow[]> {
+  const { prisma } = options;
+
+  // orderBy hotEventId ASC mirrors listPublishedThemeMemberships: deterministic
+  // row order across loads even though the current search-read caller builds a
+  // Map. Sibling contract — future direct-iteration callers can rely on it.
+  const rows = await prisma.publishedHotEventExplanation.findMany({
+    select: {
+      hotEventId: true,
+      summary: true,
+    },
+    orderBy: { hotEventId: "asc" },
+  });
+
+  return rows.map((r) => ({
+    hotEventId: r.hotEventId,
+    summary: r.summary,
   }));
 }
 

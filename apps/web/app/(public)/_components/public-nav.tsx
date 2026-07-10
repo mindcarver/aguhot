@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
+import { SearchBox } from "./search-box";
+
 /**
  * Responsive public navigation — Story 1.2.
  *
@@ -56,6 +58,20 @@ function isActive(pathname: string, href: string): boolean {
 function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
     <nav aria-label="主导航">
+      {/*
+        Global search entry (Story 3.1, FR12 AC3). A native HTML form (GET
+        /search) rendered at the TOP of NavList so it appears in BOTH the
+        desktop left-rail aside AND the mobile drawer (they share NavList).
+        This is NOT a PRIMARY_NAV_ITEMS entry — the navigation.spec asserts
+        "四个一级入口" (four primary entries); a `<form>` inside `<nav>` is not a
+        primary link, so the existing navigation e2e assertions stay green. The
+        form submits natively on Enter (keyboard) and the button meets min-h-11
+        (touch target, UX-DR13). See search-box.tsx for the implicit-label /
+        id-free rationale (two simultaneous instances).
+      */}
+      <div className="mb-4">
+        <SearchBox />
+      </div>
       <ul className="space-y-1">
         {PRIMARY_NAV_ITEMS.map((item) => (
           <li key={item.href}>
