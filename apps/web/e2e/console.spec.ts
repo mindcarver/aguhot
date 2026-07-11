@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { authenticateOperator } from "./_operator-auth";
+
 /**
  * Operator console e2e — Story 1.6. Tagged @console so it runs only under
  * `pnpm --filter web e2e:console` (DB-backed) and does NOT run under the public
@@ -21,7 +23,8 @@ import { expect, test } from "@playwright/test";
  */
 
 test.describe("运营复核台 (Story 1.6) @console", () => {
-  test("AC1 /console 渲染待复核候选列表", async ({ page }) => {
+  test("AC1 /console 渲染待复核候选列表", async ({ page, context }) => {
+    await authenticateOperator(context);
     const response = await page.goto("/console");
 
     expect(response, "/console should respond").not.toBeNull();
@@ -38,7 +41,8 @@ test.describe("运营复核台 (Story 1.6) @console", () => {
     await expect(page.getByText("1 来源").first()).toBeVisible();
   });
 
-  test("AC2 进入候选详情并提交通过 → 状态变 published + 审计链显示", async ({ page }) => {
+  test("AC2 进入候选详情并提交通过 → 状态变 published + 审计链显示", async ({ page, context }) => {
+    await authenticateOperator(context);
     await page.goto("/console");
 
     // Click into the 降准 candidate detail.
@@ -68,7 +72,8 @@ test.describe("运营复核台 (Story 1.6) @console", () => {
     await expect(page.getByRole("button", { name: "通过并发布" })).toBeHidden();
   });
 
-  test("AC2 驳回另一候选 → 状态变 rejected", async ({ page }) => {
+  test("AC2 驳回另一候选 → 状态变 rejected", async ({ page, context }) => {
+    await authenticateOperator(context);
     await page.goto("/console");
 
     const rejectLink = page.getByRole("link", { name: /美股大跌三大股指重挫/ }).first();

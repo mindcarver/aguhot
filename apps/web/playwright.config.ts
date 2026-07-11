@@ -41,9 +41,17 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "pnpm dev",
+    // Production mode (build + start), NOT `next dev`: Turbopack dev
+    // cold-compiles each route on first hit, which routinely exceeds the 30s
+    // `page.goto` timeout and flakes the suite (`waiting until "load"`).
+    // `next start` serves pre-built routes with no cold-compile window, so e2e
+    // is deterministic. Build adds ~30s up front per run, within the webServer
+    // timeout. To avoid rebuilding across multiple `pnpm e2e:*` runs,
+    // `reuseExistingServer` reuses a server already on :3000 — run
+    // `pnpm build && pnpm start` once and every suite reuses it.
+    command: "pnpm build && pnpm start",
     url: "http://127.0.0.1:3000",
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 180_000,
   },
 });

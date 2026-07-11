@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { authenticateOperator } from "./_operator-auth";
 import { seedMergeSplitEvents } from "./seed-merge-split";
 
 /**
@@ -59,7 +60,8 @@ test.describe("已发布热点的合并、拆分与下线重发布 (Story 1.10) 
     };
   });
 
-  test("AC1 /console/{A} 渲染合并与拆分表单", async ({ page }) => {
+  test("AC1 /console/{A} 渲染合并与拆分表单", async ({ page, context }) => {
+    await authenticateOperator(context);
     await page.goto(`/console/${published.a.hotEventId}`);
 
     // The merge/split branch heading renders.
@@ -88,7 +90,11 @@ test.describe("已发布热点的合并、拆分与下线重发布 (Story 1.10) 
     await expect(splitCheckboxes).toHaveCount(2);
   });
 
-  test("AC1 合并 source=B → B 公开 404、A 显并集证据、B 审计链含 takedown", async ({ page }) => {
+  test("AC1 合并 source=B → B 公开 404、A 显并集证据、B 审计链含 takedown", async ({ page, context }) => {
+    // Authenticate as operator for the whole test session. The cookie persists
+    // across navigations within this context, so subsequent /console/{B} re-
+    // visits stay authenticated; public /events/ routes are unaffected.
+    await authenticateOperator(context);
     // --- Step 1: submit the merge on /console/{A} ---------------------------
     await page.goto(`/console/${published.a.hotEventId}`);
 
@@ -129,7 +135,8 @@ test.describe("已发布热点的合并、拆分与下线重发布 (Story 1.10) 
     await expect(auditSection.getByText(new RegExp(`merged into ${published.a.hotEventId}`))).toBeVisible();
   });
 
-  test("AC2 拆分子集 → 新 candidate 入队、A 显剩余证据", async ({ page }) => {
+  test("AC2 拆分子集 → 新 candidate 入队、A 显剩余证据", async ({ page, context }) => {
+    await authenticateOperator(context);
     // After the merge test, A has 4 evidence records. Split off 2 into a new
     // candidate. /console/{A} re-rendered to get fresh checkboxes.
     await page.goto(`/console/${published.a.hotEventId}`);
@@ -163,7 +170,8 @@ test.describe("已发布热点的合并、拆分与下线重发布 (Story 1.10) 
     await expect(page.getByText("原文链接 ↗")).toHaveCount(2);
   });
 
-  test("AC3 下线重发布 → 公开重现", async ({ page }) => {
+  test("AC3 下线重发布 → 公开重现", async ({ page, context }) => {
+    await authenticateOperator(context);
     // A is still published. Take it down via the console, then republish it via
     // the taken_down republish button, and assert it reappears publicly.
     await page.goto(`/console/${published.a.hotEventId}`);
@@ -207,7 +215,7 @@ test.describe("已发布热点的合并、拆分与下线重发布 (Story 1.10) 
     await expect(auditSection.getByText(/taken_down → published/)).toBeVisible();
   });
 
-  test("AC4 合并非法：source 非 published 被前端守卫拒绝（无公开污染）", async ({ page }) => {
+  test("AC4 合并非法：source 非 published 被前端守卫拒绝（无公开污染）", async ({ page, context }) => {
     // The submitMerge server action has a front-guard that rejects a merge whose
     // source is not currently published (it checks listPublishedHotEvents and
     // redirects back with NO module call). Without it, merging a taken_down/
@@ -237,6 +245,10 @@ test.describe("已发布热点的合并、拆分与下线重发布 (Story 1.10) 
     // select and select it, then submit. This bypasses the UI's published-only
     // list and posts the bad id straight to submitMerge, where the server-side
     // guard must reject it.
+    // Authenticate as operator now (the public /events/ read above ran first,
+    // unauthenticated — the operator cookie is only needed for the /console
+    // page access below).
+    await authenticateOperator(context);
     await page.goto(`/console/${published.a.hotEventId}`);
     await page.evaluate(
       ({ sourceId }) => {

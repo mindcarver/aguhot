@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { authenticateOperator } from "./_operator-auth";
 import { seedRevisionEvent } from "./seed-revision";
 
 /**
@@ -50,7 +51,8 @@ test.describe("已发布热点的文案与标签修正 (Story 1.9) @revision", (
     published = { hotEventId: seeded.publishedHotEventId, title: seeded.publishedTitle };
   });
 
-  test("AC1 /console/{publishedId} 渲染修订表单与当前发布版", async ({ page }) => {
+  test("AC1 /console/{publishedId} 渲染修订表单与当前发布版", async ({ page, context }) => {
+    await authenticateOperator(context);
     await page.goto(`/console/${published.hotEventId}`);
 
     // The revision branch heading renders.
@@ -68,7 +70,12 @@ test.describe("已发布热点的文案与标签修正 (Story 1.9) @revision", (
     await expect(page.getByRole("button", { name: "重新发布" })).toBeVisible();
   });
 
-  test("AC1/AC2/AC3 修订 → 公开仍显旧 → 重新发布 → 公开显新且无 AiLabel", async ({ page }) => {
+  test("AC1/AC2/AC3 修订 → 公开仍显旧 → 重新发布 → 公开显新且无 AiLabel", async ({ page, context }) => {
+    // Authenticate as operator once for the whole test session. The cookie
+    // persists across navigations within this context, so the subsequent
+    // /console/{id} re-visits (Step 3) stay authenticated; the public /events/
+    // visits are unaffected (the operator cookie is a no-op on public routes).
+    await authenticateOperator(context);
     // --- Step 1: submit the revision on /console/{id} ------------------------
     await page.goto(`/console/${published.hotEventId}`);
 
