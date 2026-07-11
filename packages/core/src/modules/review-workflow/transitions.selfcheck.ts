@@ -71,9 +71,7 @@ function main(): void {
 
   const illegalCases: Array<{ from: string; outcome: ReviewOutcomeType; label: string }> = [
     { from: "published", outcome: "reject", label: "reject already-published" },
-    { from: "taken_down", outcome: "approve", label: "approve taken-down" },
     { from: "candidate", outcome: "takedown", label: "takedown never-published candidate" },
-    { from: "rejected", outcome: "approve", label: "approve already-rejected" },
     // Story 1.9: republish is illegal on a candidate (nothing has been published
     // to refresh). Story 1.10: republish is now legal on taken_down + rejected
     // (re-publish / correct-erroneous-reject), so those two moved OUT of the
@@ -84,11 +82,13 @@ function main(): void {
     // (taken_down is terminal except for the republish path; approve would skip
     // the review gate; reject is meaningless on something already off-public;
     // takedown on an already-taken-down event is a no-op that dirties the chain).
+    { from: "taken_down", outcome: "approve", label: "approve taken-down (terminal; republish is the only revival)" },
     { from: "taken_down", outcome: "reject", label: "reject taken-down" },
     { from: "taken_down", outcome: "takedown", label: "takedown taken-down (no-op)" },
     // rejected is re-published via republish ONLY — approve/takedown on a
     // rejected event are illegal (approve would be a second chance via the wrong
     // path; takedown on something never public is meaningless).
+    { from: "rejected", outcome: "approve", label: "approve already-rejected (terminal; republish is the only revival)" },
     { from: "rejected", outcome: "takedown", label: "takedown rejected (never public)" },
   ];
 

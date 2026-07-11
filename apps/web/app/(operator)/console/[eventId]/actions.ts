@@ -13,7 +13,6 @@ import {
   saveExplanation,
   mergeHotEvents,
   splitHotEvent,
-  listPublishedHotEvents,
   ExplanationSource,
 } from "@aguhot/core";
 
@@ -183,8 +182,9 @@ export async function submitRevision(formData: FormData): Promise<void> {
  * Server action: merge another published hot event into the current one. Story 1.10.
  *
  * Parses the form (target=current eventId, source=the published event to absorb),
- * validates source≠target and source is currently published (checked against
- * listPublishedHotEvents), then sequences:
+ * validates source≠target and source is currently published (checked against the
+ * hot_events.publicationStatus status table, not the published read model — the
+ * read model can lag the status table), then sequences:
  *   1. mergeHotEvents(source→target) — move source's evidence links to target
  *      (shared deduped), clear source's links, recompute target's signature.
  *   2. decideReview(target, republish) — refresh target's read model (shows union).
@@ -226,11 +226,18 @@ export async function submitMerge(formData: FormData): Promise<void> {
   const traceId = newTraceId();
 
   // Validate source is currently published (the merge form lists published events
-  // only, but the status could have changed between render and submit). Reading
-  // the published read model is the authoritative visibility check.
-  const published = await listPublishedHotEvents({ prisma, traceId: newTraceId() });
-  const sourceIsPublished = published.some((e) => e.hotEventId === sourceId);
-  if (!sourceIsPublished) {
+  // only, but the status could have changed between render and submit). Read the
+  // STATUS TABLE directly (hot_events.publicationStatus), NOT the published read
+  // model — the read model can lag the status table (e.g. a source that was just
+  // taken_down may still appear in listPublishedHotEvents until the takedown
+  // refresh commits). Validating against the read model risks mergeHotEvents
+  // draining source's links then decideReview(source, takedown) throwing on an
+  // already-taken-down event, leaving source at 0 links + non-taken_down status.
+  const source = await prisma.hotEvent.findUnique({
+    where: { id: sourceId },
+    select: { id: true, publicationStatus: true },
+  });
+  if (source?.publicationStatus !== "published") {
     revalidatePath(`/console/${targetId}`);
     redirect(`/console/${targetId}`);
   }
@@ -241,9 +248,12 @@ export async function submitMerge(formData: FormData): Promise<void> {
     await mergeHotEvents({ prisma, traceId, sourceId, targetId });
 
     // 2. Refresh target's read model to show the union evidence (publish gate).
+    // Single action-level traceId threads through mergeHotEvents + both
+    // decideReview calls so the audit chain (hot_event_evidence.traceId +
+    // review/publication_decisions.traceId) ties to one operator action.
     await decideReview({
       prisma,
-      traceId: newTraceId(),
+      traceId,
       hotEventId: targetId,
       outcome: "republish",
       reviewer: "operator",
@@ -254,7 +264,7 @@ export async function submitMerge(formData: FormData): Promise<void> {
     //    note records the merge intent for the audit chain.
     await decideReview({
       prisma,
-      traceId: newTraceId(),
+      traceId,
       hotEventId: sourceId,
       outcome: "takedown",
       reviewer: "operator",
@@ -350,9 +360,11 @@ export async function submitSplit(formData: FormData): Promise<void> {
     }
 
     // 2. Refresh source's read model to show the remaining evidence (publish gate).
+    // Same action-level traceId threads through splitHotEvent + the republish so
+    // the audit chain ties to one operator action.
     await decideReview({
       prisma,
-      traceId: newTraceId(),
+      traceId,
       hotEventId: sourceId,
       outcome: "republish",
       reviewer: "operator",
