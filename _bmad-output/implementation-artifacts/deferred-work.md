@@ -969,3 +969,8 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   evidence: `packages/core/src/modules/publish-orchestrator/timeline-read-model.ts` 的 `listPublishedTimeline` 用 `take: limit ?? 50` 取首页，`ListPublishedTimelineOptions` 无 `cursor`/`offset` 字段，返回类型无 `totalCount`/`hasMore`。代码注释标明 "No cursor pagination in V1 (tiny scale)"。当一个热门交易日条目 >50 时，首页无法触达后续条目且无 "加载更多" 契约——属文档化的 V1 限制，但规模误判时是静默截断。4.2 首页落地前不构成阻塞。
   resolution: 待规模评估——若首波真实流量出现单日 >50 条，为 `listPublishedTimeline` 加 cursor 分页 + `hasMore`，并在 4.2 卡片接 "加载更多"。
 
+
+- source_spec: `_bmad-output/planning-artifacts/epics.md` (Story 4.3 V1 范围裁决，2026-07-11)
+  summary: 公告/研报 类别筛选出 4.3 V1 范围——整个 codebase 无任何数据承载，待真实数据源 + 数据模型落地后另开 story
+  evidence: 4.3 dev 在规划阶段 HALT（intent gap）：类别维度 V1 候选含「概念/行业/个股/公告/研报」六项，但 `published_timeline` 读模型无 category 字段、`listPublishedTimeline` 未实现 `category?` 参数，且 `公告|研报` 在 `packages/core/src` grep 零命中——无 enum、无 union 成员、无字段、无 source。唯一类别 taxonomy 是 `AssociationKind = concept|industry|stock`，仅存于 `EventAssociationSet.items`/`PublishedHotEventAssociation.items` 的 Json 展示列（不可 SQL 单项查）。PM 裁决（读法 B）：V1 类别 = concept/industry/stock 三项（复用既有 AssociationKind，内存过滤，镜像 2.2 feed-filter 模式），公告/研报 out-of-scope。强行实现公告/研报 pill 会违反 NFR「absence as absence，绝不伪造完整性」（无数据源的 pill 是死控件）。
+  resolution: 公告/研报 类别筛选 defer 到未来 story——前置条件：采购公告/研报真实数据源 + 定义 enum/归属模块 + 投影到 timeline 读模型（或独立 category 列/子表）。届时扩 4.3（或新 story）类别 pill 至 6 项。本 defer 与 deferred-work 中既有「按 concept/industry SQL 聚合需重构 Json 列为子表」「scale ceiling」同根（数据底座）。

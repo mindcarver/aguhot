@@ -609,12 +609,15 @@ As a 市场观察用户,
 I want 按交易时段和类别筛选时间流,
 So that 我聚焦自己关心的时段与板块。
 
+> **V1 范围裁决（2026-07-11，PM 决策，解 dev intent-gap HALT）：** 类别维度 V1 = `concept/industry/stock`（概念/行业/个股）三项，复用既有 `AssociationKind`，沿用 2.2 feed-filter 的内存过滤 V1 模式（服务端 SQL 筛选 + Json 列重构为子表属 scale-ceiling defer）。`announcement/research_report`（公告/研报）**出 V1 范围**——整个 codebase 无任何数据承载（无 enum/字段/source），强行实现违反「absence as absence」。待公告/研报真实数据源采购 + 数据模型落地后另开 story（已登 deferred-work）。时段维度（盘前/盘中/盘后/全天）无歧义、直接实现。
+
 **Acceptance Criteria:**
 
 **Given** 用户在时间流首页
-**When** 切换盘前/盘中/盘后或概念/行业/个股/公告/研报筛选
+**When** 切换盘前/盘中/盘后（时段维度）或 概念/行业/个股（类别维度，V1 三项）筛选
 **Then** 列表实时更新，当前筛选可见且可清除
 **And** 筛选条件在 URL 可分享，返回不丢失
+**And** 类别筛选基于既有 `AssociationKind`（concept/industry/stock），公告/研报不渲染（无数据源，V1 out-of-scope，见 deferred-work）
 
 ### Story 4.4: 时间流条目与搜索打通
 
