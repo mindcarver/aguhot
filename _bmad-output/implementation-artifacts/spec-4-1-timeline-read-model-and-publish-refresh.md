@@ -2,8 +2,9 @@
 title: '时间流读模型与发布刷新 (4.1)'
 type: 'feature'
 created: '2026-07-11'
-status: 'in-review'
+status: 'done'
 baseline_revision: '7915c09c981356c31c519e829cbfffc7d88f5cab'
+final_revision: '8ca94b592993a26fc3f51d0284725b346b9e3549'
 followup_review_recommended: true
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-11.md'
 review:
