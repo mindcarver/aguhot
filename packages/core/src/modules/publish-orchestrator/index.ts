@@ -80,4 +80,5 @@ export type {
   RefreshPublishedDailyDigestOptions,
   GetPublishedDailyDigestOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
+  PublishedHotEventDeepRead,
 } from "./types.js";

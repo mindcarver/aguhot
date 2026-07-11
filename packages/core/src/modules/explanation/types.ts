@@ -218,6 +218,23 @@ export interface LLMAdapter {
     title: string;
     summary: string;
   }): Promise<LlmReasonResult | null>;
+
+  /**
+   * Resolve the three-segment 影响面/受益方/风险点 AI 深读 for the given event's
+   * detail page. Implementations return three NON-EMPTY segments (each ≤120 字,
+   * free of the six forbidden phrase classes) plus their own modelId +
+   * promptVersion. Return null when no deep read is available (the caller writes
+   * nothing and degrades honestly). Each returned segment is validated by
+   * generateDeepRead (non-empty, ≤120 字, passes guardrail) — violations throw at
+   * the generator, never silently truncated.
+   *
+   * The adapter receives the event's title + summary + the member evidence records
+   * (sourceName / summary / publishedAt) so the three segments are grounded in the
+   * factual evidence timeline, not fabricated (NFR-2). Story 5.2 reuses the same
+   * LLMAdapter port 5.1 introduced (epic-5-context :108 "三者共用 worker resolve
+   * 模式"); the second method is added here rather than spawning a parallel port.
+   */
+  generateDeepRead(args: LlmDeepReadArgs): Promise<LlmDeepReadResult | null>;
 }
 
 /**
@@ -261,6 +278,109 @@ export interface RecommendationReasonRecord {
   id: string;
   hotEventId: string;
   reason: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+}
+
+// --- Story 5.2: LLMAdapter.generateDeepRead + DeepRead (detail-page AI 深读) ----
+
+/**
+ * One unit of LLMAdapter deep-read output — the three-segment 影响面/受益方/风险点
+ * AI 深读 for one hot event's detail page. The adapter resolves the three segments
+ * from the event's title + summary + member evidence and returns them with its own
+ * provenance (modelId + promptVersion, recorded on the appended row for NFR-7).
+ * deep-read-service validates each segment is non-empty, ≤ DEEP_READ_SEGMENT_MAX_LENGTH
+ * (120 字), and passes the 6-class wording guardrail (passesRecommendationGuardrail,
+ * reused from 5.1 — the guardrail is generic PRD §10, not reason-specific) — violations
+ * throw (fail-fast, never silently truncates/rewrites).
+ *
+ *   - impactSurface: 影响面 — NON-EMPTY, ≤120 字, free of the six forbidden phrase
+ *     classes.
+ *   - beneficiaries: 受益方 — NON-EMPTY, ≤120 字, free of the six forbidden phrase
+ *     classes.
+ *   - riskPoints: 风险点 — NON-EMPTY, ≤120 字, free of the six forbidden phrase classes.
+ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future real
+ *     provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the appended row.
+ *   - promptVersion: the prompt template version (e.g. "deepread-stub-v1").
+ *     Recorded verbatim on the appended row.
+ */
+export interface LlmDeepReadResult {
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
+  modelId: string;
+  promptVersion: string;
+}
+
+/**
+ * The context passed to LLMAdapter.generateDeepRead. Carries the event's title +
+ * summary (same overlay rule as the reason adapter) PLUS the member evidence records
+ * (sourceName + summary + publishedAt) so the adapter can ground the three segments in
+ * the actual evidence timeline (NFR-2: AI content must not fabricate sourceless
+ * conclusions; must stay consistent with the evidence timeline). evidence is a
+ * ReadonlyArray so the adapter cannot mutate the caller's array.
+ *
+ * The evidence shape mirrors what publish-orchestrator projects into
+ * published_hot_event_evidence (sourceName / summary / publishedAt) — the adapter
+ * receives the same grounding the public detail page renders.
+ */
+export interface LlmDeepReadArgs {
+  hotEventId: string;
+  title: string;
+  summary: string;
+  evidence: ReadonlyArray<{
+    sourceName: string;
+    summary: string;
+    publishedAt: Date | null;
+  }>;
+}
+
+/**
+ * Options for generateDeepRead. `{ prisma, traceId, hotEventId, adapter? }` mirrors
+ * generateRecommendationReason's command pattern plus an optional LLMAdapter. When
+ * adapter is omitted (or the event is missing / has no evidence), the function returns
+ * null and writes nothing (honest degradation — never fabricates a deep read).
+ * Otherwise it loads the HotEvent + member evidence, calls the adapter, validates the
+ * result (each segment non-empty, ≤120 字, passesRecommendationGuardrail; modelId +
+ * promptVersion non-empty), and APPENDS one deep_reads row (source="ai").
+ */
+export interface GenerateDeepReadOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  adapter?: LLMAdapter;
+}
+
+/**
+ * The result of a successful generation: the newly-appended deep-read row's id + the
+ * three segments + provenance + createdAt. Callers (the worker's projection refresh,
+ * verify/seed) consume the segments directly.
+ */
+export interface GenerateDeepReadResult {
+  deepReadId: string;
+  hotEventId: string;
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+  traceId: string;
+}
+
+/**
+ * One deep_reads row projected for read. Mirrors the columns the worker + audit need
+ * (no write paths here).
+ */
+export interface DeepReadRecord {
+  id: string;
+  hotEventId: string;
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
   source: LlmSource;
   modelId: string;
   promptVersion: string;

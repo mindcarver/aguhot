@@ -1008,3 +1008,13 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: dev 库既有迁移 `20260710141148_association_read_models` checksum 漂移——未来任何 `prisma migrate dev` 会被要求全库 reset
   evidence: Story 5.1 实现期发现本地 `aguhot_dev` 对 `20260710141148_association_read_models` 存在应用后被编辑的 checksum 漂移（早于 5.1，非本 story 引入）。`prisma migrate dev` 检测到该漂移会要求 reset 整库（销毁 dev 数据）；实现期改用 `prisma db execute` + `prisma migrate resolve --applied` 应用 5.1 迁移以绕开。漂移行仍在，`migrate status` 显示 up-to-date 但底层漂移未修。
   resolution: 待专人择期对漂移迁移做 reconciliation（reset 或校正 checksum），与 5.1 无关，登记为 deferred。
+
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
+  summary: AI 措辞黑名单（6 类子串）对合法金融描述词（持仓/增持/主力/一定 等）false-positive，深读风险段更易误杀
+  evidence: Story 5.2 复用 5.1 的 `passesRecommendationGuardrail`/`RECOMMENDATION_FORBIDDEN_PHRASES`（子串匹配，有意保守）。深读三段（影响面/受益方/风险点）讨论风险时天然用到「持仓结构调整」「主力动向」「一定不确定性」等合法词，会被 fail-fast 拒绝→该事件落 null 缺失态。verify-deepread 证明黑名单拒绝全部词但未证明接受合法风险词汇。V1 用 Stub（固定串过黑名单）不触发；真实 provider 接入时会显现。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
+  summary: deep-read worker append→refresh 一致性洞 + candidate-query TOCTOU——已 published 事件深读投影可能缺失且永不被重扫
+  evidence: worker 对已 published 事件 append DeepRead 后调 `refreshPublishedReadModel(action:"publish")`；若该 refresh 失败（worker try/catch 捕获、log、continue，无 retry——retry 为 spec Never），该事件有 `deep_reads` 真相行但无 `published_hot_event_deep_reads` 投影，详情页显示缺失态。worker 下次运行的 `deepReads:{none:{}}` 候选过滤排除已有深读行的事件，永不重扫；detail 读模型无 self-heal（仅 timeline 有 15min self-heal）。另：findMany 与逐条 generate 之间存在 publicationStatus TOCTOU（刚被 rejected/taken_down 的事件留孤儿深读行，罕见、后果低、Cascade 清理）。与 5.1 deferred 的 recommendation-reason TOCTOU 同类。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
+  summary: deep-read adapter grounding 的 evidence 无 orderBy，adapter 收到非确定顺序（NFR-2 漂移）
+  evidence: `generateDeepRead` 加载 `event.evidence` 传给 adapter 作 grounding，relation select 未加 `orderBy`（如 publishedAt asc）。NFR-2 要求深读与证据时间线一致；非确定顺序可能影响真实 provider 的 grounding。V1 Stub 忽略全部上下文不触发；真实 provider 接入时显现。修法：select 加 `orderBy: { publishedAt: "asc" }`（或与 published 投影的 position 顺序对齐）。

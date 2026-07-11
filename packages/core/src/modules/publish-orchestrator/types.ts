@@ -169,6 +169,16 @@ export interface PublishedHotEventDetail {
    * honest degraded state ("暂无已确认的主题关联。") in that case.
    */
   themes: PublishedHotEventTheme | null;
+  /**
+   * The AI 深读 block (Story 5.2). Null when no deep read was projected (deep-read
+   * worker resolved no adapter in V1 prod / generation has not run / takedown
+   * cleared the projection). The detail page renders the honest degraded state
+   * ("AI 深读生成中。") under the 为什么重要 block in that case. Distinct from
+   * `explanation` (which carries the summary/whyItMatters/uncertainties three-
+   * partition that stays on the same detail page): deepRead carries a DIFFERENT
+   * three-segment set (影响面/受益方/风险点) that coexists with explanation.
+   */
+  deepRead: PublishedHotEventDeepRead | null;
   evidence: PublishedEvidenceRow[];
 }
 
@@ -292,6 +302,33 @@ export interface ThemeRef {
  */
 export interface PublishedHotEventTheme {
   items: ThemeRef[];
+  source: string;
+  generatedAt: Date;
+}
+
+// --- Story 5.2: public deep-read (AI 深读) read types ------------------------
+
+/**
+ * The projected public AI 深读 block for one published hot event (Story 5.2).
+ * Mirrors published_hot_event_deep_reads. The three segments (影响面/受益方/风险点)
+ * are each ≤ DEEP_READ_SEGMENT_MAX_LENGTH (120 字) and pass the 6-class wording
+ * guardrail, enforced at deep-read write time (fail-fast). The detail page renders
+ * them under the 为什么重要 block with the uniform <AiLabel>.
+ *
+ * Row existence = currently published deep read (no status column). Absent when the
+ * deep-read worker has not produced a row (V1 prod: worker resolves no adapter →
+ * never produced) — the detail page shows the "AI 深读生成中。" degraded state (AC3).
+ * Absent does NOT block the existing summary/explanation/evidence/reaction/
+ * associations/themes rendering.
+ */
+export interface PublishedHotEventDeepRead {
+  /** 影响面 (impact surface). Descriptive, never advisory. */
+  impactSurface: string;
+  /** 受益方 (beneficiaries). Descriptive, never advisory. */
+  beneficiaries: string;
+  /** 风险点 (risk points). Descriptive, never advisory. */
+  riskPoints: string;
+  /** ExplanationSource union value carried from the latest DeepRead row ("ai" in V1). */
   source: string;
   generatedAt: Date;
 }

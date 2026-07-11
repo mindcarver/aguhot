@@ -57,6 +57,7 @@ import {
   STUB_RECOMMENDATION_REASON,
   type LLMAdapter,
   type LlmReasonResult,
+  type LlmDeepReadResult,
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
@@ -330,6 +331,11 @@ async function main(): Promise<void> {
           promptVersion: "reason-stub-v1",
         };
       },
+      // verify-reason exercises only the reason path; deep-read is covered by
+      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
+      },
     };
     let threwForbidden = false;
     try {
@@ -359,6 +365,11 @@ async function main(): Promise<void> {
             modelId: "stub:forbidden",
             promptVersion: "reason-stub-v1",
           };
+        },
+        // verify-reason exercises only the reason path; deep-read is covered by
+        // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+        async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+          return null;
         },
       };
       try {
@@ -390,6 +401,11 @@ async function main(): Promise<void> {
           modelId: "stub:overlen",
           promptVersion: "reason-stub-v1",
         };
+      },
+      // verify-reason exercises only the reason path; deep-read is covered by
+      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
       },
     };
     let threwOverlen = false;
@@ -434,6 +450,11 @@ async function main(): Promise<void> {
           promptVersion: "reason-stub-v1",
         };
       },
+      // verify-reason exercises only the reason path; deep-read is covered by
+      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
+      },
     };
     const rowsBefore40 = await prisma.recommendationReason.count({
       where: { hotEventId: candidate.id },
@@ -469,6 +490,11 @@ async function main(): Promise<void> {
           modelId: "stub:boundary",
           promptVersion: "reason-stub-v1",
         };
+      },
+      // verify-reason exercises only the reason path; deep-read is covered by
+      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
       },
     };
     let threwExact41 = false;

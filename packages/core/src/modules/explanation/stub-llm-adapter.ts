@@ -21,7 +21,7 @@
  * (passesRecommendationGuardrail) — verify's self-check asserts both.
  */
 
-import type { LLMAdapter, LlmReasonResult } from "./types.js";
+import type { LLMAdapter, LlmDeepReadArgs, LlmDeepReadResult, LlmReasonResult } from "./types.js";
 
 /**
  * The fixed AI 解读 the stub reports for every event. Exported so verify/e2e
@@ -38,6 +38,26 @@ import type { LLMAdapter, LlmReasonResult } from "./types.js";
 export const STUB_RECOMMENDATION_REASON = "证据链已归档，事件仍在演化。";
 
 /**
+ * The fixed three-segment AI 深读 the stub reports for every event. Exported so
+ * verify/e2e can assert the projected published_hot_event_deep_reads carries exactly
+ * these three strings (deterministic across runs). Each segment is ≤120 字
+ * (DEEP_READ_SEGMENT_MAX_LENGTH) and free of the six forbidden phrase classes
+ * (action / return-prediction / manipulation-frame / recommendation-strength /
+ * timing-advice / over-certainty).
+ *
+ * The strings are intentionally restrained and factual: impact names the affected
+ * chain without naming targets, beneficiaries stays as "may draw attention" (not
+ * "will benefit"), risk names downstream uncertainty — no buy/sell/price/target/
+ * timeframe wording, no over-certainty. This is the tone baseline a real provider
+ * must match (PRD §10 + epic-5-context 语气基调: 克制、可证、不煽动).
+ */
+export const STUB_DEEP_READ = {
+  impactSurface: "事件波及相关产业链上下游企业。",
+  beneficiaries: "上游原材料供应商短期或受关注。",
+  riskPoints: "下游需求不确定性仍存。",
+} as const;
+
+/**
  * The fixed provenance the stub reports. modelId + promptVersion are recorded
  * on every appended recommendation_reasons row (NFR-7). The "stub:" prefix on
  * modelId makes a stub-generated row trivially distinguishable from a future
@@ -47,6 +67,14 @@ export const STUB_RECOMMENDATION_REASON = "证据链已归档，事件仍在演�
  */
 const STUB_MODEL_ID = "stub:v1";
 const STUB_PROMPT_VERSION = "reason-stub-v1";
+
+/**
+ * The fixed prompt version the stub reports for deep-read generation. Recorded on
+ * every appended deep_reads row (NFR-7). "deepread-stub-v1" names this stub's
+ * deep-read prompt template version (distinct from the reason-stub-v1 template —
+ * a different generation shape gets a different prompt-version string).
+ */
+const STUB_DEEP_READ_PROMPT_VERSION = "deepread-stub-v1";
 
 /**
  * Deterministic stub LLM adapter. Returns a fixed non-null LlmReasonResult on
@@ -76,6 +104,36 @@ export class StubLlmAdapter implements LLMAdapter {
       reason: STUB_RECOMMENDATION_REASON,
       modelId: STUB_MODEL_ID,
       promptVersion: STUB_PROMPT_VERSION,
+    };
+  }
+
+  /**
+   * Deterministic stub deep-read generation. Returns a fixed non-null
+   * LlmDeepReadResult on every call — the three STUB_DEEP_READ segments + the
+   * fixed modelId/promptVersion provenance. See the module doc for why this is
+   * test-only. Always returns a result (never null): the stub's contract is "given
+   * any event with evidence, produce the fixture deep read". The event's evidence
+   * existence is checked upstream by generateDeepRead (which returns null for an
+   * evidence-less event before calling the adapter), so by the time the stub is
+   * reached the event is known to have evidence.
+   */
+  async generateDeepRead(
+    args: LlmDeepReadArgs,
+  ): Promise<LlmDeepReadResult | null> {
+    // Reference args to make the contract explicit (the stub ignores the event
+    // context — a real adapter would use title/summary/evidence to ground the three
+    // segments). Avoids an unused-vars lint while documenting that the fixture is
+    // context-independent.
+    void args.hotEventId;
+    void args.title;
+    void args.summary;
+    void args.evidence;
+    return {
+      impactSurface: STUB_DEEP_READ.impactSurface,
+      beneficiaries: STUB_DEEP_READ.beneficiaries,
+      riskPoints: STUB_DEEP_READ.riskPoints,
+      modelId: STUB_MODEL_ID,
+      promptVersion: STUB_DEEP_READ_PROMPT_VERSION,
     };
   }
 }

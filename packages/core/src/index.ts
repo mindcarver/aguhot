@@ -199,6 +199,7 @@ export type {
   RefreshPublishedDailyDigestOptions,
   GetPublishedDailyDigestOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
+  PublishedHotEventDeepRead,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
@@ -207,7 +208,12 @@ export type {
 // Story 5.1 — LLMAdapter port AD-7 + StubLlmAdapter test-only +
 // generateRecommendationReason append-only AD-2 + recommendation_reasons table +
 // 6-class wording guardrail; recommendation-reason worker resolves no adapter →
-// prod degrades honestly, stub is verify/e2e-only).
+// prod degrades honestly, stub is verify/e2e-only;
+// Story 5.2 — LLMAdapter.generateDeepRead (second method on the same port) +
+// generateDeepRead append-only AD-2 + deep_reads table + published_hot_event_
+// deep_reads projection; deep-read worker resolves no adapter → prod degrades
+// honestly, stub is verify/e2e-only; reuses the 5.1 6-class guardrail per
+// segment).
 export {
   generateExplanation,
   getLatestExplanation,
@@ -220,8 +226,12 @@ export {
   passesRecommendationGuardrail,
   RECOMMENDATION_REASON_MAX_LENGTH,
   RECOMMENDATION_FORBIDDEN_PHRASES,
+  generateDeepRead,
+  getLatestDeepRead,
+  DEEP_READ_SEGMENT_MAX_LENGTH,
   StubLlmAdapter,
   STUB_RECOMMENDATION_REASON,
+  STUB_DEEP_READ,
 } from "./modules/explanation/index.js";
 export {
   ExplanationSource,
@@ -237,10 +247,15 @@ export type {
   SaveExplanationResult,
   LlmSource,
   LlmReasonResult,
+  LlmDeepReadResult,
+  LlmDeepReadArgs,
   LLMAdapter,
   GenerateRecommendationReasonOptions,
   GenerateRecommendationReasonResult,
   RecommendationReasonRecord,
+  GenerateDeepReadOptions,
+  GenerateDeepReadResult,
+  DeepReadRecord,
 } from "./modules/explanation/types.js";
 
 // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +

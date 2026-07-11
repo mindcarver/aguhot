@@ -141,6 +141,9 @@ export async function refreshPublishedReadModel(
     await prisma.publishedHotEventTheme.deleteMany({
       where: { hotEventId },
     });
+    await prisma.publishedHotEventDeepRead.deleteMany({
+      where: { hotEventId },
+    });
     await prisma.publishedHotEvent.deleteMany({
       where: { hotEventId },
     });
@@ -233,6 +236,9 @@ export async function refreshPublishedReadModel(
 
   // 6. Theme membership projection (published_hot_event_themes, Story 2.3).
   await projectThemes(prisma, traceId, hotEventId);
+
+  // 7. Deep-read projection (published_hot_event_deep_reads, Story 5.2).
+  await projectDeepRead(prisma, traceId, hotEventId);
 }
 
 /**
@@ -563,6 +569,70 @@ async function projectThemes(
 }
 
 /**
+ * Project the latest DeepRead into published_hot_event_deep_reads (Story 5.2). If a
+ * deep read exists, upsert the row (1:1 per hotEventId, three segments + source +
+ * generatedAt). If no deep read exists (deep-read worker has not run, or V1 prod
+ * adapter resolves to none), deleteMany that hotEventId's deep-read row so the detail
+ * page renders the honest degraded state (deepRead: null → "AI 深读生成中。") rather
+ * than a stale prior projection. Called inside the publish transaction and by the
+ * deep-read worker after it appends a deep read.
+ *
+ * Mirrors projectExplanation / projectThemes: read latest → upsert or deleteMany.
+ * publish-orchestrator stays the SOLE writer of published_hot_event_deep_reads
+ * (AD-2/AD-3); the deep-read worker only appends deep_reads + calls this projection.
+ */
+async function projectDeepRead(
+  prisma: PrismaClient,
+  traceId: string,
+  hotEventId: string,
+): Promise<void> {
+  const latest = await prisma.deepRead.findFirst({
+    where: { hotEventId },
+    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
+    // embed a monotonic timestamp) — same convention as projectExplanation /
+    // projectMarketReaction / projectAssociations / projectThemes.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      impactSurface: true,
+      beneficiaries: true,
+      riskPoints: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    // No deep read yet: clear any stale projection so the detail page shows the
+    // degraded state (no fabricated deep read — "AI 深读生成中。").
+    await prisma.publishedHotEventDeepRead.deleteMany({
+      where: { hotEventId },
+    });
+    return;
+  }
+
+  await prisma.publishedHotEventDeepRead.upsert({
+    where: { hotEventId },
+    create: {
+      hotEventId,
+      impactSurface: latest.impactSurface,
+      beneficiaries: latest.beneficiaries,
+      riskPoints: latest.riskPoints,
+      deepReadSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      impactSurface: latest.impactSurface,
+      beneficiaries: latest.beneficiaries,
+      riskPoints: latest.riskPoints,
+      deepReadSource: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
  * List all currently-published hot events for the public feed — Story 1.7.
  *
  * This is the first public consumer of the published_hot_events read model (AD-3:
@@ -717,6 +787,20 @@ export async function getPublishedHotEventDetail(
     },
   });
 
+  // Deep-read block (nullable, Story 5.2). Absent when the deep-read worker has
+  // not produced a row yet (V1 prod: worker resolves no adapter) → the detail page
+  // renders the honest degraded state ("AI 深读生成中。").
+  const deepReadRow = await prisma.publishedHotEventDeepRead.findUnique({
+    where: { hotEventId },
+    select: {
+      impactSurface: true,
+      beneficiaries: true,
+      riskPoints: true,
+      deepReadSource: true,
+      generatedAt: true,
+    },
+  });
+
   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
     id: r.id,
     hotEventId: r.hotEventId,
@@ -777,6 +861,16 @@ export async function getPublishedHotEventDetail(
             items: themeRow.items as unknown as ThemeRef[],
             source: themeRow.themeSource,
             generatedAt: themeRow.generatedAt,
+          },
+    deepRead:
+      deepReadRow === null
+        ? null
+        : {
+            impactSurface: deepReadRow.impactSurface,
+            beneficiaries: deepReadRow.beneficiaries,
+            riskPoints: deepReadRow.riskPoints,
+            source: deepReadRow.deepReadSource,
+            generatedAt: deepReadRow.generatedAt,
           },
     evidence,
   };

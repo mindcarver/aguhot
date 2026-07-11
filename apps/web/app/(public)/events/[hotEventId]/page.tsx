@@ -231,6 +231,49 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
         ) : (
           <p className="text-base text-ink-tertiary">系统解释生成中。</p>
         )}
+
+        {/* Story 5.2: AI 深读 (deep read) — three segments 影响面/受益方/风险点
+            rendered UNDER the 为什么重要 block (UX :89-90, NFR-3). Carries the
+            uniform <AiLabel> when present; honest degraded state when no deep read
+            was projected (V1 prod: worker resolves no adapter → "AI 深读生成中。").
+            Visual weight ≤ the factual summary above (text-sm text-ink-secondary, not
+            text-base text-ink-primary) so the AI interpretation never outweighs the
+            facts. Distinct from the explanation partition (whyItMatters above) — both
+            coexist on the same page; deepRead is a different three-segment set. */}
+        {detail.deepRead !== null ? (
+          <div className="space-y-2 border-t border-border-hairline pt-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
+                AI 深读
+              </h3>
+              <AiLabel />
+            </div>
+            <dl className="space-y-1.5">
+              <div>
+                <dt className="text-xs font-semibold text-ink-secondary">影响面</dt>
+                <dd className="text-sm leading-relaxed text-ink-secondary">
+                  {detail.deepRead.impactSurface}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold text-ink-secondary">受益方</dt>
+                <dd className="text-sm leading-relaxed text-ink-secondary">
+                  {detail.deepRead.beneficiaries}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold text-ink-secondary">风险点</dt>
+                <dd className="text-sm leading-relaxed text-ink-secondary">
+                  {detail.deepRead.riskPoints}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        ) : (
+          <p className="border-t border-border-hairline pt-3 text-sm text-ink-tertiary">
+            AI 深读生成中。
+          </p>
+        )}
       </section>
 
       {/* 当前仍不确定什么 — system-derived, or honest degraded state. */}

@@ -1,0 +1,2277 @@
+diff --git a/apps/web/app/(public)/events/[hotEventId]/page.tsx b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+index 337298a..c453da8 100644
+--- a/apps/web/app/(public)/events/[hotEventId]/page.tsx
++++ b/apps/web/app/(public)/events/[hotEventId]/page.tsx
+@@ -231,6 +231,49 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
+         ) : (
+           <p className="text-base text-ink-tertiary">系统解释生成中。</p>
+         )}
++
++        {/* Story 5.2: AI 深读 (deep read) — three segments 影响面/受益方/风险点
++            rendered UNDER the 为什么重要 block (UX :89-90, NFR-3). Carries the
++            uniform <AiLabel> when present; honest degraded state when no deep read
++            was projected (V1 prod: worker resolves no adapter → "AI 深读生成中。").
++            Visual weight ≤ the factual summary above (text-sm text-ink-secondary, not
++            text-base text-ink-primary) so the AI interpretation never outweighs the
++            facts. Distinct from the explanation partition (whyItMatters above) — both
++            coexist on the same page; deepRead is a different three-segment set. */}
++        {detail.deepRead !== null ? (
++          <div className="space-y-2 border-t border-border-hairline pt-3">
++            <div className="flex items-center gap-2">
++              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
++                AI 深读
++              </h3>
++              <AiLabel />
++            </div>
++            <dl className="space-y-1.5">
++              <div>
++                <dt className="text-xs font-semibold text-ink-secondary">影响面</dt>
++                <dd className="text-sm leading-relaxed text-ink-secondary">
++                  {detail.deepRead.impactSurface}
++                </dd>
++              </div>
++              <div>
++                <dt className="text-xs font-semibold text-ink-secondary">受益方</dt>
++                <dd className="text-sm leading-relaxed text-ink-secondary">
++                  {detail.deepRead.beneficiaries}
++                </dd>
++              </div>
++              <div>
++                <dt className="text-xs font-semibold text-ink-secondary">风险点</dt>
++                <dd className="text-sm leading-relaxed text-ink-secondary">
++                  {detail.deepRead.riskPoints}
++                </dd>
++              </div>
++            </dl>
++          </div>
++        ) : (
++          <p className="border-t border-border-hairline pt-3 text-sm text-ink-tertiary">
++            AI 深读生成中。
++          </p>
++        )}
+       </section>
+ 
+       {/* 当前仍不确定什么 — system-derived, or honest degraded state. */}
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index ca2126e..ed21f6d 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -15,6 +15,7 @@
+     "verify:themes": "tsx src/verify-themes.ts",
+     "verify:digest": "tsx src/verify-digest.ts",
+     "verify:reason": "tsx src/verify-reason.ts",
++    "verify:deepread": "tsx src/verify-deepread.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "verify:timeline": "tsx src/verify-timeline.ts",
+diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+index a8739d6..7f834f7 100644
+--- a/apps/worker/src/index.ts
++++ b/apps/worker/src/index.ts
+@@ -1,34 +1,37 @@
+ /**
+  * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction /
+- * theme-backfill / daily-digest / publish-timeline / recommendation-reason runtime.
++ * theme-backfill / daily-digest / publish-timeline / recommendation-reason /
++ * deep-read runtime.
+  *
+  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
+  * cluster worker. Story 1.8 added the explain worker. Story 2.1 added the
+  * market-reaction worker. Story 2.3 added the theme-backfill worker. Story 2.4
+  * added the daily-digest worker. Story 4.1 added the publish-timeline self-heal
+- * worker. Story 5.1 adds the recommendation-reason worker alongside them:
+- * validate required env (DB + Redis), connect Redis, register all eight workers,
+- * wire the timeline self-heal repeatable schedule, and wire graceful shutdown
+- * (close all eight). The web request path never imports this module — heavy
+- * work is async (AD-4).
++ * worker. Story 5.1 added the recommendation-reason worker. Story 5.2 added the
++ * deep-read worker alongside them: validate required env (DB + Redis), connect
++ * Redis, register all nine workers, wire the timeline self-heal repeatable
++ * schedule, and wire graceful shutdown (close all nine). The web request path
++ * never imports this module — heavy work is async (AD-4).
+  *
+- * The eight workers are independent and idempotent: ingest does not trigger a
++ * The nine workers are independent and idempotent: ingest does not trigger a
+  * cluster job automatically, cluster does not trigger an explain job, explain
+  * does not trigger a market-reaction job, market-reaction does not trigger a
+  * theme-backfill job, theme-backfill does not trigger a daily-digest job, none
+- * of those triggers the publish-timeline self-heal automatically, and none
+- * triggers the recommendation-reason job automatically (the jobs are decoupled;
+- * pipeline chaining/cron orchestration is deferred — see deferred-work.md). The
+- * publish-timeline worker is the only one carrying a repeatable self-heal
+- * schedule (every 15 min, corrective only — the main timeline refresh is the
+- * in-transaction refreshPublishedTimelineForEvent inside decideReview, AD-3b
+- * method A). Each worker can run in isolation against the shared DB/Redis.
++ * of those triggers the publish-timeline self-heal automatically, none triggers
++ * the recommendation-reason job automatically, and none triggers the deep-read
++ * job automatically (the jobs are decoupled; pipeline chaining/cron orchestration
++ * is deferred — see deferred-work.md). The publish-timeline worker is the only
++ * one carrying a repeatable self-heal schedule (every 15 min, corrective only —
++ * the main timeline refresh is the in-transaction refreshPublishedTimelineForEvent
++ * inside decideReview, AD-3b method A). Each worker can run in isolation against
++ * the shared DB/Redis.
+  */
+ 
+ import { requireEnv } from "@aguhot/config";
+ 
+ import { closeRedis, getRedis } from "./queues/connection.js";
+ import { registerDailyDigestWorker } from "./queues/daily-digest-queue.js";
++import { registerDeepReadWorker } from "./queues/deep-read-queue.js";
+ import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
+ import { registerExplainWorker } from "./queues/explain-queue.js";
+ import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
+@@ -54,6 +57,7 @@ async function main(): Promise<void> {
+   const dailyDigestWorker = registerDailyDigestWorker();
+   const publishTimelineWorker = registerPublishTimelineWorker();
+   const recommendationReasonWorker = registerRecommendationReasonWorker();
++  const deepReadWorker = registerDeepReadWorker();
+ 
+   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
+   // only — the main timeline refresh is the in-tx refreshPublishedTimeline-
+@@ -61,7 +65,7 @@ async function main(): Promise<void> {
+   // existing schedule with the same key on restart.
+   await schedulePublishTimelineSelfHeal();
+ 
+-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason workers registered and running");
++  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read workers registered and running");
+ 
+   const shutdown = async (signal: string): Promise<void> => {
+     console.log(`[worker] received ${signal}, shutting down`);
+@@ -74,6 +78,7 @@ async function main(): Promise<void> {
+       dailyDigestWorker.close(),
+       publishTimelineWorker.close(),
+       recommendationReasonWorker.close(),
++      deepReadWorker.close(),
+     ]);
+     await closeRedis();
+     process.exit(0);
+diff --git a/apps/worker/src/verify-reason.ts b/apps/worker/src/verify-reason.ts
+index ca48755..2a5a79b 100644
+--- a/apps/worker/src/verify-reason.ts
++++ b/apps/worker/src/verify-reason.ts
+@@ -57,6 +57,7 @@ import {
+   STUB_RECOMMENDATION_REASON,
+   type LLMAdapter,
+   type LlmReasonResult,
++  type LlmDeepReadResult,
+ } from "@aguhot/core";
+ import { resetEnvCache, requireEnv } from "@aguhot/config";
+ 
+@@ -330,6 +331,11 @@ async function main(): Promise<void> {
+           promptVersion: "reason-stub-v1",
+         };
+       },
++      // verify-reason exercises only the reason path; deep-read is covered by
++      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
++        return null;
++      },
+     };
+     let threwForbidden = false;
+     try {
+@@ -360,6 +366,11 @@ async function main(): Promise<void> {
+             promptVersion: "reason-stub-v1",
+           };
+         },
++        // verify-reason exercises only the reason path; deep-read is covered by
++        // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++        async generateDeepRead(): Promise<LlmDeepReadResult | null> {
++          return null;
++        },
+       };
+       try {
+         await generateRecommendationReason({
+@@ -391,6 +402,11 @@ async function main(): Promise<void> {
+           promptVersion: "reason-stub-v1",
+         };
+       },
++      // verify-reason exercises only the reason path; deep-read is covered by
++      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
++        return null;
++      },
+     };
+     let threwOverlen = false;
+     try {
+@@ -434,6 +450,11 @@ async function main(): Promise<void> {
+           promptVersion: "reason-stub-v1",
+         };
+       },
++      // verify-reason exercises only the reason path; deep-read is covered by
++      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
++        return null;
++      },
+     };
+     const rowsBefore40 = await prisma.recommendationReason.count({
+       where: { hotEventId: candidate.id },
+@@ -470,6 +491,11 @@ async function main(): Promise<void> {
+           promptVersion: "reason-stub-v1",
+         };
+       },
++      // verify-reason exercises only the reason path; deep-read is covered by
++      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
++        return null;
++      },
+     };
+     let threwExact41 = false;
+     try {
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index 321d530..a9fd842 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -181,6 +181,17 @@ model HotEvent {
+   // reason via `recommendationReasons: { none: {} }`. It does NOT change the
+   // explanation module's write-ownership of recommendation_reasons.
+   recommendationReasons RecommendationReason[]
++  // Read-only reverse relation to the append-only AI 深读 rows (Story 5.2).
++  // The explanation module owns deep_reads (AD-5 append-only, one row per
++  // generation of the three-segment 影响面/受益方/风险点 detail-page deep read);
++  // publish-orchestrator projects the LATEST row into published_hot_event_deep_
++  // reads (the sole writer of that projection stays publish-orchestrator,
++  // AD-2/AD-3). This navigation lets publish-orchestrator read the latest deep
++  // read at projection time and lets the deep-read worker query events lacking a
++  // deep read via `deepReads: { none: {} }`. It does NOT change the explanation
++  // module's write-ownership of deep_reads.
++  deepReads         DeepRead[]
++  publishedDeepRead PublishedHotEventDeepRead?
+ 
+   @@index([publicationStatus])
+   @@map("hot_events")
+@@ -840,3 +851,62 @@ model RecommendationReason {
+   @@index([createdAt])
+   @@map("recommendation_reasons")
+ }
++
++// Story 5.2 — append-only AI 深读 (event-level "为什么重要" deep read). Same shape
++// and ownership rules as RecommendationReason above: rows are append-only, so the
++// chain ordered by created_at is the auditable history (NFR-7 version +
++// provenance: model_id + prompt_version + source on every row). The
++// publish-orchestrator projection (projectDeepRead) projects the LATEST row
++// (created_at desc first) into published_hot_event_deep_reads — publish-
++// orchestrator stays the SOLE writer of that projection (AD-2/AD-3); the worker
++// only appends here + calls refreshPublishedReadModel.
++//
++// Distinct from ExplanationVersion (a DIFFERENT three-partition: summary/
++// whyItMatters/uncertainties — the deterministic template three-block that stays
++// on the same detail page). DeepRead is a separate append-only table carrying
++// 影响面/受益方/风险点 per row (epic-5-context data-model decision: three
++// independent append-only tables, do not reuse ExplanationVersion).
++//
++// FK onDelete: Cascade so a HotEvent deletion cleans up its AI 深读 history.
++// `source` is "ai" in V1 (real LLM deferred; the stub also writes "ai" so the
++// projection pipeline is identical — only the model_id/prompt_version mark it as
++// stub-generated).
++model DeepRead {
++  id            String   @id // UUIDv7, assigned in application code (newTraceId)
++  hotEventId    String   @map("hot_event_id")
++  impactSurface String   @map("impact_surface") // 影响面; ≤120 字; guardrail-enforced at write time
++  beneficiaries String // 受益方; ≤120 字; guardrail-enforced at write time
++  riskPoints    String   @map("risk_points") // 风险点; ≤120 字; guardrail-enforced at write time
++  source        String // ExplanationSource union value ("ai" in V1)
++  modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
++  promptVersion String   @map("prompt_version") // prompt template version (e.g. "deepread-stub-v1")
++  traceId       String?  @map("trace_id")
++  createdAt     DateTime @default(now()) @map("created_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@index([hotEventId])
++  @@index([createdAt])
++  @@map("deep_reads")
++}
++
++// Public read-model projection of the latest DeepRead row (AD-3 public projection,
++// one row per published HotEvent). publish-orchestrator is the SOLE writer
++// (projectDeepRead inside refreshPublishedReadModel; AD-2/AD-3); the detail page
++// reads it via getPublishedHotEventDetail. deep_read_source/generated_at come from
++// the latest DeepRead row (always "ai" in V1). Cleared on takedown alongside the
++// other published_* read models. Mirrors published_hot_event_explanations.
++model PublishedHotEventDeepRead {
++  hotEventId     String   @id @map("hot_event_id")
++  impactSurface  String   @map("impact_surface")
++  beneficiaries  String
++  riskPoints     String   @map("risk_points")
++  deepReadSource String   @map("deep_read_source") // ExplanationSource union value
++  generatedAt    DateTime @map("generated_at")
++  traceId        String?  @map("trace_id")
++  updatedAt      DateTime @updatedAt @map("updated_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@map("published_hot_event_deep_reads")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 0b4bd26..88682d6 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -199,6 +199,7 @@ export type {
+   RefreshPublishedDailyDigestOptions,
+   GetPublishedDailyDigestOptions,
+   ListPublishedDailyDigestCoverageDatesOptions,
++  PublishedHotEventDeepRead,
+ } from "./modules/publish-orchestrator/types.js";
+ 
+ // explanation module (Story 1.8 — deterministic three-partition generation +
+@@ -207,7 +208,12 @@ export type {
+ // Story 5.1 — LLMAdapter port AD-7 + StubLlmAdapter test-only +
+ // generateRecommendationReason append-only AD-2 + recommendation_reasons table +
+ // 6-class wording guardrail; recommendation-reason worker resolves no adapter →
+-// prod degrades honestly, stub is verify/e2e-only).
++// prod degrades honestly, stub is verify/e2e-only;
++// Story 5.2 — LLMAdapter.generateDeepRead (second method on the same port) +
++// generateDeepRead append-only AD-2 + deep_reads table + published_hot_event_
++// deep_reads projection; deep-read worker resolves no adapter → prod degrades
++// honestly, stub is verify/e2e-only; reuses the 5.1 6-class guardrail per
++// segment).
+ export {
+   generateExplanation,
+   getLatestExplanation,
+@@ -220,8 +226,12 @@ export {
+   passesRecommendationGuardrail,
+   RECOMMENDATION_REASON_MAX_LENGTH,
+   RECOMMENDATION_FORBIDDEN_PHRASES,
++  generateDeepRead,
++  getLatestDeepRead,
++  DEEP_READ_SEGMENT_MAX_LENGTH,
+   StubLlmAdapter,
+   STUB_RECOMMENDATION_REASON,
++  STUB_DEEP_READ,
+ } from "./modules/explanation/index.js";
+ export {
+   ExplanationSource,
+@@ -237,10 +247,15 @@ export type {
+   SaveExplanationResult,
+   LlmSource,
+   LlmReasonResult,
++  LlmDeepReadResult,
++  LlmDeepReadArgs,
+   LLMAdapter,
+   GenerateRecommendationReasonOptions,
+   GenerateRecommendationReasonResult,
+   RecommendationReasonRecord,
++  GenerateDeepReadOptions,
++  GenerateDeepReadResult,
++  DeepReadRecord,
+ } from "./modules/explanation/types.js";
+ 
+ // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
+diff --git a/packages/core/src/modules/explanation/index.ts b/packages/core/src/modules/explanation/index.ts
+index 4f6a088..0c7a02a 100644
+--- a/packages/core/src/modules/explanation/index.ts
++++ b/packages/core/src/modules/explanation/index.ts
+@@ -1,18 +1,22 @@
+ /**
+- * explanation module barrel — Story 1.8 + Story 5.1.
++ * explanation module barrel — Story 1.8 + Story 5.1 + Story 5.2.
+  *
+- * Owns the ExplanationVersion table (AD-5 append-only) and, as of Story 5.1,
++ * Owns the ExplanationVersion table (AD-5 append-only), and as of Story 5.1,
+  * the recommendation_reasons table (AD-5 append-only, the ≤40 字 AI 解读 card
+- * hook). Exposes the deterministic three-partition generator + the latest-
+- * version read query (1.8), the LLMAdapter port + StubLlmAdapter test-only +
+- * the recommendation-reason generator + the 6-class guardrail (5.1). The Prisma
+- * client lives one level up and is re-exported from the package barrel.
++ * hook), and as of Story 5.2, the deep_reads table (AD-5 append-only, the
++ * three-segment 影响面/受益方/风险点 AI 深读 detail-page deep read). Exposes the
++ * deterministic three-partition generator + the latest-version read query (1.8),
++ * the LLMAdapter port + StubLlmAdapter test-only + the recommendation-reason
++ * generator + the 6-class guardrail (5.1), and the deep-read generator (5.2,
++ * reusing the same guardrail + port). The Prisma client lives one level up and is
++ * re-exported from the package barrel.
+  *
+  * This module never writes hot_events, evidence_records, or published_* tables.
+- * It only appends explanation_versions + recommendation_reasons; publish-
+- * orchestrator reads the latest of each at projection time and writes the public
+- * read models (it is the SOLE writer of published_timeline_entries.recommendation_
+- * reason — the worker only appends here + triggers the existing projection).
++ * It only appends explanation_versions + recommendation_reasons + deep_reads;
++ * publish-orchestrator reads the latest of each at projection time and writes the
++ * public read models (it is the SOLE writer of published_timeline_entries.
++ * recommendation_reason AND published_hot_event_deep_reads — the worker only
++ * appends here + triggers the existing projections).
+  */
+ 
+ export { generateExplanation, getLatestExplanation, derivePartitions, saveExplanation } from "./explain-service.js";
+@@ -23,7 +27,16 @@ export {
+   RECOMMENDATION_REASON_MAX_LENGTH,
+   RECOMMENDATION_FORBIDDEN_PHRASES,
+ } from "./reason-service.js";
+-export { StubLlmAdapter, STUB_RECOMMENDATION_REASON } from "./stub-llm-adapter.js";
++export {
++  generateDeepRead,
++  getLatestDeepRead,
++  DEEP_READ_SEGMENT_MAX_LENGTH,
++} from "./deep-read-service.js";
++export {
++  StubLlmAdapter,
++  STUB_RECOMMENDATION_REASON,
++  STUB_DEEP_READ,
++} from "./stub-llm-adapter.js";
+ export { ExplanationSource } from "./types.js";
+ export type {
+   ExplanationSource as ExplanationSourceType,
+@@ -36,8 +49,13 @@ export type {
+   SaveExplanationResult,
+   LlmSource,
+   LlmReasonResult,
++  LlmDeepReadResult,
++  LlmDeepReadArgs,
+   LLMAdapter,
+   GenerateRecommendationReasonOptions,
+   GenerateRecommendationReasonResult,
+   RecommendationReasonRecord,
++  GenerateDeepReadOptions,
++  GenerateDeepReadResult,
++  DeepReadRecord,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/explanation/stub-llm-adapter.ts b/packages/core/src/modules/explanation/stub-llm-adapter.ts
+index e69e204..1c164bd 100644
+--- a/packages/core/src/modules/explanation/stub-llm-adapter.ts
++++ b/packages/core/src/modules/explanation/stub-llm-adapter.ts
+@@ -21,7 +21,7 @@
+  * (passesRecommendationGuardrail) — verify's self-check asserts both.
+  */
+ 
+-import type { LLMAdapter, LlmReasonResult } from "./types.js";
++import type { LLMAdapter, LlmDeepReadArgs, LlmDeepReadResult, LlmReasonResult } from "./types.js";
+ 
+ /**
+  * The fixed AI 解读 the stub reports for every event. Exported so verify/e2e
+@@ -37,6 +37,26 @@ import type { LLMAdapter, LlmReasonResult } from "./types.js";
+  */
+ export const STUB_RECOMMENDATION_REASON = "证据链已归档，事件仍在演化。";
+ 
++/**
++ * The fixed three-segment AI 深读 the stub reports for every event. Exported so
++ * verify/e2e can assert the projected published_hot_event_deep_reads carries exactly
++ * these three strings (deterministic across runs). Each segment is ≤120 字
++ * (DEEP_READ_SEGMENT_MAX_LENGTH) and free of the six forbidden phrase classes
++ * (action / return-prediction / manipulation-frame / recommendation-strength /
++ * timing-advice / over-certainty).
++ *
++ * The strings are intentionally restrained and factual: impact names the affected
++ * chain without naming targets, beneficiaries stays as "may draw attention" (not
++ * "will benefit"), risk names downstream uncertainty — no buy/sell/price/target/
++ * timeframe wording, no over-certainty. This is the tone baseline a real provider
++ * must match (PRD §10 + epic-5-context 语气基调: 克制、可证、不煽动).
++ */
++export const STUB_DEEP_READ = {
++  impactSurface: "事件波及相关产业链上下游企业。",
++  beneficiaries: "上游原材料供应商短期或受关注。",
++  riskPoints: "下游需求不确定性仍存。",
++} as const;
++
+ /**
+  * The fixed provenance the stub reports. modelId + promptVersion are recorded
+  * on every appended recommendation_reasons row (NFR-7). The "stub:" prefix on
+@@ -48,6 +68,14 @@ export const STUB_RECOMMENDATION_REASON = "证据链已归档，事件仍在演
+ const STUB_MODEL_ID = "stub:v1";
+ const STUB_PROMPT_VERSION = "reason-stub-v1";
+ 
++/**
++ * The fixed prompt version the stub reports for deep-read generation. Recorded on
++ * every appended deep_reads row (NFR-7). "deepread-stub-v1" names this stub's
++ * deep-read prompt template version (distinct from the reason-stub-v1 template —
++ * a different generation shape gets a different prompt-version string).
++ */
++const STUB_DEEP_READ_PROMPT_VERSION = "deepread-stub-v1";
++
+ /**
+  * Deterministic stub LLM adapter. Returns a fixed non-null LlmReasonResult on
+  * every call — the STUB_RECOMMENDATION_REASON string + the fixed
+@@ -78,4 +106,34 @@ export class StubLlmAdapter implements LLMAdapter {
+       promptVersion: STUB_PROMPT_VERSION,
+     };
+   }
++
++  /**
++   * Deterministic stub deep-read generation. Returns a fixed non-null
++   * LlmDeepReadResult on every call — the three STUB_DEEP_READ segments + the
++   * fixed modelId/promptVersion provenance. See the module doc for why this is
++   * test-only. Always returns a result (never null): the stub's contract is "given
++   * any event with evidence, produce the fixture deep read". The event's evidence
++   * existence is checked upstream by generateDeepRead (which returns null for an
++   * evidence-less event before calling the adapter), so by the time the stub is
++   * reached the event is known to have evidence.
++   */
++  async generateDeepRead(
++    args: LlmDeepReadArgs,
++  ): Promise<LlmDeepReadResult | null> {
++    // Reference args to make the contract explicit (the stub ignores the event
++    // context — a real adapter would use title/summary/evidence to ground the three
++    // segments). Avoids an unused-vars lint while documenting that the fixture is
++    // context-independent.
++    void args.hotEventId;
++    void args.title;
++    void args.summary;
++    void args.evidence;
++    return {
++      impactSurface: STUB_DEEP_READ.impactSurface,
++      beneficiaries: STUB_DEEP_READ.beneficiaries,
++      riskPoints: STUB_DEEP_READ.riskPoints,
++      modelId: STUB_MODEL_ID,
++      promptVersion: STUB_DEEP_READ_PROMPT_VERSION,
++    };
++  }
+ }
+diff --git a/packages/core/src/modules/explanation/types.ts b/packages/core/src/modules/explanation/types.ts
+index e17c588..8da0365 100644
+--- a/packages/core/src/modules/explanation/types.ts
++++ b/packages/core/src/modules/explanation/types.ts
+@@ -218,6 +218,23 @@ export interface LLMAdapter {
+     title: string;
+     summary: string;
+   }): Promise<LlmReasonResult | null>;
++
++  /**
++   * Resolve the three-segment 影响面/受益方/风险点 AI 深读 for the given event's
++   * detail page. Implementations return three NON-EMPTY segments (each ≤120 字,
++   * free of the six forbidden phrase classes) plus their own modelId +
++   * promptVersion. Return null when no deep read is available (the caller writes
++   * nothing and degrades honestly). Each returned segment is validated by
++   * generateDeepRead (non-empty, ≤120 字, passes guardrail) — violations throw at
++   * the generator, never silently truncated.
++   *
++   * The adapter receives the event's title + summary + the member evidence records
++   * (sourceName / summary / publishedAt) so the three segments are grounded in the
++   * factual evidence timeline, not fabricated (NFR-2). Story 5.2 reuses the same
++   * LLMAdapter port 5.1 introduced (epic-5-context :108 "三者共用 worker resolve
++   * 模式"); the second method is added here rather than spawning a parallel port.
++   */
++  generateDeepRead(args: LlmDeepReadArgs): Promise<LlmDeepReadResult | null>;
+ }
+ 
+ /**
+@@ -266,3 +283,106 @@ export interface RecommendationReasonRecord {
+   promptVersion: string;
+   createdAt: Date;
+ }
++
++// --- Story 5.2: LLMAdapter.generateDeepRead + DeepRead (detail-page AI 深读) ----
++
++/**
++ * One unit of LLMAdapter deep-read output — the three-segment 影响面/受益方/风险点
++ * AI 深读 for one hot event's detail page. The adapter resolves the three segments
++ * from the event's title + summary + member evidence and returns them with its own
++ * provenance (modelId + promptVersion, recorded on the appended row for NFR-7).
++ * deep-read-service validates each segment is non-empty, ≤ DEEP_READ_SEGMENT_MAX_LENGTH
++ * (120 字), and passes the 6-class wording guardrail (passesRecommendationGuardrail,
++ * reused from 5.1 — the guardrail is generic PRD §10, not reason-specific) — violations
++ * throw (fail-fast, never silently truncates/rewrites).
++ *
++ *   - impactSurface: 影响面 — NON-EMPTY, ≤120 字, free of the six forbidden phrase
++ *     classes.
++ *   - beneficiaries: 受益方 — NON-EMPTY, ≤120 字, free of the six forbidden phrase
++ *     classes.
++ *   - riskPoints: 风险点 — NON-EMPTY, ≤120 字, free of the six forbidden phrase classes.
++ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future real
++ *     provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the appended row.
++ *   - promptVersion: the prompt template version (e.g. "deepread-stub-v1").
++ *     Recorded verbatim on the appended row.
++ */
++export interface LlmDeepReadResult {
++  impactSurface: string;
++  beneficiaries: string;
++  riskPoints: string;
++  modelId: string;
++  promptVersion: string;
++}
++
++/**
++ * The context passed to LLMAdapter.generateDeepRead. Carries the event's title +
++ * summary (same overlay rule as the reason adapter) PLUS the member evidence records
++ * (sourceName + summary + publishedAt) so the adapter can ground the three segments in
++ * the actual evidence timeline (NFR-2: AI content must not fabricate sourceless
++ * conclusions; must stay consistent with the evidence timeline). evidence is a
++ * ReadonlyArray so the adapter cannot mutate the caller's array.
++ *
++ * The evidence shape mirrors what publish-orchestrator projects into
++ * published_hot_event_evidence (sourceName / summary / publishedAt) — the adapter
++ * receives the same grounding the public detail page renders.
++ */
++export interface LlmDeepReadArgs {
++  hotEventId: string;
++  title: string;
++  summary: string;
++  evidence: ReadonlyArray<{
++    sourceName: string;
++    summary: string;
++    publishedAt: Date | null;
++  }>;
++}
++
++/**
++ * Options for generateDeepRead. `{ prisma, traceId, hotEventId, adapter? }` mirrors
++ * generateRecommendationReason's command pattern plus an optional LLMAdapter. When
++ * adapter is omitted (or the event is missing / has no evidence), the function returns
++ * null and writes nothing (honest degradation — never fabricates a deep read).
++ * Otherwise it loads the HotEvent + member evidence, calls the adapter, validates the
++ * result (each segment non-empty, ≤120 字, passesRecommendationGuardrail; modelId +
++ * promptVersion non-empty), and APPENDS one deep_reads row (source="ai").
++ */
++export interface GenerateDeepReadOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  hotEventId: string;
++  adapter?: LLMAdapter;
++}
++
++/**
++ * The result of a successful generation: the newly-appended deep-read row's id + the
++ * three segments + provenance + createdAt. Callers (the worker's projection refresh,
++ * verify/seed) consume the segments directly.
++ */
++export interface GenerateDeepReadResult {
++  deepReadId: string;
++  hotEventId: string;
++  impactSurface: string;
++  beneficiaries: string;
++  riskPoints: string;
++  source: LlmSource;
++  modelId: string;
++  promptVersion: string;
++  createdAt: Date;
++  traceId: string;
++}
++
++/**
++ * One deep_reads row projected for read. Mirrors the columns the worker + audit need
++ * (no write paths here).
++ */
++export interface DeepReadRecord {
++  id: string;
++  hotEventId: string;
++  impactSurface: string;
++  beneficiaries: string;
++  riskPoints: string;
++  source: LlmSource;
++  modelId: string;
++  promptVersion: string;
++  createdAt: Date;
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/index.ts b/packages/core/src/modules/publish-orchestrator/index.ts
+index dcb17fc..b66fbdd 100644
+--- a/packages/core/src/modules/publish-orchestrator/index.ts
++++ b/packages/core/src/modules/publish-orchestrator/index.ts
+@@ -80,4 +80,5 @@ export type {
+   RefreshPublishedDailyDigestOptions,
+   GetPublishedDailyDigestOptions,
+   ListPublishedDailyDigestCoverageDatesOptions,
++  PublishedHotEventDeepRead,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index f91fd95..0610e2a 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -141,6 +141,9 @@ export async function refreshPublishedReadModel(
+     await prisma.publishedHotEventTheme.deleteMany({
+       where: { hotEventId },
+     });
++    await prisma.publishedHotEventDeepRead.deleteMany({
++      where: { hotEventId },
++    });
+     await prisma.publishedHotEvent.deleteMany({
+       where: { hotEventId },
+     });
+@@ -233,6 +236,9 @@ export async function refreshPublishedReadModel(
+ 
+   // 6. Theme membership projection (published_hot_event_themes, Story 2.3).
+   await projectThemes(prisma, traceId, hotEventId);
++
++  // 7. Deep-read projection (published_hot_event_deep_reads, Story 5.2).
++  await projectDeepRead(prisma, traceId, hotEventId);
+ }
+ 
+ /**
+@@ -562,6 +568,70 @@ async function projectThemes(
+   });
+ }
+ 
++/**
++ * Project the latest DeepRead into published_hot_event_deep_reads (Story 5.2). If a
++ * deep read exists, upsert the row (1:1 per hotEventId, three segments + source +
++ * generatedAt). If no deep read exists (deep-read worker has not run, or V1 prod
++ * adapter resolves to none), deleteMany that hotEventId's deep-read row so the detail
++ * page renders the honest degraded state (deepRead: null → "AI 深读生成中。") rather
++ * than a stale prior projection. Called inside the publish transaction and by the
++ * deep-read worker after it appends a deep read.
++ *
++ * Mirrors projectExplanation / projectThemes: read latest → upsert or deleteMany.
++ * publish-orchestrator stays the SOLE writer of published_hot_event_deep_reads
++ * (AD-2/AD-3); the deep-read worker only appends deep_reads + calls this projection.
++ */
++async function projectDeepRead(
++  prisma: PrismaClient,
++  traceId: string,
++  hotEventId: string,
++): Promise<void> {
++  const latest = await prisma.deepRead.findFirst({
++    where: { hotEventId },
++    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
++    // embed a monotonic timestamp) — same convention as projectExplanation /
++    // projectMarketReaction / projectAssociations / projectThemes.
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      impactSurface: true,
++      beneficiaries: true,
++      riskPoints: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) {
++    // No deep read yet: clear any stale projection so the detail page shows the
++    // degraded state (no fabricated deep read — "AI 深读生成中。").
++    await prisma.publishedHotEventDeepRead.deleteMany({
++      where: { hotEventId },
++    });
++    return;
++  }
++
++  await prisma.publishedHotEventDeepRead.upsert({
++    where: { hotEventId },
++    create: {
++      hotEventId,
++      impactSurface: latest.impactSurface,
++      beneficiaries: latest.beneficiaries,
++      riskPoints: latest.riskPoints,
++      deepReadSource: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++    update: {
++      impactSurface: latest.impactSurface,
++      beneficiaries: latest.beneficiaries,
++      riskPoints: latest.riskPoints,
++      deepReadSource: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++  });
++}
++
+ /**
+  * List all currently-published hot events for the public feed — Story 1.7.
+  *
+@@ -717,6 +787,20 @@ export async function getPublishedHotEventDetail(
+     },
+   });
+ 
++  // Deep-read block (nullable, Story 5.2). Absent when the deep-read worker has
++  // not produced a row yet (V1 prod: worker resolves no adapter) → the detail page
++  // renders the honest degraded state ("AI 深读生成中。").
++  const deepReadRow = await prisma.publishedHotEventDeepRead.findUnique({
++    where: { hotEventId },
++    select: {
++      impactSurface: true,
++      beneficiaries: true,
++      riskPoints: true,
++      deepReadSource: true,
++      generatedAt: true,
++    },
++  });
++
+   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
+     id: r.id,
+     hotEventId: r.hotEventId,
+@@ -778,6 +862,16 @@ export async function getPublishedHotEventDetail(
+             source: themeRow.themeSource,
+             generatedAt: themeRow.generatedAt,
+           },
++    deepRead:
++      deepReadRow === null
++        ? null
++        : {
++            impactSurface: deepReadRow.impactSurface,
++            beneficiaries: deepReadRow.beneficiaries,
++            riskPoints: deepReadRow.riskPoints,
++            source: deepReadRow.deepReadSource,
++            generatedAt: deepReadRow.generatedAt,
++          },
+     evidence,
+   };
+ }
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index ad718f4..2c47b74 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -169,6 +169,16 @@ export interface PublishedHotEventDetail {
+    * honest degraded state ("暂无已确认的主题关联。") in that case.
+    */
+   themes: PublishedHotEventTheme | null;
++  /**
++   * The AI 深读 block (Story 5.2). Null when no deep read was projected (deep-read
++   * worker resolved no adapter in V1 prod / generation has not run / takedown
++   * cleared the projection). The detail page renders the honest degraded state
++   * ("AI 深读生成中。") under the 为什么重要 block in that case. Distinct from
++   * `explanation` (which carries the summary/whyItMatters/uncertainties three-
++   * partition that stays on the same detail page): deepRead carries a DIFFERENT
++   * three-segment set (影响面/受益方/风险点) that coexists with explanation.
++   */
++  deepRead: PublishedHotEventDeepRead | null;
+   evidence: PublishedEvidenceRow[];
+ }
+ 
+@@ -296,6 +306,33 @@ export interface PublishedHotEventTheme {
+   generatedAt: Date;
+ }
+ 
++// --- Story 5.2: public deep-read (AI 深读) read types ------------------------
++
++/**
++ * The projected public AI 深读 block for one published hot event (Story 5.2).
++ * Mirrors published_hot_event_deep_reads. The three segments (影响面/受益方/风险点)
++ * are each ≤ DEEP_READ_SEGMENT_MAX_LENGTH (120 字) and pass the 6-class wording
++ * guardrail, enforced at deep-read write time (fail-fast). The detail page renders
++ * them under the 为什么重要 block with the uniform <AiLabel>.
++ *
++ * Row existence = currently published deep read (no status column). Absent when the
++ * deep-read worker has not produced a row (V1 prod: worker resolves no adapter →
++ * never produced) — the detail page shows the "AI 深读生成中。" degraded state (AC3).
++ * Absent does NOT block the existing summary/explanation/evidence/reaction/
++ * associations/themes rendering.
++ */
++export interface PublishedHotEventDeepRead {
++  /** 影响面 (impact surface). Descriptive, never advisory. */
++  impactSurface: string;
++  /** 受益方 (beneficiaries). Descriptive, never advisory. */
++  beneficiaries: string;
++  /** 风险点 (risk points). Descriptive, never advisory. */
++  riskPoints: string;
++  /** ExplanationSource union value carried from the latest DeepRead row ("ai" in V1). */
++  source: string;
++  generatedAt: Date;
++}
++
+ /**
+  * One row of listPublishedThemeMemberships — the hotEventId→ThemeRef[] map the
+  * /topics directory and /topics/[slug] page use to derive the distinct-theme
+
+--- NEW FILE: apps/worker/src/queues/deep-read-queue.ts ===
+/**
+ * BullMQ deep-read queue + worker (worker runtime) — Story 5.2.
+ *
+ * AD-4: AI 深读 generation runs as a BullMQ job, off the web request path. The
+ * worker dynamically imports @aguhot/core's `generateDeepRead` (the single writer
+ * of deep_reads, AD-5) and runs one pass over candidate + published hot events that
+ * have no deep read yet.
+ *
+ * This mirrors recommendation-reason-queue.ts byte-for-byte in shape (self-
+ * discovering candidate query, per-event try/catch isolation, no auto-trigger) —
+ * the two LLM jobs (5.1 card reason + 5.2 detail deep read) are nearly identical
+ * workers. Differences: queue/job name, the generator fn, and the projection
+ * refresh call (deep-read projects via refreshPublishedReadModel(action:"publish")
+ * rather than refreshPublishedTimelineForEvent, since the deep read lands on the
+ * detail page's published_hot_event_deep_reads projection, not the timeline). Same
+ * structure: lazy Queue singleton, enqueue helper with job-retention caps, and a
+ * worker that resolves the Prisma client via a dynamic import so the worker bundle
+ * stays the only place that pulls in the domain+DB layer.
+ *
+ * Queue name + job name are kebab-case per ARCHITECTURE-SPINE conventions ("deep-
+ * read"). Like the other workers, this job is independent: it does NOT chain from
+ * explain/recommendation-reason automatically (orchestration is deferred — same
+ * decoupling as the other jobs). IDEMPOTENCY IS ENFORCED BY THE CANDIDATE QUERY's
+ * `deepReads: { none: {} }` filter below — the worker only ever selects events with
+ * no deep read yet, so a re-run never re-processes an already-read event.
+ * generateDeepRead itself is NOT idempotent (it appends a fresh row on every call,
+ * AD-5) — the dedupe is the worker's `none: {}` prefilter, so any future caller that
+ * bypasses this query must dedupe upstream.
+ *
+ * V1 HONESTY RULE (load-bearing, mirrors recommendation-reason-queue.ts): the worker
+ * runtime resolves NO adapter (real LLM provider procurement is deferred). With no
+ * adapter, generateDeepRead returns null and writes nothing, so prod degrades
+ * honestly — the detail page renders the "AI 深读生成中。" degraded state. StubLlmAdapter
+ * is TEST-ONLY (verify/e2e import it from core and pass it to generateDeepRead
+ * directly); apps/worker MUST NOT import it.
+ *
+ *   // ponytail: real provider wired when procured — V1 no adapter, prod degrades
+ *   // honestly.
+ *
+ * When a real provider lands, the worker will resolve that adapter here (one line),
+ * generateDeepRead will flow deep reads through, and the append → projection →
+ * detail-page pipeline is already in place.
+ *
+ * Scope: candidate + published (NOT rejected/taken_down). The AC reads "已发布/候选
+ * HotEvent" — deep reads are generated while an event is a review candidate (pre-
+ * publish) AND for already-published events (so a published event that predates the
+ * worker gets a deep read on the next pass). After a successful append to a PUBLISHED
+ * event, the worker calls refreshPublishedReadModel (action:"publish") to project the
+ * new deep read onto the detail page immediately (no need to wait for a self-heal).
+ * Candidate events get the deep read appended but skip the projection refresh (their
+ * published_hot_event_deep_reads row does not exist yet — it is created inside
+ * decideReview's transaction on publish, which reads the latest deep_reads row at
+ * projection time).
+ *
+ * Design note: epic-5-context :65 literally says "深读挂 explain-queue", but :108
+ * "三者共用 worker resolve 模式" refers to the adapter-resolve queue shape, and
+ * explain-queue is deterministic / candidate-only / no-adapter / no-projection-
+ * refresh — a different shape from deep-read (LLM/adapter/candidate+published/needs
+ * refresh), which is instead byte-for-byte the recommendation-reason-queue shape. A
+ * separate queue keeps explain worker's deterministic purity. This is a deliberate
+ * deviation from the epic's literal text (recorded for reviewer judgment), consistent
+ * with how 5.1 already opened a separate queue for the same LLM-job shape.
+ */
+
+import { Queue, Worker, type Job } from "bullmq";
+
+import { getRedis } from "./connection.js";
+
+export const DEEP_READ_QUEUE_NAME = "deep-read";
+export const DEEP_READ_JOB_NAME = "deep-read";
+
+export interface DeepReadJobData {
+  traceId: string;
+}
+
+/**
+ * Lazily-constructed Queue for enqueuing deep-read jobs. Reused across enqueue calls
+ * in the same process.
+ */
+let queue: Queue | null = null;
+
+export function getDeepReadQueue(): Queue {
+  if (queue !== null) return queue;
+  queue = new Queue(DEEP_READ_QUEUE_NAME, {
+    connection: getRedis(),
+  });
+  return queue;
+}
+
+/**
+ * Enqueue one deep-read job. Returns the job so callers (e.g. the verify script) can
+ * await its completion.
+ */
+export async function enqueueDeepRead(traceId: string): Promise<Job> {
+  const q = getDeepReadQueue();
+  // Prune completed/failed jobs so Redis does not grow unbounded as deep-read runs
+  // accumulate (keep a short tail for operator inspection).
+  return q.add(
+    DEEP_READ_JOB_NAME,
+    { traceId },
+    {
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    },
+  );
+}
+
+/**
+ * Register the deep-read Worker in this process. The worker resolves the prisma
+ * client, then finds CANDIDATE + PUBLISHED hot events (excludes rejected/
+ * taken_down) that have no deep_reads yet and calls generateDeepRead for each (the
+ * single writer of deep_reads, AD-5). The job resolves as long as the infrastructure
+ * (DB/Redis) is reachable; per-event errors are isolated (one bad event does not
+ * abort the rest — a guardrail violation throws at the generator and is caught here
+ * so that event stays at null while the batch continues).
+ *
+ * V1 worker runtime resolves NO adapter (procurement deferred) → generateDeepRead
+ * returns null → the whole job skips → returns {generated:0, considered:0, skipped:0}
+ * and prod degrades honestly. This is the intended V1 behavior: the pipeline is
+ * correct (verify/e2e prove the happy path with StubLlmAdapter), but the worker
+ * cannot produce real deep reads without a real provider, so it writes nothing
+ * rather than fabricating fixture data.
+ *
+ * When an adapter IS available, the worker calls generateDeepRead per event. On a
+ * successful append to a PUBLISHED event, it calls refreshPublishedReadModel
+ * (action:"publish") to project the new deep read onto the detail page immediately
+ * (reuses the same upsert decideReview uses — no new write path; publish-orchestrator
+ * stays the sole writer of published_hot_event_deep_reads, AD-2/AD-3).
+ */
+export function registerDeepReadWorker(): Worker {
+  const worker = new Worker(
+    DEEP_READ_QUEUE_NAME,
+    async (job: Job) => {
+      const { getPrisma, generateDeepRead, refreshPublishedReadModel } =
+        await import("@aguhot/core");
+      const prisma = getPrisma();
+      const data = job.data as DeepReadJobData;
+
+      // V1 HONESTY RULE: no real LLM provider is wired (procurement deferred).
+      // With no adapter, generateDeepRead cannot run — it would return null and
+      // write nothing. We skip and report it as skipped so the caller knows the
+      // pipeline ran but produced no deep reads (honest degradation). StubLlmAdapter
+      // is test-only and is NOT imported here.
+      //
+      // ponytail: real provider wired when procured — V1 no adapter, prod degrades
+      // honestly.
+      const adapter = undefined;
+      if (adapter === undefined) {
+        // No DB scan on the no-op path: the return value is fire-and-forget (no
+        // caller consumes it — enqueueDeepRead does not await a structured result),
+        // so a pending-count query here would be a per-job full-table anti-join for
+        // nothing. Mirrors recommendation-reason-queue's no-adapter return. Coverage
+        // is measured off the published read model, not from this job's return.
+        //
+        // ponytail: real provider wired when procured — V1 no adapter, prod degrades
+        // honestly.
+        return { generated: 0, considered: 0, skipped: 0 };
+      }
+
+      // Find CANDIDATE + PUBLISHED hot events with no deep read yet. The status
+      // filter is load-bearing (see the doc comment above): without it the worker
+      // would also process rejected/taken_down events (wasted work + read-chain
+      // pollution on non-public events). A left join via the reverse relation
+      // selects events whose deepReads is empty.
+      const pending = await prisma.hotEvent.findMany({
+        where: {
+          publicationStatus: { in: ["candidate", "published"] },
+          deepReads: { none: {} },
+        },
+        select: { id: true, publicationStatus: true },
+      });
+
+      let generated = 0;
+      for (const ev of pending) {
+        try {
+          const result = await generateDeepRead({
+            prisma,
+            traceId: data.traceId,
+            hotEventId: ev.id,
+            adapter,
+          });
+          if (result === null) continue;
+          generated += 1;
+          // If the event is already published, project the new deep read onto its
+          // detail page immediately by reusing the existing per-event refresh (the
+          // same upsert decideReview uses on publish — publish-orchestrator stays the
+          // sole writer of published_hot_event_deep_reads, AD-2/AD-3). Candidate
+          // events skip this: their published_hot_event_deep_reads row does not exist
+          // yet and will be created inside decideReview's transaction on publish,
+          // reading the latest deep_reads row at projection time.
+          if (ev.publicationStatus === "published") {
+            await refreshPublishedReadModel({
+              prisma,
+              traceId: data.traceId,
+              hotEventId: ev.id,
+              action: "publish",
+            });
+          }
+        } catch (error) {
+          // Isolate per-event failures: log and continue so one bad event (e.g. a
+          // guardrail violation) does not abort the whole pass. generateDeepRead
+          // returns null (no write) for missing events / no-evidence events / no-
+          // adapter; only guardrail/DB errors land here. The event stays at null
+          // (detail page shows "AI 深读生成中。") — the next worker run naturally
+          // retries (no retry loop here; retry is deferred per spec Never).
+          console.error(
+            `[deep-read-worker] failed for hotEvent ${ev.id}`,
+            error,
+          );
+        }
+      }
+      return { generated, considered: pending.length };
+    },
+    { connection: getRedis() },
+  );
+  return worker;
+}
+
+--- NEW FILE: apps/worker/src/verify-deepread.ts ===
+/**
+ * Deterministic integration verification for the deep-read (AI 深读) generation
+ * pipeline + projection — Story 5.2.
+ *
+ * Run with: pnpm --filter worker verify:deepread (tsx src/verify-deepread.ts).
+ *
+ * It exercises generateDeepRead with the StubLlmAdapter (test-only, imported from
+ * core — NOT wired in the worker/prod runtime: the deep-read worker resolves
+ * adapter = undefined so prod degrades honestly) against real local PostgreSQL (NO
+ * Redis needed — generateDeepRead is pure logic + a DB append, no BullMQ queue at
+ * the generator level, same convention as verify-digest / verify-reason calling the
+ * generators directly), then asserts the DB state — surface-anchored, not mock-
+ * based. It prints PASS/FAIL and exits non-zero iff any assertion fails.
+ *
+ * Flow:
+ *   resetState → seed one source + 2 archived records → clusterEvents
+ *   (candidates) → generateExplanation → decideReview(approve) → published →
+ *   generateDeepRead({adapter: StubLlmAdapter}) → assert row projected →
+ *   refreshPublishedReadModel(action:"publish") → assert projection non-null →
+ *
+ * Assertions (mirrors verify-reason's shape, adapted for the 3-segment deep read +
+ * the published_hot_event_deep_reads projection + refreshPublishedReadModel):
+ *   1. generateDeepRead appends one deep_reads row (source="ai", three segments,
+ *      modelId, promptVersion, createdAt, traceId all present), segments =
+ *      STUB_DEEP_READ.
+ *   2. After refreshPublishedReadModel(action:"publish"), published_hot_event_
+ *      deep_reads is non-null and carries the three segments (the projection
+ *      derived them from the latest row — publish-orchestrator is the sole writer
+ *      of that projection).
+ *   3. AD-5 append-only: a second call appends a SECOND row; the projection
+ *      reflects the latest.
+ *   4. Self-heal: refreshPublishedReadModel(action:"publish") re-run keeps the
+ *      projection alive (idempotent re-derivation from the latest row).
+ *   5. adapter missing → generateDeepRead returns null, writes nothing (V1 prod
+ *      honest-degradation path).
+ *   6. AC fail-fast: an adapter segment that hits the guardrail (forbidden phrase)
+ *      → generateDeepRead THROWS (never silently truncates).
+ *   6b. Every forbidden phrase across all 6 classes is rejected in EACH of the three
+ *      segments (a class list that is empty by accident cannot slip a phrase through
+ *      just because it landed in impactSurface / beneficiaries / riskPoints).
+ *   7. AC fail-fast: an adapter segment >120 字 → THROWS.
+ *   7b. AC fail-fast: an empty segment → THROWS.
+ *   8. Fail-fast throws wrote no extra rows (still count=2 from gen1+gen2).
+ *   9. Pin the ≤120 字 boundary: exactly-120 accepted, exactly-121 rejected.
+ *  10. Missing hotEventId → null, no write.
+ *  11. Coverage: seed a SECOND published event that gets NO deep read, so the
+ *      coverage denominator is meaningfully > 1 (2 published, 1 covered).
+ */
+
+import {
+  clusterEvents,
+  decideReview,
+  generateDeepRead,
+  generateExplanation,
+  getLatestDeepRead,
+  getPrisma,
+  getPublishedHotEventDetail,
+  listPendingCandidates,
+  newTraceId,
+  DEEP_READ_SEGMENT_MAX_LENGTH,
+  passesRecommendationGuardrail,
+  RECOMMENDATION_FORBIDDEN_PHRASES,
+  refreshPublishedReadModel,
+  resetPrisma,
+  StubLlmAdapter,
+  STUB_DEEP_READ,
+  type LLMAdapter,
+  type LlmDeepReadResult,
+} from "@aguhot/core";
+import { resetEnvCache, requireEnv } from "@aguhot/config";
+
+interface Assertion {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+// Fixed base time so all seeded records land on the same UTC day
+// deterministically.
+const BASE_MS = Date.UTC(2024, 0, 1); // 2024-01-01 UTC
+const HOUR = 60 * 60 * 1000;
+
+async function main(): Promise<void> {
+  // Resolve infra (Block-If: PG must be reachable). No Redis needed — the
+  // derivation is pure logic + a DB append. The deep-read worker exists (Epic-5
+  // job category) but this verify calls generateDeepRead directly.
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  const assertions: Assertion[] = [];
+
+  try {
+    await resetState(prisma);
+
+    // --- Seed: one source + 2 archived records → clusterEvents → 1 candidate →
+    // approve it so it's published + has an ExplanationVersion (the summary
+    // context the deep-read adapter reads). ---
+    const source = await prisma.evidenceSource.create({
+      data: {
+        id: newTraceId(),
+        name: "verify-deepread-source",
+        kind: "rss",
+        feedUrl: "file:///unused",
+        enabled: true,
+      },
+    });
+
+    // Two overlapping-title records so they merge into ONE candidate via
+    // overlap-coefficient.
+    await seedRecord(prisma, source.id, {
+      title: "芯片短缺",
+      summary: "全球芯片供应链短缺",
+      url: "https://verify.test/芯片-1",
+      publishedAt: new Date(BASE_MS),
+    });
+    await seedRecord(prisma, source.id, {
+      title: "芯片短缺持续蔓延",
+      summary: "芯片供应链紧张覆盖多个行业",
+      url: "https://verify.test/芯片-2",
+      publishedAt: new Date(BASE_MS + 2 * HOUR),
+    });
+
+    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
+    assertions.push({
+      name: "seed: cluster produced 1 candidate from 2 overlapping records",
+      ok: clusterResult.newCandidates === 1,
+      detail: `newCandidates=${clusterResult.newCandidates}`,
+    });
+
+    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+    if (pending.length !== 1) {
+      throw new Error(
+        `[verify-deepread] expected 1 candidate, got ${pending.length}`,
+      );
+    }
+    const candidate = pending[0]!;
+
+    // Generate the deterministic explanation (provides summary context) + publish
+    // so the published_hot_event_deep_reads projection row can exist after refresh.
+    await generateExplanation({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    await decideReview({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      outcome: "approve",
+      reviewer: "verify-deepread",
+      note: "publish for deep-read verify",
+    });
+
+    // --- 1: generateDeepRead appends one row, segments = stub ---
+    const adapter = new StubLlmAdapter();
+    const genTrace = newTraceId();
+    const gen1 = await generateDeepRead({
+      prisma,
+      traceId: genTrace,
+      hotEventId: candidate.id,
+      adapter,
+    });
+    assertions.push({
+      name: "generateDeepRead returns non-null",
+      ok: gen1 !== null,
+      detail: gen1 === null ? "(null result)" : "(non-null)",
+    });
+
+    if (gen1 !== null) {
+      assertions.push({
+        name: "result three segments = STUB_DEEP_READ (deterministic)",
+        ok:
+          gen1.impactSurface === STUB_DEEP_READ.impactSurface &&
+          gen1.beneficiaries === STUB_DEEP_READ.beneficiaries &&
+          gen1.riskPoints === STUB_DEEP_READ.riskPoints,
+        detail: `impact=${gen1.impactSurface}`,
+      });
+      assertions.push({
+        name: "result carries source=ai + modelId + promptVersion + traceId",
+        ok:
+          gen1.source === "ai" &&
+          gen1.modelId.trim() !== "" &&
+          gen1.promptVersion.trim() !== "" &&
+          gen1.traceId === genTrace,
+        detail: `source=${gen1.source} modelId=${gen1.modelId} promptVersion=${gen1.promptVersion}`,
+      });
+      assertions.push({
+        name: "result each segment ≤ DEEP_READ_SEGMENT_MAX_LENGTH + passes guardrail",
+        ok:
+          [...gen1.impactSurface].length <= DEEP_READ_SEGMENT_MAX_LENGTH &&
+          [...gen1.beneficiaries].length <= DEEP_READ_SEGMENT_MAX_LENGTH &&
+          [...gen1.riskPoints].length <= DEEP_READ_SEGMENT_MAX_LENGTH &&
+          passesRecommendationGuardrail(gen1.impactSurface) &&
+          passesRecommendationGuardrail(gen1.beneficiaries) &&
+          passesRecommendationGuardrail(gen1.riskPoints),
+        detail: `impact.len=${[...gen1.impactSurface].length}`,
+      });
+    }
+
+    const rowsAfter1 = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "deep_reads row appended (count=1)",
+      ok: rowsAfter1 === 1,
+      detail: `count=${rowsAfter1}`,
+    });
+
+    const row1 = await prisma.deepRead.findFirst({
+      where: { hotEventId: candidate.id },
+      orderBy: { createdAt: "asc" },
+    });
+    assertions.push({
+      name: "appended row: source=ai, modelId/promptVersion/traceId carried",
+      ok:
+        row1 !== null &&
+        row1!.source === "ai" &&
+        row1!.modelId.trim() !== "" &&
+        row1!.promptVersion.trim() !== "" &&
+        row1!.traceId === genTrace,
+    });
+
+    // --- 2: projection derives published_hot_event_deep_reads from the latest row
+    // (publish-orchestrator is the sole writer of that projection). The worker
+    // path reuses refreshPublishedReadModel(action:"publish"). ---
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+    const deepReadRow = await prisma.publishedHotEventDeepRead.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "projection: published_hot_event_deep_reads three segments non-null = appended segments",
+      ok:
+        deepReadRow !== null &&
+        deepReadRow!.impactSurface === STUB_DEEP_READ.impactSurface &&
+        deepReadRow!.beneficiaries === STUB_DEEP_READ.beneficiaries &&
+        deepReadRow!.riskPoints === STUB_DEEP_READ.riskPoints &&
+        deepReadRow!.deepReadSource === "ai",
+      detail:
+        deepReadRow === null
+          ? "(no projection row)"
+          : `impact=${deepReadRow!.impactSurface}`,
+    });
+
+    // --- 2b: the PUBLIC read query (the hop the detail page actually calls)
+    // assembles detail.deepRead from the projection. Asserting the projection
+    // table row (above) is not enough — a regression in getPublishedHotEventDetail's
+    // select/mapping would ship undetected. This pins the read-assembly surface. ---
+    const detail = await getPublishedHotEventDetail({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    assertions.push({
+      name: "read-model: getPublishedHotEventDetail.deepRead carries the three projected segments",
+      ok:
+        detail !== null &&
+        detail.deepRead !== null &&
+        detail.deepRead!.impactSurface === STUB_DEEP_READ.impactSurface &&
+        detail.deepRead!.beneficiaries === STUB_DEEP_READ.beneficiaries &&
+        detail.deepRead!.riskPoints === STUB_DEEP_READ.riskPoints &&
+        detail.deepRead!.source === "ai",
+      detail:
+        detail === null
+          ? "(detail null)"
+          : detail.deepRead === null
+            ? "(detail.deepRead null)"
+            : `impact=${detail.deepRead!.impactSurface}`,
+    });
+
+    // --- 3: AD-5 append-only — calling AGAIN appends a SECOND row; projection
+    // reflects the latest. ---
+    await sleep(20);
+    const gen2 = await generateDeepRead({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      adapter,
+    });
+    const rowsAfter2 = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "AD-5 append-only: second call appends a second row (first untouched)",
+      ok: rowsAfter2 === 2 && gen2 !== null,
+      detail: `count=${rowsAfter2}`,
+    });
+
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+    const latestViaRead = await getLatestDeepRead({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+    });
+    const projectionAfterGen2 = await prisma.publishedHotEventDeepRead.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "refresh projects the LATEST deep read (getLatestDeepRead + projection agree)",
+      ok:
+        latestViaRead !== null &&
+        projectionAfterGen2 !== null &&
+        projectionAfterGen2!.impactSurface === latestViaRead!.impactSurface &&
+        projectionAfterGen2!.beneficiaries === latestViaRead!.beneficiaries &&
+        projectionAfterGen2!.riskPoints === latestViaRead!.riskPoints,
+      detail:
+        latestViaRead === null || projectionAfterGen2 === null
+          ? "(read or projection null)"
+          : `projected.impact=${projectionAfterGen2!.impactSurface}`,
+    });
+
+    // --- 4: self-heal — refreshPublishedReadModel(action:"publish") re-run keeps
+    // the projection alive (idempotent re-derivation from the latest row). This is
+    // the safety-net path the spec relies on for eventual consistency. ---
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+    const projectionAfterSelfHeal = await prisma.publishedHotEventDeepRead.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "self-heal (refresh re-run) keeps the latest deep read on the projection",
+      ok:
+        projectionAfterSelfHeal !== null &&
+        projectionAfterSelfHeal!.impactSurface === STUB_DEEP_READ.impactSurface &&
+        projectionAfterSelfHeal!.beneficiaries === STUB_DEEP_READ.beneficiaries &&
+        projectionAfterSelfHeal!.riskPoints === STUB_DEEP_READ.riskPoints,
+      detail:
+        projectionAfterSelfHeal === null
+          ? "(no projection row)"
+          : `impact=${projectionAfterSelfHeal!.impactSurface}`,
+    });
+
+    // --- 4b: takedown clears the projection (the spec's takedown I/O matrix row).
+    // Run takedown then re-publish so the rest of the assertions have the event
+    // published again. ---
+    const deepReadRowsBeforeTakedown = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "takedown",
+    });
+    const projectionAfterTakedown = await prisma.publishedHotEventDeepRead.findUnique({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "takedown: published_hot_event_deep_reads row deleted",
+      ok: projectionAfterTakedown === null,
+    });
+    // AD-5 invariant: takedown deletes the PROJECTION only — the append-only
+    // truth table (deep_reads) MUST survive so the audit history is intact.
+    const deepReadRowsAfterTakedown = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "takedown: append-only deep_reads truth rows survive (AD-5)",
+      ok: deepReadRowsAfterTakedown === deepReadRowsBeforeTakedown,
+      detail: `before=${deepReadRowsBeforeTakedown} after=${deepReadRowsAfterTakedown}`,
+    });
+    // Re-publish to restore the projection for the remaining assertions.
+    await refreshPublishedReadModel({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      action: "publish",
+    });
+
+    // --- 5: adapter missing → returns null, writes nothing ---
+    // Reuse the same event (it already has deep reads); assert the no-adapter call
+    // does not append a third row.
+    const rowsBeforeNoAdapter = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    const noAdapter = await generateDeepRead({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: candidate.id,
+      // adapter omitted → V1 prod path (deep-read worker resolves none) → returns
+      // null.
+    });
+    assertions.push({
+      name: "adapter missing: generateDeepRead returns null",
+      ok: noAdapter === null,
+    });
+    const rowsAfterNoAdapter = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "adapter missing: no deep_reads row written",
+      ok: rowsAfterNoAdapter === rowsBeforeNoAdapter,
+      detail: `before=${rowsBeforeNoAdapter} after=${rowsAfterNoAdapter}`,
+    });
+
+    // --- 6: AC fail-fast — forbidden-phrase segment → THROWS (impactSurface hits
+    // ACTION class 买入). ---
+    const forbiddenAdapter: LLMAdapter = {
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return {
+          impactSurface: "建议买入相关概念股，影响扩散。",
+          beneficiaries: "上游供应商短期或受关注。",
+          riskPoints: "下游需求不确定性仍存。",
+          modelId: "stub:forbidden",
+          promptVersion: "deepread-stub-v1",
+        };
+      },
+      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+    };
+    let threwForbidden = false;
+    try {
+      await generateDeepRead({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate.id,
+        adapter: forbiddenAdapter,
+      });
+    } catch {
+      threwForbidden = true;
+    }
+    assertions.push({
+      name: "AC: forbidden-phrase segment → generateDeepRead throws (fail-fast)",
+      ok: threwForbidden,
+    });
+
+    // --- 6b: every forbidden phrase across all 6 classes is rejected in EACH of
+    // the three segments (a regression where a class list is empty by accident
+    // cannot slip a phrase through just because it landed in a particular segment).
+    const allForbidden = Object.values(RECOMMENDATION_FORBIDDEN_PHRASES).flat();
+    const segments: Array<keyof Pick<LlmDeepReadResult, "impactSurface" | "beneficiaries" | "riskPoints">> = [
+      "impactSurface",
+      "beneficiaries",
+      "riskPoints",
+    ];
+    let allForbiddenRejected = true;
+    for (const phrase of allForbidden) {
+      for (const seg of segments) {
+        const localAdapter: LLMAdapter = {
+          async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+            const base = {
+              impactSurface: "事件波及相关产业链上下游企业。",
+              beneficiaries: "上游原材料供应商短期或受关注。",
+              riskPoints: "下游需求不确定性仍存。",
+              modelId: "stub:forbidden",
+              promptVersion: "deepread-stub-v1",
+            };
+            // Inject the forbidden phrase into ONE segment only; the other two stay
+            // clean so the throw is attributable to the injected segment.
+            return { ...base, [seg]: `事件涉及${phrase}，后续仍需观察。` };
+          },
+          async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+            return null;
+          },
+        };
+        try {
+          await generateDeepRead({
+            prisma,
+            traceId: newTraceId(),
+            hotEventId: candidate.id,
+            adapter: localAdapter,
+          });
+          allForbiddenRejected = false;
+        } catch {
+          // expected
+        }
+      }
+    }
+    assertions.push({
+      name: "AC: all 6 classes × all phrases × all 3 segments rejected by guardrail",
+      ok: allForbiddenRejected,
+      detail: `phrases=${allForbidden.length} segments=${segments.length} combos=${allForbidden.length * segments.length}`,
+    });
+
+    // --- 7: AC fail-fast — over-length (>120 字) segment → THROWS ---
+    // Built deliberately long (200 字) from a safe repeated char so the length is
+    // unambiguous (no natural-language miscount).
+    const overlength = "证".repeat(200);
+    const overlenAdapter: LLMAdapter = {
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return {
+          impactSurface: overlength,
+          beneficiaries: "上游原材料供应商短期或受关注。",
+          riskPoints: "下游需求不确定性仍存。",
+          modelId: "stub:overlen",
+          promptVersion: "deepread-stub-v1",
+        };
+      },
+      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+    };
+    let threwOverlen = false;
+    try {
+      await generateDeepRead({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate.id,
+        adapter: overlenAdapter,
+      });
+    } catch {
+      threwOverlen = true;
+    }
+    assertions.push({
+      name: "AC: >120 字 segment → generateDeepRead throws (fail-fast)",
+      ok: threwOverlen && [...overlength].length > DEEP_READ_SEGMENT_MAX_LENGTH,
+      detail: `len=${[...overlength].length}`,
+    });
+
+    // --- 7b: AC fail-fast — empty segment → THROWS ---
+    const emptyAdapter: LLMAdapter = {
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return {
+          impactSurface: "   ", // whitespace-only → trims to empty
+          beneficiaries: "上游原材料供应商短期或受关注。",
+          riskPoints: "下游需求不确定性仍存。",
+          modelId: "stub:empty",
+          promptVersion: "deepread-stub-v1",
+        };
+      },
+      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+    };
+    let threwEmpty = false;
+    try {
+      await generateDeepRead({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate.id,
+        adapter: emptyAdapter,
+      });
+    } catch {
+      threwEmpty = true;
+    }
+    assertions.push({
+      name: "AC: empty segment → generateDeepRead throws (fail-fast)",
+      ok: threwEmpty,
+    });
+
+    // --- 8: forbidden / over-length / empty throws did NOT write rows ---
+    // (fail-fast means no append, not just a throw). Still count=2 from gen1+gen2.
+    const rowsAfterFailFast = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "AC: fail-fast throws wrote no extra rows (still count=2 from gen1+gen2)",
+      ok: rowsAfterFailFast === 2,
+      detail: `count=${rowsAfterFailFast}`,
+    });
+
+    // --- 9: pin the ≤120 字 boundary exactly. A 120-字 segment is ACCEPTED
+    // (appended); a 121-字 segment is REJECTED (throws). Built from a safe repeated
+    // char so the off-by-one at the cap is unambiguous (a 200-字 overlength test
+    // alone cannot distinguish `> 120` from `>= 120` or `> 121`). ---
+    const exact120 = "适".repeat(120);
+    const exact121 = "适".repeat(121);
+    const exact120Adapter: LLMAdapter = {
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return {
+          // One segment at exactly the cap; the other two stay short + clean.
+          impactSurface: exact120,
+          beneficiaries: "上游原材料供应商短期或受关注。",
+          riskPoints: "下游需求不确定性仍存。",
+          modelId: "stub:boundary",
+          promptVersion: "deepread-stub-v1",
+        };
+      },
+      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+    };
+    const rowsBefore120 = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    let exact120Appended = false;
+    try {
+      const r = await generateDeepRead({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate.id,
+        adapter: exact120Adapter,
+      });
+      exact120Appended = r !== null;
+    } catch {
+      exact120Appended = false;
+    }
+    const rowsAfter120 = await prisma.deepRead.count({
+      where: { hotEventId: candidate.id },
+    });
+    assertions.push({
+      name: "AC: exactly-120 字 segment is ACCEPTED (boundary, not off-by-one)",
+      ok:
+        exact120Appended &&
+        [...exact120].length === 120 &&
+        rowsAfter120 === rowsBefore120 + 1,
+      detail: `appended=${exact120Appended} len=${[...exact120].length}`,
+    });
+
+    const exact121Adapter: LLMAdapter = {
+      async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return {
+          impactSurface: exact121,
+          beneficiaries: "上游原材料供应商短期或受关注。",
+          riskPoints: "下游需求不确定性仍存。",
+          modelId: "stub:boundary",
+          promptVersion: "deepread-stub-v1",
+        };
+      },
+      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+    };
+    let threwExact121 = false;
+    try {
+      await generateDeepRead({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate.id,
+        adapter: exact121Adapter,
+      });
+    } catch {
+      threwExact121 = true;
+    }
+    assertions.push({
+      name: "AC: exactly-121 字 segment is REJECTED (boundary, not off-by-one)",
+      ok: threwExact121 && [...exact121].length === 121,
+      detail: `threw=${threwExact121} len=${[...exact121].length}`,
+    });
+
+    // --- 10: missing hotEventId → null, no write ---
+    const missing = await generateDeepRead({
+      prisma,
+      traceId: newTraceId(),
+      hotEventId: "00000000-0000-0000-0000-000000000000",
+      adapter,
+    });
+    assertions.push({
+      name: "missing hotEventId: returns null (no write)",
+      ok: missing === null,
+    });
+
+    // --- 11: coverage — seed a SECOND published event that intentionally gets NO
+    // deep read, so the denominator is meaningfully > 1 and the coverage metric
+    // actually distinguishes covered from uncovered (a single covered event would
+    // make N=N trivially true and hide a regression). ---
+    await seedRecord(prisma, source.id, {
+      title: "新能源补贴退坡",
+      summary: "新能源补贴政策退坡影响产业链",
+      url: "https://verify.test/新能源-1",
+      publishedAt: new Date(BASE_MS + 4 * HOUR),
+    });
+    await seedRecord(prisma, source.id, {
+      title: "新能源补贴退坡持续",
+      summary: "补贴退坡覆盖多家企业",
+      url: "https://verify.test/新能源-2",
+      publishedAt: new Date(BASE_MS + 5 * HOUR),
+    });
+    const clusterResult2 = await clusterEvents({ prisma, traceId: newTraceId() });
+    const pending2 = await listPendingCandidates({ prisma, traceId: newTraceId() });
+    const candidate2 = pending2.find(
+      (c) => c.id !== candidate.id && c.title.includes("新能源"),
+    );
+    assertions.push({
+      name: "coverage seed: second candidate produced (distinct cluster)",
+      ok: clusterResult2.newCandidates === 1 && candidate2 !== undefined,
+      detail: `newCandidates=${clusterResult2.newCandidates}`,
+    });
+    if (candidate2 !== undefined) {
+      await generateExplanation({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate2.id,
+      });
+      await decideReview({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: candidate2.id,
+        outcome: "approve",
+        reviewer: "verify-deepread",
+        note: "publish WITHOUT a deep read for coverage denominator",
+      });
+    }
+
+    const publishedDeepTotal = await prisma.publishedHotEventDeepRead.count();
+    const publishedSummaryTotal = await prisma.publishedHotEvent.count();
+    assertions.push({
+      name: "coverage: metric distinguishes covered vs uncovered (2 published, 1 deep-read projection)",
+      ok: publishedSummaryTotal === 2 && publishedDeepTotal === 1,
+      detail: `deep=${publishedDeepTotal}/${publishedSummaryTotal}`,
+    });
+  } finally {
+    await cleanup(prisma);
+    resetPrisma();
+  }
+
+  report(assertions);
+}
+
+// --- helpers -----------------------------------------------------------------
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  // Order matters for FK constraints. deep_reads has a Cascade FK to hot_events,
+  // but we clear it explicitly before hot_events to keep reset ordering uniform
+  // with verify-reason/verify-digest/verify-timeline. The published_hot_event_
+  // deep_reads projection carries the derived segments.
+  await prisma.publishedHotEventDeepRead.deleteMany({});
+  await prisma.deepRead.deleteMany({});
+  await prisma.publishedTimelineEntry.deleteMany({});
+  await prisma.recommendationReason.deleteMany({});
+  await prisma.publishedDailyDigest.deleteMany({});
+  await prisma.dailyDigest.deleteMany({});
+  await prisma.publishedHotEventTheme.deleteMany({});
+  await prisma.eventThemeSet.deleteMany({});
+  await prisma.publishedHotEventAssociation.deleteMany({});
+  await prisma.eventAssociationSet.deleteMany({});
+  await prisma.publishedHotEventReaction.deleteMany({});
+  await prisma.marketReactionSnapshot.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+}
+
+async function seedRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  sourceId: string,
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
+): Promise<void> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const salt = randomUUID();
+  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
+  const contentHash = createHash("sha256").update(material).digest("hex");
+  await prisma.evidenceRecord.create({
+    data: {
+      id: newTraceId(),
+      sourceId,
+      url: data.url,
+      title: data.title,
+      summary: data.summary,
+      publishedAt: data.publishedAt,
+      ingestedAt: new Date(),
+      contentHash,
+      status: "archived",
+      failureReason: null,
+      rawPayload: { seeded: true, salt },
+      traceId: newTraceId(),
+    },
+  });
+}
+
+async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  await resetState(prisma);
+}
+
+// --- reporting ---------------------------------------------------------------
+
+function report(assertions: Assertion[]): void {
+  console.log("");
+  console.log("=== deep-read verification ===");
+  for (const a of assertions) {
+    const mark = a.ok ? "PASS" : "FAIL";
+    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
+  }
+  const failed = assertions.filter((a) => !a.ok);
+  console.log("");
+  if (failed.length === 0) {
+    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
+    process.exit(0);
+  } else {
+    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
+    process.exit(1);
+  }
+}
+
+void main().catch((error) => {
+  console.error("[verify-deepread] fatal", error);
+  process.exit(1);
+});
+
+--- NEW FILE: packages/core/prisma/migrations/20260712000001_add_deep_read/migration.sql ===
+-- Story 5.2: deep_reads append-only truth table (AD-5) + published_hot_event_deep_reads
+-- projection table (AD-3). One deep_reads row per generation of the three-segment
+-- 影响面/受益方/风险点 detail-page deep read for a HotEvent. The explanation module is
+-- the sole writer of deep_reads. publish-orchestrator projects the LATEST row
+-- (created_at desc first) into published_hot_event_deep_reads (the sole writer of that
+-- projection stays publish-orchestrator, AD-2/AD-3). Every row carries source + model_id
+-- + prompt_version for NFR-7 version + provenance audit. FK onDelete: Cascade so a
+-- HotEvent deletion cleans up both its deep-read history and its projection.
+-- Distinct from ExplanationVersion (different semantic content, same detail page); see
+-- the DeepRead model comment in schema.prisma for the independent-table rationale.
+
+-- CreateTable: deep_reads (truth table, AD-5 append-only)
+CREATE TABLE "deep_reads" (
+    "id" TEXT NOT NULL,
+    "hot_event_id" TEXT NOT NULL,
+    "impact_surface" TEXT NOT NULL,
+    "beneficiaries" TEXT NOT NULL,
+    "risk_points" TEXT NOT NULL,
+    "source" TEXT NOT NULL,
+    "model_id" TEXT NOT NULL,
+    "prompt_version" TEXT NOT NULL,
+    "trace_id" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "deep_reads_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex: hot_event_id backs the publish-orchestrator latest-row projection lookup
+-- and the worker's `deepReads: { none: {} }` candidate query.
+CREATE INDEX "deep_reads_hot_event_id_idx" ON "deep_reads"("hot_event_id");
+
+-- CreateIndex: created_at backs the createdAt desc + id desc tiebreaker ordering used
+-- to resolve the latest row for the projection.
+CREATE INDEX "deep_reads_created_at_idx" ON "deep_reads"("created_at");
+
+-- AddForeignKey: Cascade so a HotEvent deletion cleans up its deep-read history.
+ALTER TABLE "deep_reads" ADD CONSTRAINT "deep_reads_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- CreateTable: published_hot_event_deep_reads (projection, AD-3; 1:1 per hotEventId)
+CREATE TABLE "published_hot_event_deep_reads" (
+    "hot_event_id" TEXT NOT NULL,
+    "impact_surface" TEXT NOT NULL,
+    "beneficiaries" TEXT NOT NULL,
+    "risk_points" TEXT NOT NULL,
+    "deep_read_source" TEXT NOT NULL,
+    "generated_at" TIMESTAMP(3) NOT NULL,
+    "trace_id" TEXT,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "published_hot_event_deep_reads_pkey" PRIMARY KEY ("hot_event_id")
+);
+
+-- AddForeignKey: Cascade so a HotEvent deletion cleans up the projection (mirrors the
+-- other published_hot_event_* tables).
+ALTER TABLE "published_hot_event_deep_reads" ADD CONSTRAINT "published_hot_event_deep_reads_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+--- NEW FILE: packages/core/src/modules/explanation/deep-read-service.ts ===
+/**
+ * deep-read-service — generate the three-segment 影响面/受益方/风险点 AI 深读 (deep
+ * read) for a HotEvent's detail page from an LLMAdapter's output and append a
+ * deep_reads row (AD-5 append-only).
+ *
+ * Story 5.2. This module owns the deep_reads table (AD-2/AD-5 append-only). It
+ * derives a three-segment deep read for one hot event from:
+ *   1. the event's title + summary + member evidence records (the same grounding the
+ *      detail page renders — NFR-2: AI content must not fabricate sourceless
+ *      conclusions);
+ *   2. an LLMAdapter's deep-read output (three segments + its provenance).
+ *
+ *   - generateDeepRead: load HotEvent (missing → null) → confirm member evidence
+ *     (no evidence → null, no honest derivation) → read adapter deep read → validate
+ *     (each segment non-empty, ≤ DEEP_READ_SEGMENT_MAX_LENGTH (120 字),
+ *     passesRecommendationGuardrail; throw on violation — fail-fast, never silently
+ *     truncate) → APPEND one deep_reads row (source="ai"). Returns null when the
+ *     adapter is missing (V1 prod: deep-read worker resolves none), the event is
+ *     missing, or the event has no member evidence.
+ *
+ * This module NEVER writes published_hot_event_deep_reads (publish-orchestrator owns
+ * that projection — the sole writer of it, AD-2/AD-3). It only appends deep_reads;
+ * publish-orchestrator reads the latest at projection time (projectDeepRead derives
+ * the projection from the latest row). The worker triggers that projection by calling
+ * the existing refreshPublishedReadModel after a successful append.
+ *
+ * The 6-class wording guardrail (passesRecommendationGuardrail) is REUSED from 5.1's
+ * reason-service unchanged. The constant is named "recommendation..." but carries the
+ * generic PRD §10 six classes (the epic AC applies to ALL AI content, not just card
+ * reasons). Renaming would churn 5.1 for no behavioral gain; 5.3 can lift it to a
+ * shared location if needed. Each of the three segments is checked against the same
+ * guardrail.
+ *
+ * The derivation is pure logic + a DB append (no BullMQ, no SDK), so verify/seed
+ * scripts can call it directly without Redis — same convention as
+ * generateRecommendationReason / generateExplanation / generateDailyDigest. The
+ * deep-read worker calls this with adapter = undefined in V1 prod (procurement
+ * deferred) → honest degradation.
+ *
+ * NFR-2/NFR-3/NFR-7: every appended row carries source="ai" + modelId +
+ * promptVersion + createdAt for audit + version tracing. The 6-class wording
+ * guardrail is enforced at write time on each segment so a forbidden phrase can never
+ * reach the detail page.
+ */
+
+import type { PrismaClient } from "../../../generated/client.js";
+import { newTraceId } from "../../shared/ids.js";
+import { passesRecommendationGuardrail } from "./reason-service.js";
+import { ExplanationSource } from "./types.js";
+import type {
+  DeepReadRecord,
+  GenerateDeepReadOptions,
+  GenerateDeepReadResult,
+  LlmDeepReadResult,
+} from "./types.js";
+
+/**
+ * The max length of EACH deep-read segment (影响面 / 受益方 / 风险点) in codepoints
+ * (字). PRD SM-C3 says "深读有上限" without giving a number; 120 字/段 is the story-time
+ * default (a one-line edit to adjust). Checked at write time on each segment so an
+ * over-length adapter output can never reach the detail page. Mirrors 5.1's
+ * RECOMMENDATION_REASON_MAX_LENGTH (40 字) precedent but per-segment for the three-
+ * partition shape.
+ */
+export const DEEP_READ_SEGMENT_MAX_LENGTH = 120;
+
+/**
+ * Generate the three-segment AI 深读 for a HotEvent from the adapter's output, then
+ * APPEND one deep_reads row (source="ai"). Returns null and writes nothing when:
+ *   - adapter is undefined (V1 prod: deep-read worker resolves none), OR
+ *   - the HotEvent does not exist, OR
+ *   - the HotEvent has no member evidence (no honest derivation; never a fabricated
+ *     deep read — NFR-2).
+ *
+ * Honest degradation (NFR: never fake data): no adapter / no event / no evidence →
+ * no deep read → the detail page renders the "AI 深读生成中。" degraded state. Never
+ * fabricates a deep read from nothing.
+ *
+ * Fail-fast validation: every adapter-returned segment MUST be non-empty AND ≤120 字
+ * AND free of the six forbidden phrase classes. A segment violating any of these is
+ * rejected — generateDeepRead THROWS (the worker's per-event try/catch isolates it so
+ * that one event stays at null without aborting the batch). It never silently
+ * truncates/rewrites a segment, because that would make the NFR "never advisory /
+ * never over-certain" decorative.
+ *
+ * Append-only (AD-5): every successful call inserts a NEW row. Prior rows are never
+ * updated or deleted — the full deep-read history for an event is the version series.
+ * publish-orchestrator projects the LATEST row (createdAt desc, id desc tiebreaker)
+ * into published_hot_event_deep_reads.
+ */
+export async function generateDeepRead(
+  options: GenerateDeepReadOptions,
+): Promise<GenerateDeepReadResult | null> {
+  const { prisma, traceId, hotEventId, adapter } = options;
+
+  // 1. No adapter → honest degradation (V1 prod: deep-read worker resolves none).
+  // Never fabricate.
+  if (adapter === undefined) return null;
+
+  // 2. Load the HotEvent + confirm it has member evidence (no honest derivation for
+  // an evidence-less event — mirrors generateExplanation's + 5.1's guard). The title
+  // + summary context passed to the adapter is read from the latest revision +
+  // latest ExplanationVersion (same overlay rule as publish-orchestrator's timeline
+  // projection); the member evidence records (sourceName + summary + publishedAt) are
+  // passed as grounding so the adapter's three segments stay consistent with the
+  // evidence timeline (NFR-2).
+  const event = await prisma.hotEvent.findUnique({
+    where: { id: hotEventId },
+    select: {
+      id: true,
+      title: true,
+      revisions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { title: true },
+      },
+      explanationVersions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { summary: true },
+      },
+      evidence: {
+        select: {
+          evidenceRecord: {
+            select: {
+              source: { select: { name: true } },
+              summary: true,
+              publishedAt: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Missing event → no honest derivation.
+  if (event === null) return null;
+  // No member evidence → no honest derivation (mirrors generateExplanation / 5.1).
+  if (event.evidence.length === 0) return null;
+
+  // Effective title + summary (same overlay rule as publish-orchestrator's timeline
+  // projection): latest revision title ?? baseline title; latest ExplanationVersion
+  // summary ?? "".
+  const latestRevision = event.revisions[0] ?? null;
+  const effectiveTitle = latestRevision !== null ? latestRevision.title : event.title;
+  const latestExplanation = event.explanationVersions[0] ?? null;
+  const effectiveSummary = latestExplanation !== null ? latestExplanation.summary : "";
+
+  // Evidence grounding passed to the adapter: one entry per member record, mirroring
+  // the shape publish-orchestrator projects into published_hot_event_evidence
+  // (sourceName / summary / publishedAt). NFR-2: the adapter's three segments must
+  // stay consistent with this timeline, not fabricate sourceless conclusions.
+  const evidence = event.evidence.map((link) => ({
+    sourceName: link.evidenceRecord.source.name,
+    summary: link.evidenceRecord.summary ?? "",
+    publishedAt: link.evidenceRecord.publishedAt,
+  }));
+
+  // 3. Call the adapter with the event context + evidence grounding.
+  const raw = await adapter.generateDeepRead({
+    hotEventId,
+    title: effectiveTitle,
+    summary: effectiveSummary,
+    evidence,
+  });
+  if (raw === null) return null;
+
+  // 4. Validate + normalize each segment (non-empty, ≤120 字, guardrail). Throw on
+  // any violation (fail-fast, never silently truncate). The worker's per-event
+  // try/catch isolates the throw so one bad event stays at null without aborting the
+  // batch. validateDeepRead returns the THREE TRIMMED segments so the stored row
+  // (and the projected detail text) never carries leading/trailing whitespace.
+  const validated = validateDeepRead(raw);
+
+  // 5. APPEND a new deep_reads row (source="ai"). Never update or delete prior rows
+  // (AD-5). modelId + promptVersion are carried verbatim from the adapter so the
+  // audit chain records which provider + prompt produced each row (NFR-7).
+  const created = await prisma.deepRead.create({
+    data: {
+      id: newTraceId(),
+      hotEventId,
+      impactSurface: validated.impactSurface,
+      beneficiaries: validated.beneficiaries,
+      riskPoints: validated.riskPoints,
+      source: ExplanationSource.Ai,
+      modelId: raw.modelId,
+      promptVersion: raw.promptVersion,
+      traceId,
+    },
+    select: {
+      id: true,
+      hotEventId: true,
+      impactSurface: true,
+      beneficiaries: true,
+      riskPoints: true,
+      source: true,
+      modelId: true,
+      promptVersion: true,
+      createdAt: true,
+    },
+  });
+
+  return {
+    deepReadId: created.id,
+    hotEventId: created.hotEventId,
+    impactSurface: created.impactSurface,
+    beneficiaries: created.beneficiaries,
+    riskPoints: created.riskPoints,
+    source: created.source as GenerateDeepReadResult["source"],
+    modelId: created.modelId,
+    promptVersion: created.promptVersion,
+    createdAt: created.createdAt,
+    traceId,
+  };
+}
+
+/**
+ * Return the latest deep_reads row for an event (createdAt desc, id desc tiebreaker
+ * — UUIDv7 ids embed a monotonic timestamp so two reads sharing the same createdAt
+ * millisecond resolve deterministically to the newer one), or null if none exist.
+ * publish-orchestrator's deep-read projection (projectDeepRead) reads the latest at
+ * projection time; this read helper is exposed for verify/seed + operator audit.
+ */
+export async function getLatestDeepRead(
+  options: {
+    prisma: PrismaClient;
+    traceId: string;
+    hotEventId: string;
+  },
+): Promise<DeepReadRecord | null> {
+  const { prisma, hotEventId } = options;
+
+  const latest = await prisma.deepRead.findFirst({
+    where: { hotEventId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      hotEventId: true,
+      impactSurface: true,
+      beneficiaries: true,
+      riskPoints: true,
+      source: true,
+      modelId: true,
+      promptVersion: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) return null;
+  return {
+    id: latest.id,
+    hotEventId: latest.hotEventId,
+    impactSurface: latest.impactSurface,
+    beneficiaries: latest.beneficiaries,
+    riskPoints: latest.riskPoints,
+    source: latest.source as DeepReadRecord["source"],
+    modelId: latest.modelId,
+    promptVersion: latest.promptVersion,
+    createdAt: latest.createdAt,
+  };
+}
+
+// --- validation ---------------------------------------------------------------
+
+/**
+ * The three validated + normalized segments. Each is the TRIMMED value of the
+ * corresponding adapter-returned segment (so callers store the normalized value).
+ */
+interface ValidatedDeepRead {
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
+}
+
+/**
+ * Validate + normalize an adapter-returned deep read: each of the three segments
+ * non-empty, ≤ DEEP_READ_SEGMENT_MAX_LENGTH (120 字), and passes the 6-class wording
+ * guardrail. Throw on any violation (fail-fast). Returns the THREE TRIMMED segments
+ * so callers store the normalized values. Pure function (same input → identical
+ * result/throw), testable without DB.
+ *
+ * Length is measured in Unicode CODEPOINTS (`[...s].length`) — the right unit for the
+ * CJK "字" contract — NOT UTF-16 code units (`s.length`), which double-count surrogate
+ * pairs (emoji etc.) and would drift the cap. Whitespace is trimmed once up front per
+ * segment so it neither counts toward the cap nor reaches the detail page. Mirrors 5.1
+ * validateReason's trim + codepoint approach, applied per-segment.
+ *
+ * The 6-class guardrail (passesRecommendationGuardrail) is REUSED from reason-service
+ * — the constant is named "recommendation..." but carries the generic PRD §10 six
+ * classes (epic AC applies to all AI content). Each of the three segments is checked
+ * independently.
+ */
+function validateDeepRead(result: LlmDeepReadResult): ValidatedDeepRead {
+  // Provenance must be present (NFR-7 audit). modelId + promptVersion are the
+  // version-tracing pair; an empty value would break the audit chain. Checked here
+  // so a throw lands in the same fail-fast path as the segment checks (a throw on
+  // provenance never reaches the create() call).
+  if (result.modelId.trim() === "" || result.promptVersion.trim() === "") {
+    throw new Error(
+      "[deep-read] adapter returned an empty modelId or promptVersion; NFR-7 requires both for audit tracing",
+    );
+  }
+  return {
+    impactSurface: validateSegment(result.impactSurface, "impactSurface"),
+    beneficiaries: validateSegment(result.beneficiaries, "beneficiaries"),
+    riskPoints: validateSegment(result.riskPoints, "riskPoints"),
+  };
+}
+
+/**
+ * Validate one deep-read segment: non-empty, ≤120 字 (codepoints), passes the 6-class
+ * wording guardrail. Returns the TRIMMED segment. Throws on any violation (fail-fast).
+ * Pure helper, testable without DB. Mirrors 5.1 validateReason's single-segment
+ * checks; deep-read-service calls it three times (once per segment).
+ */
+function validateSegment(segment: string, label: string): string {
+  // Non-empty (guard against a non-string slipping through the type boundary).
+  if (typeof segment !== "string" || segment.trim() === "") {
+    throw new Error(
+      `[deep-read] adapter returned an empty ${label} segment; AC requires three non-empty ≤120 字 segments`,
+    );
+  }
+  const trimmed = segment.trim();
+  // ≤120 字 (codepoints — the right measure for CJK 字).
+  const codepoints = [...trimmed].length;
+  if (codepoints > DEEP_READ_SEGMENT_MAX_LENGTH) {
+    throw new Error(
+      `[deep-read] adapter returned a ${label} segment of ${codepoints} 字 (> ${DEEP_READ_SEGMENT_MAX_LENGTH}); AC requires ≤${DEEP_READ_SEGMENT_MAX_LENGTH} 字 per segment`,
+    );
+  }
+  // 6-class wording guardrail (PRD §10), evaluated on the trimmed value. Reuses the
+  // generic guardrail from reason-service (the name says "recommendation" but the six
+  // classes are generic — epic AC applies to all AI content).
+  if (!passesRecommendationGuardrail(trimmed)) {
+    throw new Error(
+      `[deep-read] adapter returned a ${label} segment containing a forbidden phrase (action / return-prediction / manipulation-frame / recommendation-strength / timing-advice / over-certainty); PRD §10 forbids these`,
+    );
+  }
+  return trimmed;
+}
