@@ -903,3 +903,35 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 1-9 operator 侧 AiLabel 源判定近似，误标已发布人工解释为 AI（HIGH）
   evidence: 抢救故事专项评审「三-1-9」：`apps/web/app/(operator)/console/[eventId]/page.tsx:223-227` operator 侧 `<AiLabel>` 用 `pending.explanation===true` 启发式判定源，"刚 republish 人工编辑后刷新"会误标已发布的人工解释为 AI（公开侧已用 `source` 字段精确判定，正确）。修法：给 `PublishedEventRevisionView.published.explanation` 投影补 `source` 字段，operator 侧直接判定 `source!=="human"`。`review-service.ts:388-389` pendingTitle/pendingTags 判据不一致为信息性项，本轮不动。由 bmad-quick-dev split 拆出，随 agent team 处理。
   resolution: 已解决（commit 969f922，agent team 目标 D）——operator 页改读 `publishedHotEventExplanation.explanationSource` 列（与公开侧 `getPublishedHotEventDetail` 同源），判定 `source !== "human"`，弃用 `pending.explanation===true` 启发式。列已存在于 schema（无迁移）。未改 review-service.ts 投影（授权锁定），改为页面级权威读。verify:revision 35/35。
+
+## Deferred from: code review of salvaged-stories fix commits (2026-07-11)
+
+- source_spec: `_bmad-output/reviews/2026-07-11-salvaged-stories-code-review.md`（fix commits b9b6e19..969f922 的对抗复核）
+  summary: submitMerge/submitSplit 外层多事务 TOCTOU（merge 提交后 decideReview 抛错 → source 被抽干但未 taken_down）
+  evidence: fix A 只把 merge/split 自身包进 $transaction，外层 submitMerge 序列（merge tx → decideReview(target,republish) tx → decideReview(source,takedown) tx）仍是 3 个独立事务、无补偿。并发在 merge 提交后改 source 状态，step3 抛 IllegalTransitionError，source 留 0 evidence 且仍 published、公开读模型过期。原评审已标 MEDIUM + deferred-work 已记 V1 已知项，本次复核再确认未闭合。
+  resolution: V1 已知/接受（cross-module 事务是更大改动）。
+
+- source_spec: 同上
+  summary: $transaction 未真正串行化并发 merge/split（Read Committed + 无 FOR UPDATE）
+  evidence: merge-split-service.ts:91-98 事务注释原称"row-level locks so concurrent merge/split serializes"，但 Prisma $transaction 默认 Read Committed、锁仅在写/删时取，findMany 读不锁。并发 merge 同一 target：第二个的 delete 命中已迁走的 link 抛 P2025（仅 P2002 被 swallow）；或 cluster_signature 从 stale member 集重算 → 签名发散。事务给了崩溃原子性（好），但未给串行化。本次 patch 已修正注释的过度声称；真正的 advisory-lock 串行化延后。
+  resolution: 注释已修正；advisory lock 串行化 V1 量级延后（数据量极小，并发 merge/split 几乎不可能）。
+
+- source_spec: 同上
+  summary: decideReview count===0 把"并发竞态"与"事件被删"混为一谈 + IllegalTransitionError 语义不可区分
+  evidence: review-service.ts:133-145 条件 updateMany count===0 → IllegalTransitionError，但"并发赢了竞态"与"findUniqueOrThrow 与 updateMany 之间事件被级联删除"都落到同一分支，后者应映射 CandidateNotFoundError/P2025 → 重定向 /console，而非重定向 /console/{eventId} 后 404。另：丢竞态 vs 真非法转移对运营都是 IllegalTransitionError，无法给出"重试"提示。
+  resolution: 微秒级窗口、删除非正常运营路径，V1 接受。
+
+- source_spec: 同上
+  summary: 多项验证缺口——$transaction 原子性/并发、submitMerge 分歧态、operator AiLabel、AGUHOT_OPERATOR_ENABLED 生产分支、mergeSearchParams 兄弟参数保留均无测试
+  evidence: verify:merge-split 单线程无故障，不触发崩溃中途/并发，事务的真实保证（回滚、串行化）零测试；submitMerge 的 read-model/status-table 分歧态无区分测试；operator AiLabel source 判定无 e2e（verify:revision 只覆盖公开侧 getPublishedHotEventDetail）；AGUHOT_OPERATOR_ENABLED 三个生产分支零覆盖（e2e 跑非生产环境）；mergeSearchParams 保留兄弟参数无单测/e2e。
+  resolution: 廉价纯函数单测（mergeSearchParams、isOperatorEnabled）随相关 patch 补；并发/崩溃注入/分歧态/e2e/部署冒烟属集成级，V1 延后。
+
+- source_spec: 同上
+  summary: submitMerge 对不存在的 targetId 返回泛化 500（无 CandidateNotFoundError 映射）
+  evidence: actions.ts submitMerge 只校验 source 已发布，未校验 targetId 存在；target 不存在时 mergeHotEvents 内部 FK 违反 P2003 → 事务回滚（source 安全），但 action 层 fall through 到 throw error → 运营见泛化 500 而非干净重定向。
+  resolution: 边界、V1 接受。
+
+- source_spec: 同上
+  summary: refreshPublishedReadModel 确定性失败会把该事件永久卡死（每次重试都回滚、无错误分类）
+  evidence: review-service.ts:150-155 decideReview step5 已条件更新状态后，step6 refreshPublishedReadModel 若确定性抛错（如某 event 的 published 行 malformed），整事务回滚（含 step5 状态与 append-only 决策记录），运营每次重试都回滚 500，无诊断面告诉是读模型刷新而非竞态。
+  resolution: V1 接受（读模型是投影可重建；确定性失败需具体 malformed 数据才会触发）。
