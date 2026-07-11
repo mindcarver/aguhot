@@ -141,6 +141,8 @@ export type {
 // + periodic self-heal job (refreshPublishedTimelineAll) + Web home feed read
 // contract (listPublishedTimeline). deriveSessionTag / deriveTradeDate are the
 // pure A-share session-boundary functions (AC5).
+// Story 4.4 — listPublishedTimelineEntries (filter-free full-table search
+// corpus; sibling to the date-scoped listPublishedTimeline feed read).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
@@ -156,6 +158,7 @@ export {
   refreshPublishedTimelineForEvent,
   refreshPublishedTimelineAll,
   listPublishedTimeline,
+  listPublishedTimelineEntries,
 } from "./modules/publish-orchestrator/timeline-read-model.js";
 export {
   deriveSessionTag,
@@ -170,6 +173,7 @@ export type {
   RefreshPublishedTimelineForEventOptions,
   RefreshPublishedTimelineAllOptions,
   ListPublishedTimelineOptions,
+  ListPublishedTimelineEntriesOptions,
   PublishedTimelineEntry,
   TimelineSessionTagType,
   ListPublishedHotEventsOptions,
@@ -311,8 +315,10 @@ export type {
 // search-read module (Story 3.1 — public search over published_* read models;
 // FR12 three-corpus coverage: published_hot_events.title +
 // published_hot_event_explanations.summary + published_hot_event_themes label.
-// Pure read: joins three filter-free sibling list fns from publish-orchestrator
-// and matches + ranks in JS — V1 in-memory filter pattern, FTS/tsvector deferred).
+// Story 4.4 adds the timeline corpus (published_timeline_entries title/summary)
+// as the 4th read. Pure read: joins four filter-free sibling list fns from
+// publish-orchestrator and matches + ranks in JS — V1 in-memory filter pattern,
+// FTS/tsvector deferred).
 export { searchPublished } from "./modules/search-read/index.js";
 export { SearchHitKind, EventMatchedField } from "./modules/search-read/index.js";
 export type {
@@ -321,6 +327,7 @@ export type {
   SearchPublishedOptions,
   EventSearchHit,
   ThemeSearchHit,
+  TimelineSearchHit,
   SearchPublishedResult,
 } from "./modules/search-read/index.js";
 

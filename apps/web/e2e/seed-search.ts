@@ -183,6 +183,13 @@ export async function seedSearchContext(): Promise<{
   await prisma.marketReactionSnapshot.deleteMany({});
   await prisma.publishedHotEventEvidence.deleteMany({});
   await prisma.publishedHotEventExplanation.deleteMany({});
+  // Story 4.4: clear published_timeline_entries explicitly. decideReview(approve)
+  // already writes timeline rows in-transaction (4.1 method A), so the seeded
+  // events below get timeline rows — this clear guarantees no stale timeline
+  // rows from a prior run survive (deterministic timeline-search assertions).
+  // Placed near the other published_* clears; the hotEventId FK would cascade
+  // on publishedHotEvent clear, but explicit is clearer + matches seed-timeline.
+  await prisma.publishedTimelineEntry.deleteMany({});
   await prisma.publishedHotEvent.deleteMany({});
   await prisma.hotEventRevision.deleteMany({});
   await prisma.explanationVersion.deleteMany({});
@@ -462,6 +469,27 @@ export async function seedSearchContext(): Promise<{
     update: {
       summary: SUMMARY_HIT_INJECTED_SUMMARY,
       traceId: newTraceId(),
+    },
+  });
+
+  // TEST-ONLY: keep event B's timeline row summary in sync with the rewritten
+  // explanation summary above. The direct explanation upsert above does NOT
+  // refresh published_timeline_entries.summary (that row was projected earlier
+  // inside decideReview(approve) from the THEN-current ExplanationVersion, so
+  // its summary is stale relative to the injected 「稀土」 summary). Without
+  // this, the timeline-search summary-hit row (Story 4.4 I/O-matrix) would not
+  // match SUMMARY_QUERY 「稀土」 even though the event-side summary does — the
+  // two corpora would drift, breaking the timeline summary-hit assertion. This
+  // mirrors the explanation upsert's seed-only-fixture precedent (production
+  // never writes published_* outside publish-orchestrator's projectors).
+  // Only `summary` is mutated — the row keeps its original projection traceId
+  // (overwriting the audit-origin field here would only confuse a future
+  // "traceId must be the original projection traceId" invariant; the seed needs
+  // nothing but the summary sync).
+  await prisma.publishedTimelineEntry.update({
+    where: { hotEventId: summaryCandidate.id },
+    data: {
+      summary: SUMMARY_HIT_INJECTED_SUMMARY,
     },
   });
 

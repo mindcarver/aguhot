@@ -1,0 +1,793 @@
+diff --git a/apps/web/app/(public)/search/page.tsx b/apps/web/app/(public)/search/page.tsx
+index 752b906..58b6ae0 100644
+--- a/apps/web/app/(public)/search/page.tsx
++++ b/apps/web/app/(public)/search/page.tsx
+@@ -9,6 +9,7 @@ import {
+ } from "@aguhot/core";
+ 
+ import { EventCard } from "../_components/event-card";
++import { TimelineCard } from "../_components/timeline-card";
+ import { SearchBox } from "../_components/search-box";
+ 
+ export const dynamic = "force-dynamic";
+@@ -51,13 +52,15 @@ function parseSearchQuery(raw: string | undefined): string {
+ }
+ 
+ /**
+- * Public search results page — Story 3.1 (FR12).
++ * Public search results page — Story 3.1 (FR12); Story 4.4 adds the timeline
++ * group.
+  *
+  * Reads ONLY published_* read models (AD-3) via searchPublished (which joins
+  * listPublishedHotEvents + listPublishedHotEventExplanations +
+- * listPublishedThemeMemberships in JS). Never reads hot_events /
+- * explanation_versions / event_theme_sets / evidence_* (AD-3). Anonymous by
+- * default (AD-8): no login dependency anywhere on the search path.
++ * listPublishedThemeMemberships + listPublishedTimelineEntries in JS). Never
++ * reads hot_events / explanation_versions / event_theme_sets / evidence_*
++ * (AD-3). Anonymous by default (AD-8): no login dependency anywhere on the
++ * search path.
+  *
+  * Why force-dynamic + @aguhot/core import is safe for the build:
+  *   - force-dynamic marks the route dynamic so Next evaluates it at REQUEST
+@@ -73,9 +76,11 @@ function parseSearchQuery(raw: string | undefined): string {
+  *   (2) Non-empty query, zero hits → "未找到与「{q}」相关的热点或主题。"
+  *       no-match text + a link back home + a SearchBox (so the reader can try a
+  *       different word in place).
+- *   (3) Non-empty query with hits → grouped "热点事件 (N)" section mapping
+- *       EventCard (reused, link /events/{id}) + "主题 (N)" section mapping
+- *       FilterPill (reused, link /topics/{slug}). Event hits are ranked by
++ *   (3) Non-empty query with hits → grouped sections: "热点事件 (N)" mapping
++ *       EventCard (reused, link /events/{id}) + "时间流 (N)" mapping TimelineCard
++ *       (reused, 4.2 component — whole-card link /events/{hotEventId} satisfies
++ *       AC2: result → timeline entry → detail) + "主题 (N)" mapping FilterPill
++ *       (reused, link /topics/{slug}). Event + timeline hits are ranked by
+  *       searchPublished (title tier 0 > summary tier 1, recency within tier);
+  *       theme hits by memberCount DESC, label ASC.
+  *
+@@ -114,7 +119,10 @@ export default async function SearchPage({ searchParams }: PageProps) {
+   const traceId = newTraceId();
+   const result = await searchPublished({ prisma, traceId, query: q });
+ 
+-  const hasHits = result.events.length > 0 || result.themes.length > 0;
++  const hasHits =
++    result.events.length > 0 ||
++    result.themes.length > 0 ||
++    result.timeline.length > 0;
+ 
+   // No-match state (AC2): honest no-result feedback + a path back home + an
+   // in-place SearchBox so the reader can change keywords.
+@@ -181,6 +189,30 @@ export default async function SearchPage({ searchParams }: PageProps) {
+         </section>
+       ) : null}
+ 
++      {/*
++        Timeline hits (Story 4.4): reuses the 4.2 TimelineCard — each card is an
++        <li> rendering the full PublishedTimelineEntry with a whole-card Link to
++        /events/{hotEventId} (AC2: result → timeline entry → detail page). The
++        timeline corpus carries the SAME title/summary strings as the event
++        corpus, so the 时间流 group and the 热点事件 group overlap in membership
++        for events that have evidence — this is intended (different card
++        frameworks: EventCard shows saliency/recency, TimelineCard shows
++        timestamp/source/session); NOT deduped (spec Design Notes + deferred
++        work). ranked tier-then-occurredAt-DESC by searchPublished.
++      */}
++      {result.timeline.length > 0 ? (
++        <section className="mt-10">
++          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
++            时间流 ({result.timeline.length})
++          </h2>
++          <ul role="list" className="mt-4 space-y-3">
++            {result.timeline.map((h) => (
++              <TimelineCard key={h.entry.id} entry={h.entry} />
++            ))}
++          </ul>
++        </section>
++      ) : null}
++
+       {/* Theme hits (AC1): memberCount DESC, label ASC. FilterPill links to
+           /topics/{slug}. */}
+       {result.themes.length > 0 ? (
+diff --git a/apps/web/e2e/search.spec.ts b/apps/web/e2e/search.spec.ts
+index ae52ebc..6733b66 100644
+--- a/apps/web/e2e/search.spec.ts
++++ b/apps/web/e2e/search.spec.ts
+@@ -5,11 +5,12 @@ import { getPrisma, newTraceId, refreshPublishedReadModel } from "@aguhot/core";
+ import { seedSearchContext } from "./seed-search";
+ 
+ /**
+- * Public hot-event + theme search e2e — Story 3.1 (FR12). Tagged @search so it
+- * runs only under `pnpm --filter web e2e:search` (DB-backed + seed) and does NOT
+- * run under the public `pnpm --filter web e2e` (whose --grep-invert excludes
+- * @console, @feed, @detail, @revision, @merge-split, @market-reaction,
+- * @associations, @themes, @daily, @loop, AND @search).
++ * Public hot-event + theme search e2e — Story 3.1 (FR12); Story 4.4 adds the
++ * timeline-group assertion. Tagged @search so it runs only under
++ * `pnpm --filter web e2e:search` (DB-backed + seed) and does NOT run under the
++ * public `pnpm --filter web e2e` (whose --grep-invert excludes @console, @feed,
++ * @detail, @revision, @merge-split, @market-reaction, @associations, @themes,
++ * @daily, @loop, AND @search).
+  *
+  * The beforeAll imports and runs seedSearchContext() (the same function
+  * `pnpm --filter web seed:search` runs) to capture the dynamic title-hit +
+@@ -23,6 +24,10 @@ import { seedSearchContext } from "./seed-search";
+  * Covers:
+  *   - AC1 title hit: GET /search?q={titleQuery} → 200, the 「热点事件」 section
+  *     renders an EventCard linking /events/{titleHitId}.
++ *   - AC2 时间流 title hit (Story 4.4): GET /search?q={titleQuery} → the
++ *     「时间流」 section renders a TimelineCard whose whole-card Link points to
++ *     /events/{titleHitId} (timeline entry → detail deep link; surface-anchored
++ *     against the 时间流 section so it does not match the EventCard in 热点事件).
+  *   - AC1 summary hit: GET /search?q={summaryQuery} → EventCard linking
+  *     /events/{summaryHitId} (the event whose title excludes the word but whose
+  *     explanation summary contains it).
+@@ -148,6 +153,42 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
+     await expect(page.getByText(titleHitTitle).first()).toBeVisible();
+   });
+ 
++  test("AC2 时间流标题命中 (Story 4.4)：/search?q={titleQuery} 含 时间流 区块 + TimelineCard 整卡链 /events/{titleHitId}", async ({ page }) => {
++    // Story 4.4: the seeded event A is published via decideReview(approve),
++    // which writes a published_timeline_entries row in-transaction (4.1 method
++    // A). The timeline entry's title is the SAME effective HotEvent title that
++    // published_hot_events.title carries, so searching titleQuery 「芯片」 hits
++    // BOTH the 热点事件 group (EventCard) AND the 时间流 group (TimelineCard).
++    // This is the intended overlap (spec Design Notes + deferred-work — NOT
++    // deduped). The test asserts the timeline group renders + its TimelineCard
++    // whole-card Link points to /events/{titleHitId} (AC2: result → timeline
++    // entry → detail page).
++    const response = await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
++    expect(response!.status(), "timeline-hit search status should be 200").toBe(200);
++
++    // The 「时间流」 section heading renders (scoped to <main> to exclude nav).
++    const main = page.getByRole("main");
++    await expect(
++      main.getByRole("heading", { level: 2, name: /时间流/ }),
++    ).toBeVisible();
++
++    // The timeline section's TimelineCard carries a whole-card Link to the
++    // title-hit event's detail page. Scope to the 时间流 section so this does
++    // NOT match the EventCard link in the 热点事件 section (both render
++    // /events/{titleHitId} — the overlap is intended). The timeline <section>
++    // is the one whose h2 is「时间流 (N)」.
++    const timelineSection = main.locator("section", {
++      has: main.getByRole("heading", { level: 2, name: /^时间流/ }),
++    });
++    const timelineCardLink = timelineSection.locator(
++      `a[href="/events/${titleHitId}"]`,
++    );
++    await expect(
++      timelineCardLink,
++      "TimelineCard whole-card link to /events/{titleHitId} should render in the 时间流 section",
++    ).toBeVisible();
++  });
++
+   test("AC1 摘要命中：/search?q={summaryQuery} 含 EventCard 链 /events/{summaryHitId}", async ({ page }) => {
+     const response = await page.goto(`/search?q=${encodeURIComponent(summaryQuery)}`);
+     expect(response!.status(), "summary-hit search status should be 200").toBe(200);
+diff --git a/apps/web/e2e/seed-search.ts b/apps/web/e2e/seed-search.ts
+index c6088ad..612e5c3 100644
+--- a/apps/web/e2e/seed-search.ts
++++ b/apps/web/e2e/seed-search.ts
+@@ -183,6 +183,13 @@ export async function seedSearchContext(): Promise<{
+   await prisma.marketReactionSnapshot.deleteMany({});
+   await prisma.publishedHotEventEvidence.deleteMany({});
+   await prisma.publishedHotEventExplanation.deleteMany({});
++  // Story 4.4: clear published_timeline_entries explicitly. decideReview(approve)
++  // already writes timeline rows in-transaction (4.1 method A), so the seeded
++  // events below get timeline rows — this clear guarantees no stale timeline
++  // rows from a prior run survive (deterministic timeline-search assertions).
++  // Placed near the other published_* clears; the hotEventId FK would cascade
++  // on publishedHotEvent clear, but explicit is clearer + matches seed-timeline.
++  await prisma.publishedTimelineEntry.deleteMany({});
+   await prisma.publishedHotEvent.deleteMany({});
+   await prisma.hotEventRevision.deleteMany({});
+   await prisma.explanationVersion.deleteMany({});
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index b25706a..8b67467 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -141,6 +141,8 @@ export type {
+ // + periodic self-heal job (refreshPublishedTimelineAll) + Web home feed read
+ // contract (listPublishedTimeline). deriveSessionTag / deriveTradeDate are the
+ // pure A-share session-boundary functions (AC5).
++// Story 4.4 — listPublishedTimelineEntries (filter-free full-table search
++// corpus; sibling to the date-scoped listPublishedTimeline feed read).
+ export {
+   refreshPublishedReadModel,
+   listPublishedHotEvents,
+@@ -156,6 +158,7 @@ export {
+   refreshPublishedTimelineForEvent,
+   refreshPublishedTimelineAll,
+   listPublishedTimeline,
++  listPublishedTimelineEntries,
+ } from "./modules/publish-orchestrator/timeline-read-model.js";
+ export {
+   deriveSessionTag,
+@@ -170,6 +173,7 @@ export type {
+   RefreshPublishedTimelineForEventOptions,
+   RefreshPublishedTimelineAllOptions,
+   ListPublishedTimelineOptions,
++  ListPublishedTimelineEntriesOptions,
+   PublishedTimelineEntry,
+   TimelineSessionTagType,
+   ListPublishedHotEventsOptions,
+@@ -311,8 +315,10 @@ export type {
+ // search-read module (Story 3.1 — public search over published_* read models;
+ // FR12 three-corpus coverage: published_hot_events.title +
+ // published_hot_event_explanations.summary + published_hot_event_themes label.
+-// Pure read: joins three filter-free sibling list fns from publish-orchestrator
+-// and matches + ranks in JS — V1 in-memory filter pattern, FTS/tsvector deferred).
++// Story 4.4 adds the timeline corpus (published_timeline_entries title/summary)
++// as the 4th read. Pure read: joins four filter-free sibling list fns from
++// publish-orchestrator and matches + ranks in JS — V1 in-memory filter pattern,
++// FTS/tsvector deferred).
+ export { searchPublished } from "./modules/search-read/index.js";
+ export { SearchHitKind, EventMatchedField } from "./modules/search-read/index.js";
+ export type {
+@@ -321,6 +327,7 @@ export type {
+   SearchPublishedOptions,
+   EventSearchHit,
+   ThemeSearchHit,
++  TimelineSearchHit,
+   SearchPublishedResult,
+ } from "./modules/search-read/index.js";
+ 
+diff --git a/packages/core/src/modules/publish-orchestrator/index.ts b/packages/core/src/modules/publish-orchestrator/index.ts
+index 13f4829..dcb17fc 100644
+--- a/packages/core/src/modules/publish-orchestrator/index.ts
++++ b/packages/core/src/modules/publish-orchestrator/index.ts
+@@ -33,10 +33,13 @@ export {
+ // (refreshPublishedTimelineForEvent) runs inside decideReview's $transaction;
+ // the full self-heal (refreshPublishedTimelineAll) runs as a BullMQ job;
+ // listPublishedTimeline is the Web home feed read contract.
++// Story 4.4: listPublishedTimelineEntries is the filter-free full-table search
++// corpus (sibling to the date-scoped listPublishedTimeline feed read).
+ export {
+   refreshPublishedTimelineForEvent,
+   refreshPublishedTimelineAll,
+   listPublishedTimeline,
++  listPublishedTimelineEntries,
+ } from "./timeline-read-model.js";
+ export {
+   deriveSessionTag,
+@@ -51,6 +54,7 @@ export type {
+   RefreshPublishedTimelineForEventOptions,
+   RefreshPublishedTimelineAllOptions,
+   ListPublishedTimelineOptions,
++  ListPublishedTimelineEntriesOptions,
+   PublishedTimelineEntry,
+   TimelineSessionTagType,
+   ListPublishedHotEventsOptions,
+diff --git a/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts b/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
+index 79b5d7f..d907e02 100644
+--- a/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
++++ b/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
+@@ -39,6 +39,7 @@ import {
+   deriveTradeDate,
+ } from "./session-tag.js";
+ import type {
++  ListPublishedTimelineEntriesOptions,
+   ListPublishedTimelineOptions,
+   PublishedTimelineEntry,
+   RefreshPublishedTimelineAllOptions,
+@@ -491,3 +492,70 @@ export async function listPublishedTimeline(
+     recommendationReason: r.recommendationReason,
+   }));
+ }
++
++/**
++ * Filter-free full-table read of published_timeline_entries — the search corpus
++ * (Story 4.4). Distinct from `listPublishedTimeline` (the home feed contract):
++ *   - listPublishedTimeline is date-scoped: tradeDate defaults to the latest day
++ *     with entries, limit caps at 50. It serves the HOME FEED's "today" view and
++ *     CANNOT be the search corpus (it would miss historical entries on other
++ *     trade dates).
++ *   - listPublishedTimelineEntries is filter-free: no tradeDate/sessionTag/
++ *     limit. It returns EVERY published timeline row across ALL trade dates so
++ *     the search-read path can match title/summary against the full corpus. The
++ *     same `published_timeline` read-model column set is projected to the same
++ *     `PublishedTimelineEntry` shape (11 fields) — the two fns share the row→
++ *     entry mapping, they differ only in scope (date-scoped feed vs full-table
++ *     corpus). This mirrors the established "filter-free sibling list fn for
++ *     search" family (listPublishedHotEvents / listPublishedHotEventExplanations
++ *     / listPublishedThemeMemberships — AD-3 read-only, V1 published volume is
++ *     tiny so a full read is the ponytail choice over SQL filter / FTS).
++ *
++ * `orderBy: [{ hotEventId: "asc" }]` gives deterministic row order across loads
++ * (mirrors the listPublishedHotEventExplanations sibling contract). The search
++ * layer applies its own ranking (tier then occurredAt DESC), so this order is
++ * not the final display order — it just makes the row sequence stable for
++ * reproducible matching.
++ *
++ * Reads ONLY published_timeline_entries; never touches hot_events /
++ * explanation_versions / evidence_* (AD-3). Row existence = currently published
++ * (no status column, AD-8). A taken-down event's timeline row is cascade-
++ * deleted inside decideReview's transaction → it automatically disappears from
++ * the search corpus (no extra filter).
++ */
++export async function listPublishedTimelineEntries(
++  options: ListPublishedTimelineEntriesOptions,
++): Promise<PublishedTimelineEntry[]> {
++  const { prisma } = options;
++
++  const rows = await prisma.publishedTimelineEntry.findMany({
++    select: {
++      id: true,
++      hotEventId: true,
++      tradeDate: true,
++      occurredAt: true,
++      sessionTag: true,
++      sourceName: true,
++      title: true,
++      summary: true,
++      evidenceCount: true,
++      foldedEvidenceRecordIds: true,
++      recommendationReason: true,
++    },
++    orderBy: [{ hotEventId: "asc" }],
++  });
++
++  return rows.map((r) => ({
++    id: r.id,
++    hotEventId: r.hotEventId,
++    tradeDate: r.tradeDate,
++    occurredAt: r.occurredAt,
++    sessionTag: r.sessionTag as PublishedTimelineEntry["sessionTag"],
++    sourceName: r.sourceName,
++    title: r.title,
++    summary: r.summary,
++    evidenceCount: r.evidenceCount,
++    foldedEvidenceRecordIds: r.foldedEvidenceRecordIds as unknown as string[],
++    recommendationReason: r.recommendationReason,
++  }));
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index 44e0ac6..ad718f4 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -522,6 +522,21 @@ export interface ListPublishedTimelineOptions {
+   limit?: number;
+ }
+ 
++/**
++ * Options for listPublishedTimelineEntries — the filter-free full-table read
++ * used by the search-read path (Story 4.4). Mirrors the established
++ * `{ prisma, traceId }` query pattern. Deliberately NO `tradeDate` /
++ * `sessionTag` / `category` parameter: the search corpus MUST cover all trade
++ * dates, so this fn is the filter-free sibling of the date-scoped
++ * `listPublishedTimeline` (which defaults to the latest trade_date, limit 50,
++ * and therefore cannot serve as the search corpus). The caller (search-read)
++ * matches + ranks in JS. ponytail: no pre-embedded consumerless filter param.
++ */
++export interface ListPublishedTimelineEntriesOptions {
++  prisma: PrismaClient;
++  traceId: string;
++}
++
+ /**
+  * One published timeline entry — the per-HotEvent folded projection the home
+  * feed card renders. Mirrors published_timeline_entries columns. The 4.2 card
+diff --git a/packages/core/src/modules/search-read/index.ts b/packages/core/src/modules/search-read/index.ts
+index a102df3..cae040c 100644
+--- a/packages/core/src/modules/search-read/index.ts
++++ b/packages/core/src/modules/search-read/index.ts
+@@ -1,12 +1,13 @@
+ /**
+- * search-read module barrel — Story 3.1 (FR12 public search).
++ * search-read module barrel — Story 3.1 (FR12 public search); Story 4.4 adds
++ * the timeline corpus.
+  *
+  * Owns the public search read path over the published_* read models. Exposes
+  * searchPublished, which joins listPublishedHotEvents +
+- * listPublishedHotEventExplanations + listPublishedThemeMemberships (all
+- * filter-free sibling list fns owned by publish-orchestrator) and matches +
+- * ranks in JS. The Prisma client lives one level up and is re-exported from the
+- * package barrel.
++ * listPublishedHotEventExplanations + listPublishedThemeMemberships +
++ * listPublishedTimelineEntries (all filter-free sibling list fns owned by
++ * publish-orchestrator) and matches + ranks in JS. The Prisma client lives one
++ * level up and is re-exported from the package barrel.
+  *
+  * This module NEVER writes anything (pure read) and never reads raw
+  * hot_events / explanation_versions / event_theme_sets / evidence_* tables —
+@@ -22,5 +23,6 @@ export type {
+   SearchPublishedOptions,
+   EventSearchHit,
+   ThemeSearchHit,
++  TimelineSearchHit,
+   SearchPublishedResult,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/search-read/search-service.ts b/packages/core/src/modules/search-read/search-service.ts
+index 689f100..2b193f9 100644
+--- a/packages/core/src/modules/search-read/search-service.ts
++++ b/packages/core/src/modules/search-read/search-service.ts
+@@ -1,15 +1,20 @@
+ /**
+- * searchPublished: public search over published_* read models — Story 3.1 (FR12).
++ * searchPublished: public search over published_* read models — Story 3.1
++ * (FR12); Story 4.4 adds the timeline corpus.
+  *
+- * Reads THREE corpora (FR12: "标题、解释摘要和主题名称"):
++ * Reads FOUR corpora:
+  *   - event titles from listPublishedHotEvents (published_hot_events.title)
+  *   - explanation summaries from listPublishedHotEventExplanations
+  *     (published_hot_event_explanations.summary — the sibling list fn 3.1 adds
+  *     to surface this corpus)
+  *   - theme labels from listPublishedThemeMemberships
+  *     (published_hot_event_themes.items[].label)
++ *   - timeline entry titles + summaries from listPublishedTimelineEntries
++ *     (published_timeline_entries — Story 4.4: the Epic 4 pivot made timeline
++ *     entries a first-class content unit, so search must cover them; this is the
++ *     filter-free full-table sibling of the date-scoped listPublishedTimeline)
+  *
+- * All three reads are filter-free sibling list fns owned by publish-orchestrator
++ * All four reads are filter-free sibling list fns owned by publish-orchestrator
+  * (AD-3: public reads only published_* read models). searchPublished joins them
+  * in JS and applies case-insensitive substring matching — the same V1 in-memory
+  * filter pattern as 1.7 filterByWindow / 2.2 association join / 2.3 theme derive
+@@ -28,6 +33,13 @@
+  *     alphabetical tiebreaker). A theme matches if ANY collected label for its
+  *     slug contains the query (a label that drifted on a later event must stay
+  *     searchable); the DISPLAY label stays first-seen.
++ *   - timeline (4.4): same two-tier semantics as events (title tier 0 before
++ *     summary tier 1, reusing EventMatchedField); within a tier, occurredAt DESC
++ *     (recency on the timeline's minute-level timestamp), then hotEventId ASC
++ *     (stable DOM order tiebreaker). Timeline title/summary are the SAME strings
++ *     as published_hot_events.title / published_hot_event_explanations.summary,
++ *     so timeline hits overlap event hits in membership — this is intended
++ *     (different card frameworks; see Design Notes + deferred-work, NOT deduped).
+  *
+  * Only published_* read models are read — never hot_events / explanation_versions
+  * / event_theme_sets / evidence_* (AD-3). Row existence = currently published
+@@ -39,6 +51,7 @@ import {
+   listPublishedHotEventExplanations,
+   listPublishedHotEvents,
+   listPublishedThemeMemberships,
++  listPublishedTimelineEntries,
+ } from "../publish-orchestrator/index.js";
+ import type {
+   EventMatchedFieldType,
+@@ -46,6 +59,7 @@ import type {
+   SearchPublishedOptions,
+   SearchPublishedResult,
+   ThemeSearchHit,
++  TimelineSearchHit,
+ } from "./types.js";
+ import { EventMatchedField, SearchHitKind } from "./types.js";
+ 
+@@ -61,14 +75,15 @@ export async function searchPublished(
+ ): Promise<SearchPublishedResult> {
+   const q = options.query.trim();
+   if (q === "") {
+-    return { query: "", events: [], themes: [] };
++    return { query: "", events: [], themes: [], timeline: [] };
+   }
+   const qLower = q.toLowerCase();
+ 
+-  // Concurrently read all three corpora (all filter-free sibling list fns; V1
+-  // published volume is tiny so three reads + an in-memory join is the ponytail
+-  // choice over SQL union / FTS / per-corpus indexes).
+-  const [events, explanations, memberships] = await Promise.all([
++  // Concurrently read all four corpora (all filter-free sibling list fns; V1
++  // published volume is tiny so four reads + an in-memory join is the ponytail
++  // choice over SQL union / FTS / per-corpus indexes). Story 4.4 added the
++  // timeline read as the 4th branch.
++  const [events, explanations, memberships, timelineEntries] = await Promise.all([
+     listPublishedHotEvents({ prisma: options.prisma, traceId: options.traceId }),
+     listPublishedHotEventExplanations({
+       prisma: options.prisma,
+@@ -78,6 +93,10 @@ export async function searchPublished(
+       prisma: options.prisma,
+       traceId: options.traceId,
+     }),
++    listPublishedTimelineEntries({
++      prisma: options.prisma,
++      traceId: options.traceId,
++    }),
+   ]);
+ 
+   // Build a hotEventId → summary lookup for the explanation corpus. Events
+@@ -185,7 +204,34 @@ export async function searchPublished(
+     return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
+   });
+ 
+-  return { query: q, events: eventHits, themes: themeHits };
++  // --- Timeline hits (Story 4.4): same tier semantics as events, recency on
++  // occurredAt instead of latestEvidenceAt. The timeline corpus carries the
++  // SAME title/summary strings as the event corpus (4.1 projects title from the
++  // same effective HotEvent title and summary from the same latest
++  // ExplanationVersion), so a query matching an event title also matches its
++  // timeline entry — the two groups render overlapping membership in different
++  // card frameworks. This is intended (spec Design Notes); dedupe/merge is
++  // deferred work, NOT a defect to fix here.
++  const timelineHits: TimelineSearchHit[] = [];
++  for (const entry of timelineEntries) {
++    // matchEvent takes (title, summary|null, qLower) and returns the tier. The
++    // timeline summary is "" (not null) when no ExplanationVersion exists, so
++    // matchEvent's `summary !== null && summary.toLowerCase().includes(qLower)`
++    // still works correctly for timeline (empty string never contains a non-
++    // empty qLower). Reusing matchEvent keeps timeline tier semantics identical
++    // to event tier semantics (title tier 0 > summary tier 1).
++    const matchedField = matchEvent(entry.title, entry.summary, qLower);
++    if (matchedField !== null) {
++      timelineHits.push({
++        kind: SearchHitKind.Timeline,
++        matchedField,
++        entry,
++      });
++    }
++  }
++  timelineHits.sort(rankTimelineHit);
++
++  return { query: q, events: eventHits, themes: themeHits, timeline: timelineHits };
+ }
+ 
+ /**
+@@ -234,3 +280,26 @@ function rankEventHit(a: EventSearchHit, b: EventSearchHit): number {
+   if (byTime !== 0) return byTime;
+   return a.hotEventId < b.hotEventId ? -1 : a.hotEventId > b.hotEventId ? 1 : 0;
+ }
++
++/**
++ * Tier-then-recency comparator for timeline hits (Story 4.4). Same tier
++ * semantics as rankEventHit (title tier 0 before summary tier 1); within a
++ * tier, occurredAt DESC (the timeline's minute-level timestamp — the timeline
++ * is a chronological feed, so occurredAt is the honest recency signal, NOT
++ * latestEvidenceAt which is the event-card's saliency-recency signal).
++ * Deterministic tiebreaker by entry.hotEventId ASC (stable DOM order across
++ * loads; matches the rankEventHit tiebreaker so two timeline entries sharing
++ * the same tier + same occurredAt resolve deterministically).
++ */
++function rankTimelineHit(a: TimelineSearchHit, b: TimelineSearchHit): number {
++  const tierA = a.matchedField === EventMatchedField.Title ? 0 : 1;
++  const tierB = b.matchedField === EventMatchedField.Title ? 0 : 1;
++  if (tierA !== tierB) return tierA - tierB;
++  const byTime = b.entry.occurredAt.getTime() - a.entry.occurredAt.getTime();
++  if (byTime !== 0) return byTime;
++  return a.entry.hotEventId < b.entry.hotEventId
++    ? -1
++    : a.entry.hotEventId > b.entry.hotEventId
++      ? 1
++      : 0;
++}
+diff --git a/packages/core/src/modules/search-read/types.ts b/packages/core/src/modules/search-read/types.ts
+index 3ff255f..0780506 100644
+--- a/packages/core/src/modules/search-read/types.ts
++++ b/packages/core/src/modules/search-read/types.ts
+@@ -1,23 +1,26 @@
+ /**
+  * search-read domain types: the public search over published_* read models
+- * (Story 3.1, FR12).
++ * (Story 3.1, FR12; Story 4.4 adds the timeline corpus).
+  *
+  * FR12: "用户可以搜索热点事件、主题页或相关关键词，结果覆盖标题、解释摘要和
+- * 主题名称". searchPublished reads three corpora from the published_* read models
+- * (AD-3) and returns grouped results { events, themes } ranked by a blend of
+- * relevance (title hit > summary hit) and recency (latestEvidenceAt DESC within
+- * each tier).
++ * 主题名称". searchPublished reads corpora from the published_* read models
++ * (AD-3) and returns grouped results { events, themes, timeline } ranked by a
++ * blend of relevance (title hit > summary hit) and recency (latestEvidenceAt /
++ * occurredAt DESC within each tier). Story 4.4 adds the timeline corpus
++ * (published_timeline_entries title/summary) as the 4th read, surfacing market
++ * dynamics that the Epic 4 pivot made a first-class content unit.
+  *
+  * This module never writes anything (pure read). It only orchestrates reads of
+  * listPublishedHotEvents + listPublishedHotEventExplanations +
+- * listPublishedThemeMemberships (all filter-free sibling list fns owned by
+- * publish-orchestrator), then matches + ranks in JS. Chinese-friendly: substring
+- * match via String.prototype.includes + toLowerCase (no FTS/tsvector/ILIKE —
+- * deferred; Chinese substring character-level match is correct without word
+- * segmentation).
++ * listPublishedThemeMemberships + listPublishedTimelineEntries (all filter-free
++ * sibling list fns owned by publish-orchestrator), then matches + ranks in JS.
++ * Chinese-friendly: substring match via String.prototype.includes + toLowerCase
++ * (no FTS/tsvector/ILIKE — deferred; Chinese substring character-level match is
++ * correct without word segmentation).
+  */
+ 
+ import type { PrismaClient } from "../../../generated/client.js";
++import type { PublishedTimelineEntry } from "../publish-orchestrator/types.js";
+ 
+ /**
+  * Options for searchPublished. `{ prisma, traceId, query }` — `query` is the
+@@ -31,12 +34,14 @@ export interface SearchPublishedOptions {
+ }
+ 
+ /**
+- * The kind of hit — "event" (matched title or explanation summary) or "theme"
+- * (matched theme label). Drives the grouped { events, themes } return shape.
++ * The kind of hit — "event" (matched title or explanation summary), "theme"
++ * (matched theme label), or "timeline" (matched published_timeline entry title
++ * or summary). Drives the grouped { events, themes, timeline } return shape.
+  */
+ export const SearchHitKind = {
+   Event: "event",
+   Theme: "theme",
++  Timeline: "timeline",
+ } as const;
+ 
+ export type SearchHitKindType = (typeof SearchHitKind)[keyof typeof SearchHitKind]
+@@ -87,13 +92,46 @@ export interface ThemeSearchHit {
+ }
+ 
+ /**
+- * The grouped search result. `events` and `themes` are each already ranked
+- * (events: tier ASC then latestEvidenceAt DESC; themes: memberCount DESC then
+- * label ASC). Empty arrays when there are no hits (the page renders the no-match
+- * state). `query` echoes the matched query (trimmed) for display + shareability.
++ * One published timeline entry search hit (Story 4.4). The timeline corpus is
++ * `published_timeline_entries` — the per-HotEvent folded projection written by
++ * publish-orchestrator. `matchedField` reuses EventMatchedField (title = tier 0,
++ * summary = tier 1) so timeline hits share the event-hit tier semantics.
++ *
++ * `entry` carries the full PublishedTimelineEntry so the search page can render
++ * the hit via the 4.2 TimelineCard with zero projection — TimelineCard already
++ * knows how to render a PublishedTimelineEntry (whole-card Link to
++ * /events/{hotEventId}, fixed reading order, fold disclosure). `matchedField`
++ * only drives the tier-then-recency ranking; it is not rendered as a highlight
++ * (consistent with event hits).
++ *
++ * Note on overlap with event hits (Design Notes, spec 4.4): the timeline
++ * `title` and `summary` strings are the SAME strings as
++ * `published_hot_events.title` and `published_hot_event_explanations.summary`
++ * (4.1 projects them from the same sources). So for any event with evidence,
++ * the timeline entry and the event row carry identical title/summary → a query
++ * matching one matches the other. The two groups (热点事件 / 时间流) intentionally
++ * render the overlapping membership with distinct card frameworks (EventCard
++ * shows saliency/recency, TimelineCard shows timestamp/source/session). This is
++ * the spec-mandated "coverage" outcome, NOT a defect — dedupe/merge is logged as
++ * deferred work.
++ */
++export interface TimelineSearchHit {
++  kind: typeof SearchHitKind.Timeline;
++  matchedField: EventMatchedFieldType;
++  entry: PublishedTimelineEntry;
++}
++
++/**
++ * The grouped search result. `events`, `themes`, and `timeline` are each
++ * already ranked (events: tier ASC then latestEvidenceAt DESC; themes:
++ * memberCount DESC then label ASC; timeline: tier ASC then occurredAt DESC then
++ * hotEventId ASC). Empty arrays when there are no hits (the page renders the
++ * no-match state). `query` echoes the matched query (trimmed) for display +
++ * shareability.
+  */
+ export interface SearchPublishedResult {
+   query: string;
+   events: EventSearchHit[];
+   themes: ThemeSearchHit[];
++  timeline: TimelineSearchHit[];
+ }
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index 79cd6c7..e4aa673 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -974,3 +974,12 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's
+   summary: 公告/研报 类别筛选出 4.3 V1 范围——整个 codebase 无任何数据承载，待真实数据源 + 数据模型落地后另开 story
+   evidence: 4.3 dev 在规划阶段 HALT（intent gap）：类别维度 V1 候选含「概念/行业/个股/公告/研报」六项，但 `published_timeline` 读模型无 category 字段、`listPublishedTimeline` 未实现 `category?` 参数，且 `公告|研报` 在 `packages/core/src` grep 零命中——无 enum、无 union 成员、无字段、无 source。唯一类别 taxonomy 是 `AssociationKind = concept|industry|stock`，仅存于 `EventAssociationSet.items`/`PublishedHotEventAssociation.items` 的 Json 展示列（不可 SQL 单项查）。PM 裁决（读法 B）：V1 类别 = concept/industry/stock 三项（复用既有 AssociationKind，内存过滤，镜像 2.2 feed-filter 模式），公告/研报 out-of-scope。强行实现公告/研报 pill 会违反 NFR「absence as absence，绝不伪造完整性」（无数据源的 pill 是死控件）。
+   resolution: 公告/研报 类别筛选 defer 到未来 story——前置条件：采购公告/研报真实数据源 + 定义 enum/归属模块 + 投影到 timeline 读模型（或独立 category 列/子表）。届时扩 4.3（或新 story）类别 pill 至 6 项。本 defer 与 deferred-work 中既有「按 concept/industry SQL 聚合需重构 Json 列为子表」「scale ceiling」同根（数据底座）。
++
++---
++
++## 2026-07-11 Story 4.4 review — deferred findings
++
++- source_spec: `_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md`（4.4 实现期登记）
++  summary: 时间流分组与热点事件分组成员冗余——timeline `title`/`summary` 与 `published_hot_events.title`/`published_hot_event_explanations.summary` 同字符串，对任意有证据的已发布事件两组命中完全重叠
++  evidence: Story 4.1 `projectTimelineFields`（`packages/core/src/modules/publish-orchestrator/timeline-read-model.ts`）派生 timeline `title` = effective HotEvent title（与 `published_hot_events.title` 同规则——latest revision overlay ?? cluster baseline）、`summary` = latest `ExplanationVersion.summary`（与 `published_hot_event_explanations.summary` 同串）。4.4 把 timeline 并入搜索语料后，`searchPublished` 的 `matchEvent` 对 timeline 条目的 title/summary 与对 event 行的 title/summary 用同一 `toLowerCase().includes` 匹配，故对任意有证据的已发布事件，query 命中其标题必同时命中 event 分组与 timeline 分组、命中其 summary 必同时命中两者。搜索页「热点事件 (N)」「时间流 (N)」两组独立渲染、成员重叠（EventCard 显 saliency/recency，TimelineCard 显 timestamp/source/session），用户看到「同一事件出现两次」（不同卡片框架）。spec 4.4 Design Notes 明确这是 sprint-change-proposal「搜索覆盖时间流条目」+ 3.1 事件分组不得回归 共同要求的可接受后果（覆盖 ≠ 去重），本 story 不解。
++  resolution: 待搜索重设计——未来搜索重设计可：(a) 合并两组为单一结果行（同一 hotEventId 取一个卡片框架，按 query 上下文选 EventCard 或 TimelineCard）；或 (b) 按 sourceName/session 差异化时间流语料（让 timeline 分组只命中「event 分组未覆盖的 timeline-独有字段」，但当前 timeline 无独有可搜字段——sourceName/sessionTag 非 title/summary 语义）；或 (c) 在 UI 层给两组加「同事件」视觉关联（如同一 hotEventId 的两张卡共享背景色 / 折叠为一组下的两个 tab）。属搜索 IA 重设计，超 4.4 范围，登记为 deferred。
+
+diff --git a/_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md b/_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md
+new file mode 100644
+--- /dev/null
++++ b/_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md
++---
++title: '时间流条目与搜索打通 (4.4)'
++type: 'feature'
++created: '2026-07-11'
++status: 'in-review'
++review_loop_iteration: 0
++baseline_revision: 'ffb030729bb37b85536ebeddb27725b5c5473342'
++followup_review_recommended: false
++sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-11.md'
++context:
++  - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
++  - '{project-root}/_bmad-output/implementation-artifacts/spec-4-1-timeline-read-model-and-publish-refresh.md'
++  - '{project-root}/_bmad-output/implementation-artifacts/spec-4-2-timeline-home-and-card-component.md'
++  - '{project-root}/_bmad-output/implementation-artifacts/spec-3-1-hot-event-and-theme-search.md'
++warnings: ['oversized']
++---
++
++<intent-contract>
++
++## Intent
++
++**Problem:** Epic 4 把首页 pivot 成「时间流」，时间流条目成为市场动态的一等内容单元，但公开搜索（Story 3.1 `searchPublished`）仍只覆盖热点事件标题、解释摘要、主题名称三份语料——`published_timeline_entries` 完全不在搜索路径内（`search-read/` 零引用）。用户无法用关键词回到某条时间流动态。sprint-change-proposal 提案 11/line 59 把「搜索覆盖时间流条目」列为 Story 4.4 的绑定意图。
++
++**Approach:** 沿用 Epic 3 既有 in-memory 搜索读路径，把 `published_timeline_entries` 作为第 4 份语料并入 `searchPublished`：新增一个 filter-free 的全表读 `listPublishedTimelineEntries`（既有 `listPublishedTimeline` 是单交易日 scoped、不能当搜索语料），在 `searchPublished` 里对每条时间流条目的 title（tier 0）/ summary（tier 1）做与现有事件相同的 `toLowerCase().includes` 匹配，返回新增的 `timeline: TimelineSearchHit[]` 分组（tier-then-`occurredAt DESC`）。搜索页新增「时间流 (N)」分组，复用 4.2 的 `TimelineCard`（整卡 `<Link href="/events/{hotEventId}">` 已满足 AC2 的「从结果进入时间流条目后可跳转到对应热点事件详情页」），不动既有「热点事件」「主题」分组与排序。
++
++## Boundaries & Constraints
++
++**Always:**
++- 公开搜索只读 `published_*` 读模型（AD-3）：新读函数只读 `published_timeline_entries`，不碰 `hot_events`/`evidence_*`/`explanation_versions`；row 存在 = 当前已发布，无 status 列，下线即级联消失（AD-8）。
++- 沿用 3.1 既有匹配/排序范式：case-insensitive `includes` + `toLowerCase`（CJK 友好，FTS/tsvector 仍 defer）；timeline 的 tier 0=title、tier 1=summary，与事件 hit 语义一致，复用 `EventMatchedField`。
++- `searchPublished` 保持「三并发读 + 内存 join」 ponytail 结构（V1 已发布体量极小），timeline 读作为第 4 个 `Promise.all` 分支并发。
++- 搜索页保持 `force-dynamic` + 服务端组件直读 core 读函数（无 API route / 无 fetch / 无 client state / 无 `"use client"`）；`getPrisma()` 缺 `DATABASE_URL` → loud route error，非静默空态（与 home/detail/daily 一致）。
++- 诚实状态（NFR-2）：空 query → 引导态、不读库；非空零命中 → 「未找到…」+ 返回首页 + 原地 `SearchBox`；命中 → 分组渲染。`hasHits` 扩展为含 timeline。
++- `TimelineCard` 复用不改：search 页 import 既有 `apps/web/app/(public)/_components/timeline-card.tsx`，其整卡 Link 已指向 `/events/{hotEventId}`。`import type`、无 TS `enum`、`@aguhot/core` barrel 取符号。
++- 匿名可用（AD-8）：搜索全路径无登录依赖。
++
++**Block If:**
++- `pnpm typecheck` 出现与本 story 改动相关的类型错误且不可自愈 → HALT。
++- `pnpm --filter @aguhot/web e2e:search` 中既有 3.1 断言因新增 timeline 分组而回归，且无法通过调整断言（非弱化）修复 → HALT 并报告冲突。
++
++**Never:**
++- 不用 `listPublishedTimeline` 当搜索语料（它默认 scoped 到最新 `trade_date`、limit 50，会漏掉历史条目）——必须新增全表读。
++- 不引入新搜索栈（FTS/GIN/ILIKE/外部索引）、不新建 search-result-row 组件（复用 `TimelineCard`）、不给 `published_timeline_entries` 加 status 列或新索引。
++- 不动既有「热点事件」「主题」分组的渲染、排序、文案与 `EventCard`/`FilterPill` 复用（3.1 拥有，本 story 不回归）。
++- 不在本 story 做时间流条目去重 against 事件 hit（见 Design Notes：timeline title/summary 与事件 title/解释摘要同字符串，两组对有证据的事件成员完全重叠——这是意图要求的「覆盖」后果，非本 story 缺陷；去重/合并记 deferred-work）。
++- 不渲染占位/假命中；不在搜索页加 client JS/`useState`/skeleton。
++- 不改 `searchPublished` 的空 query 短路语义与 `query` 回显。
++
++## I/O & Edge-Case Matrix
++
++| Scenario | Input / State | Expected Output / Behavior | Error Handling |
++|----------|---------------|----------------------------|----------------|
++| 时间流 title 命中 | 某 timeline 条目 `title` 含 query（= 同事件 event title 命中同串） | 「时间流 (≥1)」分组出现，对应 `TimelineCard` 整卡可点进 `/events/{hotEventId}`；该 hit `matchedField=title`（tier 0） | — |
++| 时间流 summary 命中 | 某 timeline 条目 `summary`（非空）含 query，title 不含 | timeline 分组出现该条，`matchedField=summary`（tier 1），排在 title-tier 之后 | summary 为 `""`（5.1 前/无 ExplanationVersion）永不命中 |
++| 时间流排序 | 多条 timeline hit | tier 0(title) 先于 tier 1(summary)；同 tier 内 `occurredAt DESC`，tiebreak `hotEventId ASC`（稳定 DOM 序） | — |
++| 空 query | `q` 缺/空白 | 引导态，不读库、不渲染任何分组（含 timeline） | `searchPublished` 空串短路返回 `{events:[],themes:[],timeline:[]}` |
++| 零命中 | 非空 query，三语料 + timeline 全无命中 | 「未找到…」态（文案不变），不出 timeline 分组 | — |
++| DB 不可达 | `DATABASE_URL` 缺失 | route error（loud） | 非静默空态 |
++| 下线条目 | 某 HotEvent 被下线 | 其 timeline 行级联删除 → 不出现在 timeline 分组（与 event 分组一致） | — |
++
++</intent-contract>
++
++## Code Map
++
++- `packages/core/src/modules/publish-orchestrator/timeline-read-model.ts` -- ADD `listPublishedTimelineEntries({prisma,traceId})`：filter-free 全表 `publishedTimelineEntry.findMany`（无 tradeDate/sessionTag 过滤），选与 `listPublishedTimeline` 相同的 11 列映射成 `PublishedTimelineEntry[]`，`orderBy: [{ hotEventId: "asc" }]`（确定性；排序交给 search 层）。注释说明它与 home feed 读契约的分工（全表语料 vs 单日 feed）。
++- `packages/core/src/modules/publish-orchestrator/index.ts` -- EXPORT `listPublishedTimelineEntries`（及 `ListPublishedTimelineEntriesOptions` type）。
++- `packages/core/src/modules/search-read/types.ts` -- ADD `TimelineSearchHit`（`kind:"timeline"`、`matchedField: EventMatchedFieldType`、`entry: PublishedTimelineEntry`），`SearchPublishedResult` 增 `timeline: TimelineSearchHit[]`。
++- `packages/core/src/modules/search-read/search-service.ts` -- 4th `Promise.all` 分支调 `listPublishedTimelineEntries`；逐条 `matchEvent(entry.title, entry.summary, qLower)` 复用既有 tier 语义；push `{kind, matchedField, entry}`；新增 `rankTimelineHit`（tier then `occurredAt DESC` then `hotEventId ASC`）；空 query 短路返回含 `timeline:[]`；模块头注释增第 4 语料。
++- `packages/core/src/modules/search-read/index.ts` -- EXPORT `TimelineSearchHit` type。
++- `packages/core/src/index.ts` -- EXPORT `listPublishedTimelineEntries` + `TimelineSearchHit`（web 层经 barrel 取）。
++- `apps/web/app/(public)/search/page.tsx` -- `hasHits` 增 `result.timeline.length>0`；新增「时间流 (N)」`<section>`（插在「热点事件」与「主题」之间；若 3.1 section-order 断言冲突则改放「主题」之后，保持 3.1 绿），import `TimelineCard` 映射 `result.timeline.map(h => <TimelineCard key={h.entry.id} entry={h.entry} />)`；空 query/零命中文案不改。
++- `apps/web/e2e/seed-search.ts` -- 清表块增 `await prisma.publishedTimelineEntry.deleteMany({})`（显式，匹配 seed-timeline 惯例；虽 hotEvent 级联会清，但显式保证 timeline-search 确定性）。确认既有 `decideReview(approve)` 已写 timeline 行（4.1 method A）。
++- `apps/web/e2e/search.spec.ts` -- 增 `@search` 用例：query 命中某 timeline title → 断言「时间流」region/heading 可见 + 对应 `TimelineCard` 整卡链接指向 `/events/{seededHotEventId}`（AC2 surface-anchored）；核对既有 3.1 断言不回归（section 计数/排序若 hard-coded 则同步修正，不弱化语义）。
++
++## Tasks & Acceptance
++
++**Execution:**
++- `packages/core/src/modules/publish-orchestrator/timeline-read-model.ts` -- ADD `listPublishedTimelineEntries` 全表读 -- 搜索语料需覆盖所有交易日，既有 `listPublishedTimeline` 单日 scoped 不可用。
++- `packages/core/src/modules/publish-orchestrator/index.ts` -- EXPORT 新读函数 -- 模块对外契约。
++- `packages/core/src/modules/search-read/types.ts` -- ADD `TimelineSearchHit` + 扩展 `SearchPublishedResult.timeline` -- 分组返回形状。
++- `packages/core/src/modules/search-read/search-service.ts` -- 并入第 4 语料 + timeline 匹配/排序 -- AC1 覆盖时间流条目 title/summary。
++- `packages/core/src/modules/search-read/index.ts` + `packages/core/src/index.ts` -- EXPORT 新符号 -- web 层经 barrel 消费。
++- `apps/web/app/(public)/search/page.tsx` -- 增「时间流」分组（复用 `TimelineCard`）+ `hasHits` 扩展 -- AC1 分组可见 + AC2 整卡进详情。
++- `apps/web/e2e/seed-search.ts` -- 显式清 `published_timeline_entries` -- timeline-search 确定性。
++- `apps/web/e2e/search.spec.ts` -- 增 timeline 分组 + 深链断言；核对 3.1 不回归 -- I/O 矩阵 edge case 覆盖（title 命中/深链/排序）。
++
++**Acceptance Criteria:**
++- Given 已发布且有时间流条目，when 用户提交命中某条目 title 的关键词，then 搜索页出现「时间流」分组，分组内对应 `TimelineCard` 整卡可点进 `/events/{hotEventId}`（AC2）。
++- Given 同一关键词同时命中事件 title（同串），when 渲染结果，then 「热点事件」与「时间流」分组各自独立呈现且成员可重叠（意图要求覆盖两者，非去重）。
++- Given query 仅命中某 timeline summary（非 title），when 渲染，then 该条进入「时间流」分组且 `matchedField=summary`，排序在 title-tier 之后。
++- Given 非空 query 三语料 + timeline 全无命中，when 渲染，then 仍为「未找到…」态，不出 timeline 分组。
++- Given 既有 3.1/3.4 e2e（`search.spec.ts`/`search-return.spec.ts`），when 运行 `e2e:search`，then 既有断言全绿（section 渲染、tiering、theme ranking、no-match、return-loop 不回归），仅新增 timeline 断言。
++
++## Design Notes
++
++**为何需要新读函数。** `listPublishedTimeline`（4.1）是 home feed 读契约：不传 `tradeDate` 时 resolve 到最新有数据的那一天、`limit` 默认 50（`timeline-read-model.ts:445-456`）。搜索语料必须跨所有交易日，故不能复用。新 `listPublishedTimelineEntries` 是 filter-free 全表读，与 `listPublishedHotEvents`/`listPublishedHotEventExplanations` 同属「search 用 filter-free sibling list fn」家族（AD-3 读模型只读、V1 体量极小）。
++
++**TimelineCard 复用而非新建 row。** `TimelineCard`（4.2）整卡 `<Link href="/events/{hotEventId}">` 已满足 AC2 的「结果→时间流条目→详情页」。`TimelineSearchHit.entry` 直接持完整 `PublishedTimelineEntry`，search 页 `<TimelineCard entry={h.entry} />` 零改动复用——符合 epic-context「不引入新搜索栈」。`matchedField` 仅驱动 tier 排序，当前不渲染高亮（与事件 hit 一致）。
++
++**冗余观察（记 deferred-work，不本 story 解）。** 4.1 投影里 timeline `title = effectiveTitle`（与 `published_hot_events.title` 同规则）、`summary = latest ExplanationVersion.summary`（与 `published_hot_event_explanations.summary` 同串）。因此对任意有证据的已发布事件，timeline 条目与事件行携带**相同** title/summary 串——timeline 分组与事件分组的命中成员对这类事件完全重叠。这是 sprint-change-proposal「搜索覆盖时间流条目」+ 3.1 事件分组不得回归 共同要求的可接受后果（不同卡片框架：EventCard 显 saliency/recency，TimelineCard 显 timestamp/source/session）。去重/合并/按 sourceName+session 差异化时间流语料属搜索重设计，超本 story，登 deferred-work。
++
++## Verification
++
++**Commands:**
++- `pnpm typecheck` -- expected: 全绿（`erasableSyntaxOnly` + `verbatimModuleSyntax`，5 个 workspace 包）。
++- `pnpm --filter @aguhot/web e2e:search` -- expected: 既有 3.1/3.4 用例全绿不回归 + 新增 timeline 分组/深链断言通过。
++- `pnpm --filter @aguhot/worker verify:timeline` -- expected: 4.1 数据层 31/31 不回归（确认新读函数未触碰写路径）。
++
++**Manual checks (if no CLI / 无本地 PG):**
++- 核对 `searchPublished` 空串短路返回含 `timeline:[]`；核对 `listPublishedTimelineEntries` 无 `where` 过滤、选 11 列；核对 search 页 timeline 分组仅在 `result.timeline.length>0` 时渲染。

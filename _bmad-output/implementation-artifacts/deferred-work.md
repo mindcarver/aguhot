@@ -974,3 +974,22 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 公告/研报 类别筛选出 4.3 V1 范围——整个 codebase 无任何数据承载，待真实数据源 + 数据模型落地后另开 story
   evidence: 4.3 dev 在规划阶段 HALT（intent gap）：类别维度 V1 候选含「概念/行业/个股/公告/研报」六项，但 `published_timeline` 读模型无 category 字段、`listPublishedTimeline` 未实现 `category?` 参数，且 `公告|研报` 在 `packages/core/src` grep 零命中——无 enum、无 union 成员、无字段、无 source。唯一类别 taxonomy 是 `AssociationKind = concept|industry|stock`，仅存于 `EventAssociationSet.items`/`PublishedHotEventAssociation.items` 的 Json 展示列（不可 SQL 单项查）。PM 裁决（读法 B）：V1 类别 = concept/industry/stock 三项（复用既有 AssociationKind，内存过滤，镜像 2.2 feed-filter 模式），公告/研报 out-of-scope。强行实现公告/研报 pill 会违反 NFR「absence as absence，绝不伪造完整性」（无数据源的 pill 是死控件）。
   resolution: 公告/研报 类别筛选 defer 到未来 story——前置条件：采购公告/研报真实数据源 + 定义 enum/归属模块 + 投影到 timeline 读模型（或独立 category 列/子表）。届时扩 4.3（或新 story）类别 pill 至 6 项。本 defer 与 deferred-work 中既有「按 concept/industry SQL 聚合需重构 Json 列为子表」「scale ceiling」同根（数据底座）。
+
+---
+
+## 2026-07-11 Story 4.4 review — deferred findings
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md`（4.4 实现期登记）
+  summary: 时间流分组与热点事件分组成员冗余——timeline `title`/`summary` 与 `published_hot_events.title`/`published_hot_event_explanations.summary` 同字符串，对任意有证据的已发布事件两组命中完全重叠
+  evidence: Story 4.1 `projectTimelineFields`（`packages/core/src/modules/publish-orchestrator/timeline-read-model.ts`）派生 timeline `title` = effective HotEvent title（与 `published_hot_events.title` 同规则——latest revision overlay ?? cluster baseline）、`summary` = latest `ExplanationVersion.summary`（与 `published_hot_event_explanations.summary` 同串）。4.4 把 timeline 并入搜索语料后，`searchPublished` 的 `matchEvent` 对 timeline 条目的 title/summary 与对 event 行的 title/summary 用同一 `toLowerCase().includes` 匹配，故对任意有证据的已发布事件，query 命中其标题必同时命中 event 分组与 timeline 分组、命中其 summary 必同时命中两者。搜索页「热点事件 (N)」「时间流 (N)」两组独立渲染、成员重叠（EventCard 显 saliency/recency，TimelineCard 显 timestamp/source/session），用户看到「同一事件出现两次」（不同卡片框架）。spec 4.4 Design Notes 明确这是 sprint-change-proposal「搜索覆盖时间流条目」+ 3.1 事件分组不得回归 共同要求的可接受后果（覆盖 ≠ 去重），本 story 不解。
+  resolution: 待搜索重设计——未来搜索重设计可：(a) 合并两组为单一结果行（同一 hotEventId 取一个卡片框架，按 query 上下文选 EventCard 或 TimelineCard）；或 (b) 按 sourceName/session 差异化时间流语料（让 timeline 分组只命中「event 分组未覆盖的 timeline-独有字段」，但当前 timeline 无独有可搜字段——sourceName/sessionTag 非 title/summary 语义）；或 (c) 在 UI 层给两组加「同事件」视觉关联（如同一 hotEventId 的两张卡共享背景色 / 折叠为一组下的两个 tab）。属搜索 IA 重设计，超 4.4 范围，登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md`（4.4 review pass 登记）
+  summary: `listPublishedTimelineEntries` 为无 `take` 上限的全表读，使每次公开搜索并发 4 个全表读（events/explanations/themes/timeline），无熔断/日志/行数上限
+  evidence: Story 4.4 新增 `listPublishedTimelineEntries`（`packages/core/src/modules/publish-orchestrator/timeline-read-model.ts`）作为第 4 份 search 语料，与 `listPublishedHotEvents`/`listPublishedHotEventExplanations`/`listPublishedThemeMemberships` 同属「filter-free sibling list fn」既定模式——全部无 `take`/分页，依赖「V1 已发布体量极小」假设。`searchPublished` 的 `Promise.all` 现并发这 4 个全表读 + 内存 join。一旦已发布体量增长（多交易日累积），每次搜索的 DB 读与内存匹配成本无上界、无告警。
+  resolution: 真实查询负载出现时，按 3.1 既定 defer 方向升级搜索栈——FTS/tsvector/GIN + zhparser/jieba（替换 in-memory substring），或为各 corpus 读加 `take` 上限 + 分页/游标 + 命中数日志。属 search-read 模块级 scale 升级，超 4.4 范围，登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-4-timeline-search-integration.md`（4.4 follow-up review pass 登记）
+  summary: 共享 `TIMELINE_ENTRY_SELECT`（11 列）的行形状只被 `verify-timeline.ts` 的 shape 断言钉住 7/11 列——重构后误删一列不会 fail 该门禁
+  evidence: Story 4.4 抽取 `TIMELINE_ENTRY_SELECT` + `mapPublishedTimelineRow` 供 `listPublishedTimeline`（home feed，4.1）与 `listPublishedTimelineEntries`（search 语料，4.4）共用（`packages/core/src/modules/publish-orchestrator/timeline-read-model.ts`）。`apps/worker/src/verify-timeline.ts` 的 shape 断言（~line 262-275）只校验 7 个字段（`id`/`hotEventId`/`tradeDate`/`title`/`summary`/`evidenceCount`/`foldedEvidenceRecordIds`），未读 `occurredAt` 值（仅排序）、默认 feed 的 `sessionTag`、`sourceName`、`recommendationReason`。若共享 select 误删 `sourceName`/`recommendationReason` 等列，31/31 仍过——home feed 与 TimelineCard 会静默渲染 `undefined`。属 4.1 verify 既有覆盖缺口，经本次共享 select 重构被放大（影响面从 1 个读函数扩至 2 个）。
+  resolution: 待 verify-harness 加固——把 `verify-timeline.ts` 的 shape 断言扩至全部 11 个 `TIMELINE_ENTRY_SELECT` 列（含 `occurredAt` 值、`sessionTag`、`sourceName`、`recommendationReason`），使共享 select 的列级回归可被该门禁捕获。属 4.1 测试基建加固，超 4.4 范围，登记为 deferred。

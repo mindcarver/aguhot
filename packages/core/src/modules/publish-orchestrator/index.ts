@@ -33,10 +33,13 @@ export {
 // (refreshPublishedTimelineForEvent) runs inside decideReview's $transaction;
 // the full self-heal (refreshPublishedTimelineAll) runs as a BullMQ job;
 // listPublishedTimeline is the Web home feed read contract.
+// Story 4.4: listPublishedTimelineEntries is the filter-free full-table search
+// corpus (sibling to the date-scoped listPublishedTimeline feed read).
 export {
   refreshPublishedTimelineForEvent,
   refreshPublishedTimelineAll,
   listPublishedTimeline,
+  listPublishedTimelineEntries,
 } from "./timeline-read-model.js";
 export {
   deriveSessionTag,
@@ -51,6 +54,7 @@ export type {
   RefreshPublishedTimelineForEventOptions,
   RefreshPublishedTimelineAllOptions,
   ListPublishedTimelineOptions,
+  ListPublishedTimelineEntriesOptions,
   PublishedTimelineEntry,
   TimelineSessionTagType,
   ListPublishedHotEventsOptions,

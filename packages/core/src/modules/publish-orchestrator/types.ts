@@ -523,6 +523,21 @@ export interface ListPublishedTimelineOptions {
 }
 
 /**
+ * Options for listPublishedTimelineEntries — the filter-free full-table read
+ * used by the search-read path (Story 4.4). Mirrors the established
+ * `{ prisma, traceId }` query pattern. Deliberately NO `tradeDate` /
+ * `sessionTag` / `category` parameter: the search corpus MUST cover all trade
+ * dates, so this fn is the filter-free sibling of the date-scoped
+ * `listPublishedTimeline` (which defaults to the latest trade_date, limit 50,
+ * and therefore cannot serve as the search corpus). The caller (search-read)
+ * matches + ranks in JS. ponytail: no pre-embedded consumerless filter param.
+ */
+export interface ListPublishedTimelineEntriesOptions {
+  prisma: PrismaClient;
+  traceId: string;
+}
+
+/**
  * One published timeline entry — the per-HotEvent folded projection the home
  * feed card renders. Mirrors published_timeline_entries columns. The 4.2 card
  * renders: occurredAt (timestamp) → sourceName → title → summary → evidence_count,

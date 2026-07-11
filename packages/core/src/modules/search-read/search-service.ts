@@ -1,15 +1,20 @@
 /**
- * searchPublished: public search over published_* read models — Story 3.1 (FR12).
+ * searchPublished: public search over published_* read models — Story 3.1
+ * (FR12); Story 4.4 adds the timeline corpus.
  *
- * Reads THREE corpora (FR12: "标题、解释摘要和主题名称"):
+ * Reads FOUR corpora:
  *   - event titles from listPublishedHotEvents (published_hot_events.title)
  *   - explanation summaries from listPublishedHotEventExplanations
  *     (published_hot_event_explanations.summary — the sibling list fn 3.1 adds
  *     to surface this corpus)
  *   - theme labels from listPublishedThemeMemberships
  *     (published_hot_event_themes.items[].label)
+ *   - timeline entry titles + summaries from listPublishedTimelineEntries
+ *     (published_timeline_entries — Story 4.4: the Epic 4 pivot made timeline
+ *     entries a first-class content unit, so search must cover them; this is the
+ *     filter-free full-table sibling of the date-scoped listPublishedTimeline)
  *
- * All three reads are filter-free sibling list fns owned by publish-orchestrator
+ * All four reads are filter-free sibling list fns owned by publish-orchestrator
  * (AD-3: public reads only published_* read models). searchPublished joins them
  * in JS and applies case-insensitive substring matching — the same V1 in-memory
  * filter pattern as 1.7 filterByWindow / 2.2 association join / 2.3 theme derive
@@ -28,6 +33,13 @@
  *     alphabetical tiebreaker). A theme matches if ANY collected label for its
  *     slug contains the query (a label that drifted on a later event must stay
  *     searchable); the DISPLAY label stays first-seen.
+ *   - timeline (4.4): same two-tier semantics as events (title tier 0 before
+ *     summary tier 1, reusing EventMatchedField); within a tier, occurredAt DESC
+ *     (recency on the timeline's minute-level timestamp), then hotEventId ASC
+ *     (stable DOM order tiebreaker). Timeline title/summary are the SAME strings
+ *     as published_hot_events.title / published_hot_event_explanations.summary,
+ *     so timeline hits overlap event hits in membership — this is intended
+ *     (different card frameworks; see Design Notes + deferred-work, NOT deduped).
  *
  * Only published_* read models are read — never hot_events / explanation_versions
  * / event_theme_sets / evidence_* (AD-3). Row existence = currently published
@@ -39,6 +51,7 @@ import {
   listPublishedHotEventExplanations,
   listPublishedHotEvents,
   listPublishedThemeMemberships,
+  listPublishedTimelineEntries,
 } from "../publish-orchestrator/index.js";
 import type {
   EventMatchedFieldType,
@@ -46,35 +59,44 @@ import type {
   SearchPublishedOptions,
   SearchPublishedResult,
   ThemeSearchHit,
+  TimelineSearchHit,
 } from "./types.js";
 import { EventMatchedField, SearchHitKind } from "./types.js";
 
 /**
- * Search published events + themes by case-insensitive substring match.
+ * Search published events + themes + timeline by case-insensitive substring match.
  *
- * Returns grouped { events, themes } ranked by relevance + recency. An empty
- * query (after trim) short-circuits to empty result (the page layer also guards,
- * but this is a defensive double-check so the core fn is safe to call directly).
+ * Returns grouped { events, themes, timeline } ranked by relevance + recency:
+ * events by title tier 0 > summary tier 1, latestEvidenceAt DESC within tier;
+ * themes by memberCount DESC, label ASC; timeline hits by tier-then-occurredAt
+ * DESC (Story 4.4). An empty query (after trim) short-circuits to empty result
+ * (the page layer also guards, but this is a defensive double-check so the core
+ * fn is safe to call directly).
  */
 export async function searchPublished(
   options: SearchPublishedOptions,
 ): Promise<SearchPublishedResult> {
   const q = options.query.trim();
   if (q === "") {
-    return { query: "", events: [], themes: [] };
+    return { query: "", events: [], themes: [], timeline: [] };
   }
   const qLower = q.toLowerCase();
 
-  // Concurrently read all three corpora (all filter-free sibling list fns; V1
-  // published volume is tiny so three reads + an in-memory join is the ponytail
-  // choice over SQL union / FTS / per-corpus indexes).
-  const [events, explanations, memberships] = await Promise.all([
+  // Concurrently read all four corpora (all filter-free sibling list fns; V1
+  // published volume is tiny so four reads + an in-memory join is the ponytail
+  // choice over SQL union / FTS / per-corpus indexes). Story 4.4 added the
+  // timeline read as the 4th branch.
+  const [events, explanations, memberships, timelineEntries] = await Promise.all([
     listPublishedHotEvents({ prisma: options.prisma, traceId: options.traceId }),
     listPublishedHotEventExplanations({
       prisma: options.prisma,
       traceId: options.traceId,
     }),
     listPublishedThemeMemberships({
+      prisma: options.prisma,
+      traceId: options.traceId,
+    }),
+    listPublishedTimelineEntries({
       prisma: options.prisma,
       traceId: options.traceId,
     }),
@@ -185,7 +207,34 @@ export async function searchPublished(
     return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
   });
 
-  return { query: q, events: eventHits, themes: themeHits };
+  // --- Timeline hits (Story 4.4): same tier semantics as events, recency on
+  // occurredAt instead of latestEvidenceAt. The timeline corpus carries the
+  // SAME title/summary strings as the event corpus (4.1 projects title from the
+  // same effective HotEvent title and summary from the same latest
+  // ExplanationVersion), so a query matching an event title also matches its
+  // timeline entry — the two groups render overlapping membership in different
+  // card frameworks. This is intended (spec Design Notes); dedupe/merge is
+  // deferred work, NOT a defect to fix here.
+  const timelineHits: TimelineSearchHit[] = [];
+  for (const entry of timelineEntries) {
+    // matchEvent takes (title, summary|null, qLower) and returns the tier. The
+    // timeline summary is "" (not null) when no ExplanationVersion exists, so
+    // matchEvent's `summary !== null && summary.toLowerCase().includes(qLower)`
+    // still works correctly for timeline (empty string never contains a non-
+    // empty qLower). Reusing matchEvent keeps timeline tier semantics identical
+    // to event tier semantics (title tier 0 > summary tier 1).
+    const matchedField = matchEvent(entry.title, entry.summary, qLower);
+    if (matchedField !== null) {
+      timelineHits.push({
+        kind: SearchHitKind.Timeline,
+        matchedField,
+        entry,
+      });
+    }
+  }
+  timelineHits.sort(rankTimelineHit);
+
+  return { query: q, events: eventHits, themes: themeHits, timeline: timelineHits };
 }
 
 /**
@@ -233,4 +282,27 @@ function rankEventHit(a: EventSearchHit, b: EventSearchHit): number {
   const byTime = b.latestEvidenceAt.getTime() - a.latestEvidenceAt.getTime();
   if (byTime !== 0) return byTime;
   return a.hotEventId < b.hotEventId ? -1 : a.hotEventId > b.hotEventId ? 1 : 0;
+}
+
+/**
+ * Tier-then-recency comparator for timeline hits (Story 4.4). Same tier
+ * semantics as rankEventHit (title tier 0 before summary tier 1); within a
+ * tier, occurredAt DESC (the timeline's minute-level timestamp — the timeline
+ * is a chronological feed, so occurredAt is the honest recency signal, NOT
+ * latestEvidenceAt which is the event-card's saliency-recency signal).
+ * Deterministic tiebreaker by entry.hotEventId ASC (stable DOM order across
+ * loads; matches the rankEventHit tiebreaker so two timeline entries sharing
+ * the same tier + same occurredAt resolve deterministically).
+ */
+function rankTimelineHit(a: TimelineSearchHit, b: TimelineSearchHit): number {
+  const tierA = a.matchedField === EventMatchedField.Title ? 0 : 1;
+  const tierB = b.matchedField === EventMatchedField.Title ? 0 : 1;
+  if (tierA !== tierB) return tierA - tierB;
+  const byTime = b.entry.occurredAt.getTime() - a.entry.occurredAt.getTime();
+  if (byTime !== 0) return byTime;
+  return a.entry.hotEventId < b.entry.hotEventId
+    ? -1
+    : a.entry.hotEventId > b.entry.hotEventId
+      ? 1
+      : 0;
 }

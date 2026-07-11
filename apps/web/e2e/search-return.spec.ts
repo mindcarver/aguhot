@@ -73,8 +73,15 @@ test.describe("搜索结果到详情页的回访闭环 (Story 3.4) @search-retur
 
     // Click the title-hit EventCard to navigate into the detail page. The
     // capture listener (document-level, capture phase) fires BEFORE the Next
-    // <Link> client routing and writes RETURN_CONTEXT="/search?q=…".
-    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    // <Link> client routing and writes RETURN_CONTEXT="/search?q=…". Scope the
+    // click to the 热点事件 section (Story 4.4: the title event also projects a
+    // timeline row → an identical /events/{titleHitId} TimelineCard Link renders
+    // in 时间流; an unscoped click would strict-mode-violate on 2 matches).
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    await eventsSection.locator(`a[href="/events/${titleHitId}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
 
     // After hydration, the BackLink label is 「返回搜索结果」 (source-aware:
@@ -108,7 +115,13 @@ test.describe("搜索结果到详情页的回访闭环 (Story 3.4) @search-retur
 
   test("AC1 点回：点「返回搜索结果」落回含 q= 的搜索结果页", async ({ page }) => {
     await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
-    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    // Scope the click to the 热点事件 section (Story 4.4: the title event also
+    // projects a timeline row → duplicate Link in 时间流).
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    await eventsSection.locator(`a[href="/events/${titleHitId}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
 
     // Wait for the search-return label to render (post-hydration).
@@ -123,8 +136,8 @@ test.describe("搜索结果到详情页的回访闭环 (Story 3.4) @search-retur
 
     // The search result EventCard re-renders (same query ⇒ same ranking ⇒ the
     // title-hit event is present again). This is the AC1 "results list
-    // re-produces" half.
-    await expect(page.locator(`a[href="/events/${titleHitId}"]`)).toBeVisible();
+    // re-produces" half. Scoped to 热点事件 (duplicate timeline Link in 时间流).
+    await expect(eventsSection.locator(`a[href="/events/${titleHitId}"]`)).toBeVisible();
     // Sanity: it's NOT the bare homepage.
     expect(page.url(), "should not fall back to bare /").not.toMatch(/\/$/);
   });
@@ -132,7 +145,13 @@ test.describe("搜索结果到详情页的回访闭环 (Story 3.4) @search-retur
   test("AC2 兜底：详情页 reload 后「返回搜索结果」仍在、仍带 query（页面级、history 无关）", async ({ page }) => {
     // Enter from search so RETURN_CONTEXT is set in sessionStorage.
     await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
-    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    // Scope the click to the 热点事件 section (Story 4.4: duplicate timeline
+    // Link in 时间流).
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    await eventsSection.locator(`a[href="/events/${titleHitId}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
 
     // Reload the detail page (a reader who refreshed / re-opened the tab).
@@ -233,7 +252,13 @@ test.describe("搜索结果到详情页的回访闭环 (Story 3.4) @search-retur
     // assert the detail body is intact (search origin does not break the
     // detail page).
     await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
-    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    // Scope the click to the 热点事件 section (Story 4.4: duplicate timeline
+    // Link in 时间流).
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    await eventsSection.locator(`a[href="/events/${titleHitId}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
 
     // Anonymous 200 throughout (AD-8: no /login redirect).

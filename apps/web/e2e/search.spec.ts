@@ -5,11 +5,12 @@ import { getPrisma, newTraceId, refreshPublishedReadModel } from "@aguhot/core";
 import { seedSearchContext } from "./seed-search";
 
 /**
- * Public hot-event + theme search e2e — Story 3.1 (FR12). Tagged @search so it
- * runs only under `pnpm --filter web e2e:search` (DB-backed + seed) and does NOT
- * run under the public `pnpm --filter web e2e` (whose --grep-invert excludes
- * @console, @feed, @detail, @revision, @merge-split, @market-reaction,
- * @associations, @themes, @daily, @loop, AND @search).
+ * Public hot-event + theme search e2e — Story 3.1 (FR12); Story 4.4 adds the
+ * timeline-group assertion. Tagged @search so it runs only under
+ * `pnpm --filter web e2e:search` (DB-backed + seed) and does NOT run under the
+ * public `pnpm --filter web e2e` (whose --grep-invert excludes @console, @feed,
+ * @detail, @revision, @merge-split, @market-reaction, @associations, @themes,
+ * @daily, @loop, AND @search).
  *
  * The beforeAll imports and runs seedSearchContext() (the same function
  * `pnpm --filter web seed:search` runs) to capture the dynamic title-hit +
@@ -23,6 +24,10 @@ import { seedSearchContext } from "./seed-search";
  * Covers:
  *   - AC1 title hit: GET /search?q={titleQuery} → 200, the 「热点事件」 section
  *     renders an EventCard linking /events/{titleHitId}.
+ *   - AC2 时间流 title hit (Story 4.4): GET /search?q={titleQuery} → the
+ *     「时间流」 section renders a TimelineCard whose whole-card Link points to
+ *     /events/{titleHitId} (timeline entry → detail deep link; surface-anchored
+ *     against the 时间流 section so it does not match the EventCard in 热点事件).
  *   - AC1 summary hit: GET /search?q={summaryQuery} → EventCard linking
  *     /events/{summaryHitId} (the event whose title excludes the word but whose
  *     explanation summary contains it).
@@ -136,25 +141,124 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     expect(response!.status(), "/search status should be 200").toBe(200);
 
     // The 「热点事件」 section heading renders.
+    const main = page.getByRole("main");
     await expect(
-      page.getByRole("heading", { level: 2, name: /热点事件/ }),
+      main.getByRole("heading", { level: 2, name: /热点事件/ }),
     ).toBeVisible();
 
-    // The title-hit event's EventCard link is present.
-    const eventLink = page.locator(`a[href="/events/${titleHitId}"]`);
+    // The title-hit event's EventCard link is present in the 热点事件 section.
+    // Story 4.4: scope to the 热点事件 section because the same event also
+    // projects a timeline row whose TimelineCard carries an identical
+    // /events/{titleHitId} whole-card Link in the 时间流 section — an unscoped
+    // locator would match BOTH cards. The section locator uniquely resolves to
+    // the 热点事件 group (regex anchored on 「热点事件」, not 「时间流」/「主题」).
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    const eventLink = eventsSection.locator(`a[href="/events/${titleHitId}"]`);
     await expect(eventLink).toBeVisible();
 
     // The title-hit event title is visible (the card body).
     await expect(page.getByText(titleHitTitle).first()).toBeVisible();
   });
 
+  test("AC2 时间流标题命中 (Story 4.4)：/search?q={titleQuery} 含 时间流 区块 + TimelineCard 整卡链 /events/{titleHitId}", async ({ page }) => {
+    // Story 4.4: the seeded event A is published via decideReview(approve),
+    // which writes a published_timeline_entries row in-transaction (4.1 method
+    // A). The timeline entry's title is the SAME effective HotEvent title that
+    // published_hot_events.title carries, so searching titleQuery 「芯片」 hits
+    // BOTH the 热点事件 group (EventCard) AND the 时间流 group (TimelineCard).
+    // This is the intended overlap (spec Design Notes + deferred-work — NOT
+    // deduped). The test asserts the timeline group renders + its TimelineCard
+    // whole-card Link points to /events/{titleHitId} (AC2: result → timeline
+    // entry → detail page).
+    const response = await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
+    expect(response!.status(), "timeline-hit search status should be 200").toBe(200);
+
+    // The 「时间流」 section heading renders (scoped to <main> to exclude nav).
+    const main = page.getByRole("main");
+    await expect(
+      main.getByRole("heading", { level: 2, name: /时间流/ }),
+    ).toBeVisible();
+
+    // The timeline section's TimelineCard carries a whole-card Link to the
+    // title-hit event's detail page. Scope to the 时间流 section so this does
+    // NOT match the EventCard link in the 热点事件 section (both render
+    // /events/{titleHitId} — the overlap is intended). The timeline <section>
+    // is the one whose h2 is「时间流 (N)」.
+    const timelineSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^时间流/ }),
+    });
+    const timelineCardLink = timelineSection.locator(
+      `a[href="/events/${titleHitId}"]`,
+    );
+    await expect(
+      timelineCardLink,
+      "TimelineCard whole-card link to /events/{titleHitId} should render in the 时间流 section",
+    ).toBeVisible();
+  });
+
+  test("AC2 时间流摘要命中 (Story 4.4 I/O-matrix, tier 1)：/search?q={summaryQuery} 含 时间流 TimelineCard 链 /events/{summaryHitId} 且排于标题层之后", async ({ page }) => {
+    // Story 4.4 I/O-matrix row "时间流 summary 命中 (tier 1)": summaryQuery「稀土」
+    // matches event A's timeline TITLE (tier 0, 稀土芯片短缺...) AND event B's
+    // timeline SUMMARY (tier 1 — the seed-only timeline-row summary upsert in
+    // seed-search.ts keeps B's timeline summary in sync with its rewritten
+    // explanation summary, so「稀土」genuinely lands in the timeline corpus as a
+    // summary-tier hit). This is the timeline-group analog of the event-group
+    // tiering test: title tier 0 renders before summary tier 1 in the 时间流
+    // section. Covers the row that the explanation-only upsert alone would have
+    // left stale (without the parallel timeline-row upsert, B's timeline summary
+    // would not match and the tier-1 timeline assertion would be impossible).
+    const response = await page.goto(`/search?q=${encodeURIComponent(summaryQuery)}`);
+    expect(response!.status(), "timeline summary-hit search status should be 200").toBe(200);
+
+    const main = page.getByRole("main");
+    const timelineSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^时间流/ }),
+    });
+
+    // The summary-hit event's TimelineCard Link renders in the 时间流 section.
+    const summaryTimelineLink = timelineSection.locator(
+      `a[href="/events/${summaryHitId}"]`,
+    );
+    await expect(
+      summaryTimelineLink,
+      "summary-hit TimelineCard link should render in the 时间流 section",
+    ).toBeVisible();
+
+    // Tier ordering within 时间流: the title-tier timeline card (event A, whose
+    // timeline title carries「稀土」) must render BEFORE the summary-tier one
+    // (event B). Mirrors the event-group tiering assertion but scoped to the
+    // timeline section. tieringTitleHitId is event A (title tier 0);
+    // summaryHitId === tieringSummaryHitId is event B (summary tier 1).
+    const hrefs = await timelineSection
+      .locator('a[href^="/events/"]')
+      .evaluateAll((els) => els.map((e) => (e as HTMLAnchorElement).getAttribute("href") ?? ""));
+    const titleIdx = hrefs.indexOf(`/events/${tieringTitleHitId}`);
+    const summaryIdx = hrefs.indexOf(`/events/${summaryHitId}`);
+    expect(titleIdx, "title-tier timeline card must be in DOM").toBeGreaterThanOrEqual(0);
+    expect(summaryIdx, "summary-tier timeline card must be in DOM").toBeGreaterThanOrEqual(0);
+    expect(
+      titleIdx,
+      `title-tier timeline (idx=${titleIdx}) must render BEFORE summary-tier (idx=${summaryIdx})`,
+    ).toBeLessThan(summaryIdx);
+  });
+
   test("AC1 摘要命中：/search?q={summaryQuery} 含 EventCard 链 /events/{summaryHitId}", async ({ page }) => {
     const response = await page.goto(`/search?q=${encodeURIComponent(summaryQuery)}`);
     expect(response!.status(), "summary-hit search status should be 200").toBe(200);
 
-    // The summary-hit event's EventCard link is present (title does NOT contain
-    // the query, but the explanation summary does).
-    const eventLink = page.locator(`a[href="/events/${summaryHitId}"]`);
+    // The summary-hit event's EventCard link is present in the 热点事件 section
+    // (title does NOT contain the query, but the explanation summary does).
+    // Story 4.4: scope to the 热点事件 section because event B also projects a
+    // timeline row whose summary (kept in sync by the seed-only upsert below)
+    // matches the same query → an identical /events/{summaryHitId} TimelineCard
+    // Link renders in the 时间流 section.
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    const eventLink = eventsSection.locator(`a[href="/events/${summaryHitId}"]`);
     await expect(eventLink).toBeVisible();
   });
 
@@ -182,18 +286,27 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     const response = await page.goto(`/search?q=${encodeURIComponent(tieringQuery)}`);
     expect(response!.status(), "tiering search status should be 200").toBe(200);
 
-    // BOTH event links must be present (the query genuinely matches both tiers).
+    // BOTH event links must be present in the 热点事件 section (the query
+    // genuinely matches both tiers). Story 4.4: scope to the 热点事件 section
+    // because each event also projects a timeline row whose title/summary
+    // matches the same query → identical /events/{id} TimelineCard Links render
+    // in the 时间流 section, which would make an unscoped locator resolve to 2.
     const main = page.getByRole("main");
-    const titleTierLink = main.locator(`a[href="/events/${tieringTitleHitId}"]`);
-    const summaryTierLink = main.locator(`a[href="/events/${tieringSummaryHitId}"]`);
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    const titleTierLink = eventsSection.locator(`a[href="/events/${tieringTitleHitId}"]`);
+    const summaryTierLink = eventsSection.locator(`a[href="/events/${tieringSummaryHitId}"]`);
     await expect(titleTierLink, "title-tier event link should render").toHaveCount(1);
     await expect(summaryTierLink, "summary-tier event link should render").toHaveCount(1);
 
-    // Read the hrefs of every event link inside <main> in DOM order, then assert
-    // the title-tier event's index is strictly less than the summary-tier one's.
-    // This is the real tiering assertion: relevance tier overrides recency even
-    // though the summary-tier event is NEWER.
-    const hrefs = await main
+    // Read the hrefs of every event link inside the 热点事件 section in DOM
+    // order, then assert the title-tier event's index is strictly less than the
+    // summary-tier one's. This is the real tiering assertion: relevance tier
+    // overrides recency even though the summary-tier event is NEWER. Scoped to
+    // the 热点事件 section so the 时间流 TimelineCard Links do not pollute the
+    // indexOf check.
+    const hrefs = await eventsSection
       .locator('a[href^="/events/"]')
       .evaluateAll((els) => els.map((e) => (e as HTMLAnchorElement).getAttribute("href") ?? ""));
     const titleIdx = hrefs.indexOf(`/events/${tieringTitleHitId}`);
@@ -217,13 +330,20 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     expect(response!.status(), "within-tier search status should be 200").toBe(200);
 
     const main = page.getByRole("main");
-    const olderLink = main.locator(`a[href="/events/${withinTierOlderId}"]`);
-    const newerLink = main.locator(`a[href="/events/${withinTierNewerId}"]`);
+    // Story 4.4: scope to the 热点事件 section — both events also project
+    // timeline rows (titles match 「电池」), so identical /events/{id} TimelineCard
+    // Links render in the 时间流 section; an unscoped locator would resolve to 2.
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    const olderLink = eventsSection.locator(`a[href="/events/${withinTierOlderId}"]`);
+    const newerLink = eventsSection.locator(`a[href="/events/${withinTierNewerId}"]`);
     await expect(olderLink, "older within-tier event link should render").toHaveCount(1);
     await expect(newerLink, "newer within-tier event link should render").toHaveCount(1);
 
-    // Read event-link hrefs in DOM order; the newer event must come first.
-    const hrefs = await main
+    // Read event-link hrefs in DOM order (scoped to 热点事件 so the 时间流
+    // TimelineCard Links do not pollute indexOf); the newer event must come first.
+    const hrefs = await eventsSection
       .locator('a[href^="/events/"]')
       .evaluateAll((els) => els.map((e) => (e as HTMLAnchorElement).getAttribute("href") ?? ""));
     const olderIdx = hrefs.indexOf(`/events/${withinTierOlderId}`);
@@ -334,11 +454,17 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
   test("大小写不敏感（拉丁）：q=gpu 与 q=GPU 均命中 latinHitId 事件", async ({ page }) => {
     // The seeded event's title contains the Latin token 「GPU」. Chinese has no
     // case, so a Latin token is required to exercise toLowerCase normalization.
-    // Lowercase query must hit it.
+    // Lowercase query must hit it. Scope to the 热点事件 section (Story 4.4: the
+    // GPU event also projects a timeline row whose title matches → an identical
+    // /events/{latinHitId} TimelineCard Link renders in 时间流).
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
     const lower = await page.goto(`/search?q=${latinToken.toLowerCase()}`);
     expect(lower!.status(), "lowercase latin search status should be 200").toBe(200);
     await expect(
-      page.locator(`a[href="/events/${latinHitId}"]`),
+      eventsSection.locator(`a[href="/events/${latinHitId}"]`),
       "lowercase gpu should hit the GPU-titled event",
     ).toBeVisible();
 
@@ -346,7 +472,7 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     const upper = await page.goto(`/search?q=${latinToken}`);
     expect(upper!.status(), "uppercase latin search status should be 200").toBe(200);
     await expect(
-      page.locator(`a[href="/events/${latinHitId}"]`),
+      eventsSection.locator(`a[href="/events/${latinHitId}"]`),
       "uppercase GPU should hit the same event",
     ).toBeVisible();
   });
@@ -451,10 +577,15 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await searchInput.fill(titleQuery);
     await searchInput.press("Enter");
 
-    // Landed on /search?q=… and the result rendered.
+    // Landed on /search?q=… and the result rendered. Scope to 热点事件 (Story
+    // 4.4: the title event also projects a timeline row → duplicate Link).
     await expect(page).toHaveURL(new RegExp(`/search\\?q=${encodeURIComponent(titleQuery)}`));
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
     await expect(
-      page.locator(`a[href="/events/${titleHitId}"]`),
+      eventsSection.locator(`a[href="/events/${titleHitId}"]`),
     ).toBeVisible();
   });
 
@@ -481,18 +612,30 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await drawerInput.fill(titleQuery);
     await drawerSubmit.click();
 
-    // Landed on /search?q=… and the result rendered.
+    // Landed on /search?q=… and the result rendered. Scope to 热点事件 (Story
+    // 4.4: the title event also projects a timeline row → duplicate Link).
     await expect(page).toHaveURL(new RegExp(`/search\\?q=${encodeURIComponent(titleQuery)}`));
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
     await expect(
-      page.locator(`a[href="/events/${titleHitId}"]`),
+      eventsSection.locator(`a[href="/events/${titleHitId}"]`),
     ).toBeVisible();
   });
 
   test("返回恢复：/search?q={titleQuery} → event → BackLink 落回含 q= 的 URL", async ({ page }) => {
     await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
 
-    // Click the title-hit event card to enter the detail page.
-    await page.locator(`a[href="/events/${titleHitId}"]`).click();
+    // Click the title-hit event card to enter the detail page. Scope to the
+    // 热点事件 section (Story 4.4: the title event also projects a timeline row
+    // → an identical /events/{titleHitId} TimelineCard Link renders in 时间流;
+    // an unscoped click would strict-mode-violate on 2 matches).
+    const main = page.getByRole("main");
+    const eventsSection = main.locator("section", {
+      has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    await eventsSection.locator(`a[href="/events/${titleHitId}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/events/${titleHitId}`));
 
     // The detail page BackLink is present. After hydration it should resolve to
@@ -580,10 +723,16 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     // its own target.
 
     // (1) Before takedown: the dedicated event is published and searchable.
+    // Scope to the 热点事件 section (Story 4.4: the 光伏 event also projects a
+    // timeline row → an identical /events/{takedownHitId} TimelineCard Link
+    // renders in 时间流; an unscoped count would be 2, not 1).
     const before = await page.goto(`/search?q=${encodeURIComponent(takedownQuery)}`);
     expect(before!.status(), "pre-takedown search status should be 200").toBe(200);
     const mainBefore = page.getByRole("main");
-    const linkBefore = mainBefore.locator(`a[href="/events/${takedownHitId}"]`);
+    const eventsSectionBefore = mainBefore.locator("section", {
+      has: mainBefore.getByRole("heading", { level: 2, name: /^热点事件/ }),
+    });
+    const linkBefore = eventsSectionBefore.locator(`a[href="/events/${takedownHitId}"]`);
     await expect(linkBefore, "dedicated event link should render before takedown").toHaveCount(1);
 
     // (2) Take the event down via the core publish-orchestrator. This deletes its

@@ -39,6 +39,7 @@ import {
   deriveTradeDate,
 } from "./session-tag.js";
 import type {
+  ListPublishedTimelineEntriesOptions,
   ListPublishedTimelineOptions,
   PublishedTimelineEntry,
   RefreshPublishedTimelineAllOptions,
@@ -423,6 +424,75 @@ export async function refreshPublishedTimelineAll(
 }
 
 /**
+ * The shared published_timeline_entries column selection used by both
+ * listPublishedTimeline (date-scoped feed) and listPublishedTimelineEntries
+ * (filter-free search corpus). Extracted so the two fns cannot drift apart on
+ * the projected column set — they MUST produce identical row shapes (the search
+ * corpus is the filter-free sibling of the feed contract). 11 columns. Plain
+ * object (NOT `as const`) so it stays assignable to Prisma's mutable select
+ * payload type.
+ */
+const TIMELINE_ENTRY_SELECT = {
+  id: true,
+  hotEventId: true,
+  tradeDate: true,
+  occurredAt: true,
+  sessionTag: true,
+  sourceName: true,
+  title: true,
+  summary: true,
+  evidenceCount: true,
+  foldedEvidenceRecordIds: true,
+  recommendationReason: true,
+};
+
+/**
+ * The row shape produced by `findMany({ select: TIMELINE_ENTRY_SELECT })`. The
+ * two list fns feed these rows to mapPublishedTimelineRow so they share BOTH the
+ * selection AND the PublishedTimelineEntry mapping (including the
+ * sessionTag→TimelineSessionTagType and foldedEvidenceRecordIds Json→string[]
+ * casts). Structural type — avoids importing the generated Prisma select
+ * payload type (the codebase has no precedent for `satisfies Prisma.*Select`).
+ */
+interface SelectedTimelineEntryRow {
+  id: string;
+  hotEventId: string;
+  tradeDate: string;
+  occurredAt: Date;
+  sessionTag: string;
+  sourceName: string;
+  title: string;
+  summary: string;
+  evidenceCount: number;
+  foldedEvidenceRecordIds: unknown;
+  recommendationReason: string | null;
+}
+
+/**
+ * Map a selected published_timeline_entries row to the PublishedTimelineEntry
+ * contract. Shared by listPublishedTimeline and listPublishedTimelineEntries so
+ * the row→entry mapping (the sessionTag enum-string cast + the Json→string[]
+ * cast for foldedEvidenceRecordIds) is defined once. Both list fns MUST call
+ * this — they are contractually identical in projected shape (feed contract vs
+ * filter-free search corpus; they differ only in scope, not in row shape).
+ */
+function mapPublishedTimelineRow(r: SelectedTimelineEntryRow): PublishedTimelineEntry {
+  return {
+    id: r.id,
+    hotEventId: r.hotEventId,
+    tradeDate: r.tradeDate,
+    occurredAt: r.occurredAt,
+    sessionTag: r.sessionTag as PublishedTimelineEntry["sessionTag"],
+    sourceName: r.sourceName,
+    title: r.title,
+    summary: r.summary,
+    evidenceCount: r.evidenceCount,
+    foldedEvidenceRecordIds: r.foldedEvidenceRecordIds as unknown as string[],
+    recommendationReason: r.recommendationReason,
+  };
+}
+
+/**
  * Web home feed read contract (AD-3 / AD-3b). Reads ONLY published_timeline_entries.
  * No time-order SQL assembled on the request path; the composite index
  * (trade_date, session_tag, occurred_at) backs the ordering. Returns entries for
@@ -462,32 +532,51 @@ export async function listPublishedTimeline(
     },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     take: limit ?? 50,
-    select: {
-      id: true,
-      hotEventId: true,
-      tradeDate: true,
-      occurredAt: true,
-      sessionTag: true,
-      sourceName: true,
-      title: true,
-      summary: true,
-      evidenceCount: true,
-      foldedEvidenceRecordIds: true,
-      recommendationReason: true,
-    },
+    select: TIMELINE_ENTRY_SELECT,
   });
 
-  return rows.map((r) => ({
-    id: r.id,
-    hotEventId: r.hotEventId,
-    tradeDate: r.tradeDate,
-    occurredAt: r.occurredAt,
-    sessionTag: r.sessionTag as PublishedTimelineEntry["sessionTag"],
-    sourceName: r.sourceName,
-    title: r.title,
-    summary: r.summary,
-    evidenceCount: r.evidenceCount,
-    foldedEvidenceRecordIds: r.foldedEvidenceRecordIds as unknown as string[],
-    recommendationReason: r.recommendationReason,
-  }));
+  return rows.map(mapPublishedTimelineRow);
+}
+
+/**
+ * Filter-free full-table read of published_timeline_entries — the search corpus
+ * (Story 4.4). Distinct from `listPublishedTimeline` (the home feed contract):
+ *   - listPublishedTimeline is date-scoped: tradeDate defaults to the latest day
+ *     with entries, limit caps at 50. It serves the HOME FEED's "today" view and
+ *     CANNOT be the search corpus (it would miss historical entries on other
+ *     trade dates).
+ *   - listPublishedTimelineEntries is filter-free: no tradeDate/sessionTag/
+ *     limit. It returns EVERY published timeline row across ALL trade dates so
+ *     the search-read path can match title/summary against the full corpus. The
+ *     same `published_timeline` read-model column set is projected to the same
+ *     `PublishedTimelineEntry` shape (11 fields) — the two fns share the row→
+ *     entry mapping, they differ only in scope (date-scoped feed vs full-table
+ *     corpus). This mirrors the established "filter-free sibling list fn for
+ *     search" family (listPublishedHotEvents / listPublishedHotEventExplanations
+ *     / listPublishedThemeMemberships — AD-3 read-only, V1 published volume is
+ *     tiny so a full read is the ponytail choice over SQL filter / FTS).
+ *
+ * `orderBy: [{ hotEventId: "asc" }]` gives deterministic row order across loads
+ * (mirrors the listPublishedHotEventExplanations sibling contract). The search
+ * layer applies its own ranking (tier then occurredAt DESC), so this order is
+ * not the final display order — it just makes the row sequence stable for
+ * reproducible matching.
+ *
+ * Reads ONLY published_timeline_entries; never touches hot_events /
+ * explanation_versions / evidence_* (AD-3). Row existence = currently published
+ * (no status column, AD-8). A taken-down event's timeline row is cascade-
+ * deleted inside decideReview's transaction → it automatically disappears from
+ * the search corpus (no extra filter).
+ */
+export async function listPublishedTimelineEntries(
+  options: ListPublishedTimelineEntriesOptions,
+): Promise<PublishedTimelineEntry[]> {
+  const { prisma } = options;
+
+  const rows = await prisma.publishedTimelineEntry.findMany({
+    select: TIMELINE_ENTRY_SELECT,
+    orderBy: [{ hotEventId: "asc" }],
+  });
+
+  return rows.map(mapPublishedTimelineRow);
 }

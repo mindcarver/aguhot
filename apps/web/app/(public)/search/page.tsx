@@ -9,6 +9,7 @@ import {
 } from "@aguhot/core";
 
 import { EventCard } from "../_components/event-card";
+import { TimelineCard } from "../_components/timeline-card";
 import { SearchBox } from "../_components/search-box";
 
 export const dynamic = "force-dynamic";
@@ -51,13 +52,15 @@ function parseSearchQuery(raw: string | undefined): string {
 }
 
 /**
- * Public search results page — Story 3.1 (FR12).
+ * Public search results page — Story 3.1 (FR12); Story 4.4 adds the timeline
+ * group.
  *
  * Reads ONLY published_* read models (AD-3) via searchPublished (which joins
  * listPublishedHotEvents + listPublishedHotEventExplanations +
- * listPublishedThemeMemberships in JS). Never reads hot_events /
- * explanation_versions / event_theme_sets / evidence_* (AD-3). Anonymous by
- * default (AD-8): no login dependency anywhere on the search path.
+ * listPublishedThemeMemberships + listPublishedTimelineEntries in JS). Never
+ * reads hot_events / explanation_versions / event_theme_sets / evidence_*
+ * (AD-3). Anonymous by default (AD-8): no login dependency anywhere on the
+ * search path.
  *
  * Why force-dynamic + @aguhot/core import is safe for the build:
  *   - force-dynamic marks the route dynamic so Next evaluates it at REQUEST
@@ -73,9 +76,11 @@ function parseSearchQuery(raw: string | undefined): string {
  *   (2) Non-empty query, zero hits → "未找到与「{q}」相关的热点或主题。"
  *       no-match text + a link back home + a SearchBox (so the reader can try a
  *       different word in place).
- *   (3) Non-empty query with hits → grouped "热点事件 (N)" section mapping
- *       EventCard (reused, link /events/{id}) + "主题 (N)" section mapping
- *       FilterPill (reused, link /topics/{slug}). Event hits are ranked by
+ *   (3) Non-empty query with hits → grouped sections: "热点事件 (N)" mapping
+ *       EventCard (reused, link /events/{id}) + "时间流 (N)" mapping TimelineCard
+ *       (reused, 4.2 component — whole-card link /events/{hotEventId} satisfies
+ *       AC2: result → timeline entry → detail) + "主题 (N)" mapping FilterPill
+ *       (reused, link /topics/{slug}). Event + timeline hits are ranked by
  *       searchPublished (title tier 0 > summary tier 1, recency within tier);
  *       theme hits by memberCount DESC, label ASC.
  *
@@ -114,7 +119,10 @@ export default async function SearchPage({ searchParams }: PageProps) {
   const traceId = newTraceId();
   const result = await searchPublished({ prisma, traceId, query: q });
 
-  const hasHits = result.events.length > 0 || result.themes.length > 0;
+  const hasHits =
+    result.events.length > 0 ||
+    result.themes.length > 0 ||
+    result.timeline.length > 0;
 
   // No-match state (AC2): honest no-result feedback + a path back home + an
   // in-place SearchBox so the reader can change keywords.
@@ -176,6 +184,30 @@ export default async function SearchPage({ searchParams }: PageProps) {
                 publishedAt={ev.publishedAt}
                 now={now}
               />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/*
+        Timeline hits (Story 4.4): reuses the 4.2 TimelineCard — each card is an
+        <li> rendering the full PublishedTimelineEntry with a whole-card Link to
+        /events/{hotEventId} (AC2: result → timeline entry → detail page). The
+        timeline corpus carries the SAME title/summary strings as the event
+        corpus, so the 时间流 group and the 热点事件 group overlap in membership
+        for events that have evidence — this is intended (different card
+        frameworks: EventCard shows saliency/recency, TimelineCard shows
+        timestamp/source/session); NOT deduped (spec Design Notes + deferred
+        work). ranked tier-then-occurredAt-DESC by searchPublished.
+      */}
+      {result.timeline.length > 0 ? (
+        <section className="mt-10">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+            时间流 ({result.timeline.length})
+          </h2>
+          <ul role="list" className="mt-4 space-y-3">
+            {result.timeline.map((h) => (
+              <TimelineCard key={h.entry.id} entry={h.entry} />
             ))}
           </ul>
         </section>
