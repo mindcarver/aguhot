@@ -142,7 +142,11 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
       {totalExists ? (
         <>
           <section className="mt-8">
-            <FeedFilters window={window} association={association} />
+            <FeedFilters
+              window={window}
+              association={association}
+              searchParams={params}
+            />
           </section>
 
           {visible.length > 0 ? (

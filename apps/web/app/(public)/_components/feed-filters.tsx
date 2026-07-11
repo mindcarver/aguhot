@@ -97,26 +97,105 @@ export function parseFeedWindow(raw: string | undefined): FeedWindow {
 }
 
 /**
- * Build the href that clears the association dimension while preserving the
- * current window. Used by the active association pill (clear control).
+ * The raw shape of the homepage searchParams the page forwards to FeedFilters
+ * for querystring merging. Matches PageProps.searchParams (resolved) in
+ * page.tsx so the filter pills can preserve sibling keys (concept/industry/
+ * stock) when changing the window, and vice versa.
  */
-function buildClearAssociationHref(window: FeedWindow): string {
-  return window === "all" ? "/?window=all" : `/?window=${window}`;
+export interface FeedSearchParams {
+  window?: string;
+  concept?: string;
+  industry?: string;
+  stock?: string;
+}
+
+/**
+ * Merge a partial searchParams update into the current params and return a
+ * pathname-relative href string (`?a=1&b=2`). Used by the filter pills so a
+ * window change never clobbers a sibling association key (concept/industry/
+ * stock), and an association clear never clobbers the window. This is the
+ * querystring-merge fix for review finding C2 — bare `?window=…` / `?concept=…`
+ * concatenation would drop any other active filter.
+ *
+ * `updates`/`deletes` accept only the keys FeedFilters owns (window + the
+ * three association dimensions). The merge order is deterministic
+ * (FEED_QUERY_KEYS) so URLs stay stable across renders.
+ */
+const FEED_QUERY_KEYS = ["window", "concept", "industry", "stock"] as const;
+type FeedQueryKey = (typeof FEED_QUERY_KEYS)[number];
+
+export function mergeSearchParams(
+  current: FeedSearchParams,
+  updates: Partial<Record<FeedQueryKey, string>>,
+  deletes: FeedQueryKey[] = [],
+): string {
+  const next = new Map<string, string>();
+  for (const key of FEED_QUERY_KEYS) {
+    const raw = current[key];
+    if (raw !== undefined && raw.trim() !== "") {
+      next.set(key, raw);
+    }
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined && value.trim() !== "") {
+      next.set(key, value);
+    }
+  }
+  for (const key of deletes) {
+    next.delete(key);
+  }
+  if (next.size === 0) return "/";
+  const pairs: string[] = [];
+  for (const key of FEED_QUERY_KEYS) {
+    const value = next.get(key);
+    if (value !== undefined) {
+      pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    }
+  }
+  return `?${pairs.join("&")}`;
+}
+
+/**
+ * Build the href that clears the association dimension while preserving the
+ * current window (and any other sibling params). Used by the active
+ * association pill (clear control). Gone: the old bare `/?window=…` string
+ * that would drop sibling keys.
+ */
+function buildClearAssociationHref(
+  window: FeedWindow,
+  current: FeedSearchParams,
+): string {
+  return mergeSearchParams(
+    current,
+    // Preserve the window (explicit so an unknown current.window string is
+    // normalized to the parsed FeedWindow, not re-emitted raw).
+    window === DEFAULT_WINDOW ? {} : { window },
+    // Drop the association dimension keys — the clear control's whole job.
+    ["concept", "industry", "stock"],
+  );
 }
 
 export function FeedFilters({
   window,
   association = null,
+  searchParams = {},
 }: {
   window: FeedWindow;
   association?: AssociationFilter | null;
+  /**
+   * The resolved homepage searchParams, forwarded by the page so filter pills
+   * can merge their own key into the existing querystring instead of clobbering
+   * sibling keys (C2). Optional (defaults to empty) so non-feed callers and
+   * existing tests that don't care about sibling keys keep working.
+   */
+  searchParams?: FeedSearchParams;
 }) {
   return (
     <nav aria-label="筛选" className="flex flex-wrap items-center gap-2">
       {FEED_WINDOWS.map((w) => (
         <FilterPill
           key={w.value}
-          href={`?window=${w.value}`}
+          href={mergeSearchParams(searchParams, { window: w.value })}
           active={window === w.value}
         >
           {w.label}
@@ -130,7 +209,7 @@ export function FeedFilters({
       {association !== null ? (
         <FilterPill
           active
-          href={buildClearAssociationHref(window)}
+          href={buildClearAssociationHref(window, searchParams)}
         >
           {ASSOCIATION_KIND_LABEL[association.kind]}：{association.label}
         </FilterPill>
