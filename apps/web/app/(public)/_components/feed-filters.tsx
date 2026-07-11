@@ -51,19 +51,37 @@ const ASSOCIATION_KIND_LABEL: Record<AssociationFilterKind, string> = {
 };
 
 /**
+ * Normalize a Next.js searchParams value to a single string (or undefined).
+ * Next.js hands searchParams values as `string | string[] | undefined` — a URL
+ * like `?concept=a&concept=b` produces `string[]`. Calling `.trim()` on an
+ * array throws TypeError, which would 500 the public feed nav. This collapses
+ * arrays to their first element before any string method is called, at the
+ * boundary where searchParams enter this module. Pure + total.
+ */
+export function firstString(
+  raw: string | string[] | undefined,
+): string | undefined {
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
+/**
  * Parse the association-dimension searchParams into a single active filter (or
  * null). V1 honors exactly one dimension (the first present, in ASSOCIATION_KINDS
  * order); a multi-dimension URL collapses to one. An empty label value is
  * ignored (treated as no filter). Kept here so the page and the filter component
  * share one authority on valid association dimensions.
+ *
+ * Values pass through firstString() because Next.js can deliver `string[]` for
+ * a repeated key (e.g. `?concept=a&concept=b`); without normalization raw.trim()
+ * would throw TypeError and 500 the feed nav.
  */
 export function parseAssociationFilter(params: {
-  concept?: string;
-  industry?: string;
-  stock?: string;
+  concept?: string | string[];
+  industry?: string | string[];
+  stock?: string | string[];
 }): AssociationFilter | null {
   for (const kind of ASSOCIATION_KINDS) {
-    const raw = params[kind];
+    const raw = firstString(params[kind]);
     if (raw !== undefined && raw.trim() !== "") {
       return { kind, label: raw };
     }
@@ -101,12 +119,16 @@ export function parseFeedWindow(raw: string | undefined): FeedWindow {
  * for querystring merging. Matches PageProps.searchParams (resolved) in
  * page.tsx so the filter pills can preserve sibling keys (concept/industry/
  * stock) when changing the window, and vice versa.
+ *
+ * Values are `string | string[] | undefined` because Next.js searchParams
+ * deliver arrays for repeated keys (e.g. `?concept=a&concept=b`). Callers that
+ * touch `.trim()` must route through firstString() first.
  */
 export interface FeedSearchParams {
-  window?: string;
-  concept?: string;
-  industry?: string;
-  stock?: string;
+  window?: string | string[];
+  concept?: string | string[];
+  industry?: string | string[];
+  stock?: string | string[];
 }
 
 /**
@@ -131,7 +153,9 @@ export function mergeSearchParams(
 ): string {
   const next = new Map<string, string>();
   for (const key of FEED_QUERY_KEYS) {
-    const raw = current[key];
+    // Normalize at the boundary: searchParams values may be string[] for a
+    // repeated key; firstString() collapses to the first element before trim.
+    const raw = firstString(current[key]);
     if (raw !== undefined && raw.trim() !== "") {
       next.set(key, raw);
     }
