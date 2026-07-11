@@ -42,23 +42,39 @@ import type {
   PendingCandidateSummary,
   PublishedEventRevisionView,
 } from "./types.js";
-import { CandidateNotFoundError } from "./types.js";
+import { CandidateNotFoundError, IllegalTransitionError } from "./types.js";
 
 /**
  * Execute one operator review decision atomically.
  *
- * Single transaction (AD-5 append-only audit + AD-6 publish gate):
- *   1. Read the current publication_status of the event (lock via the update
- *      in step 4; serialized at the row level by Postgres).
- *   2. resolveTransition validates (from, outcome) is one of the three legal
- *      paths. Throws IllegalTransitionError otherwise — nothing is written.
+ * Single transaction (AD-5 append-only audit + AD-6 publish gate). To close the
+ * TOCTOU window under concurrency (two operators racing the same candidate), the
+ * status transition is written as a CONDITIONAL updateMany keyed on
+ * { id, publicationStatus: fromStatus } — the optimistic lock. If a concurrent
+ * decideReview already moved the status, this matches zero rows (updateMany
+ * returns count 0, no throw), and we throw IllegalTransitionError so the second
+ * concurrent submit is correctly rejected rather than leaving a contradictory
+ * PublicationDecision + a race on the final status. Zero schema migration: no
+ * SELECT ... FOR UPDATE, no new column — the conditional `where` IS the lock.
+ *
+ *   1. Read the current publication_status (findUniqueOrThrow — a missing event
+ *      still raises P2025 cleanly; the server action maps it to /console). Used
+ *      to validate the transition BEFORE writing anything.
+ *   2. resolveTransition validates (from, outcome) is one of the legal paths.
+ *      Throws IllegalTransitionError otherwise — nothing is written.
  *   3. Write one ReviewDecision (append-only: outcome, reviewer, note, traceId).
  *   4. Write one PublicationDecision (append-only: from→to, linked to the
- *      review decision, traceId). Update hot_events.publication_status to `to`.
- *   5. refreshPublishedReadModel (publish upserts, takedown deletes, none no-op).
+ *      review decision, traceId).
+ *   5. CONDITIONAL updateMany on { id, publicationStatus: fromStatus }. If the
+ *      returned count is 0, the status changed under us between step 1 and step
+ *      5 → throw IllegalTransitionError (clean rollback; nothing contradictory).
+ *      updateMany is used (not update) so a zero-row match is a count we branch
+ *      on, NOT a P2025 throw — that keeps the race rejection cleanly separable
+ *      from the findUniqueOrThrow P2025 (genuinely missing event).
+ *   6. refreshPublishedReadModel (publish upserts, takedown deletes, none no-op).
  *
- * All writes commit together or not at all. An illegal transition throws before
- * any write, so the transaction is a clean rollback.
+ * All writes commit together or not at all. An illegal transition (or a lost
+ * race) throws before the transaction body returns, so it is a clean rollback.
  */
 export async function decideReview(
   options: DecideReviewOptions,
@@ -105,14 +121,30 @@ export async function decideReview(
       },
     });
 
-    // Update ONLY publication_status (field-level ownership). Never touch
-    // title/cluster_signature (event-assembly owns those, AD-2).
-    await tx.hotEvent.update({
-      where: { id: hotEventId },
+    // 5. CONDITIONAL update — optimistic lock on the expected fromStatus. The
+    //    `where` includes publicationStatus: fromStatus; under Read Committed
+    //    (Prisma's default), if a concurrent decideReview already moved the
+    //    status this matches zero rows. updateMany returns count (no throw on
+    //    zero rows, unlike update's P2025) so the race rejection is cleanly
+    //    separable from the findUniqueOrThrow P2025 above. count === 0 → the
+    //    status raced; throw IllegalTransitionError (server action maps it back
+    //    to the detail page, operator sees the true current status). Update ONLY
+    //    publication_status (field-level ownership — AD-2; never title/cluster).
+    const updated = await tx.hotEvent.updateMany({
+      where: { id: hotEventId, publicationStatus: fromStatus },
       data: { publicationStatus: transition.to, traceId },
     });
+    if (updated.count === 0) {
+      // The status the operator read no longer matches the DB — a concurrent
+      // decision won the race. Nothing after this point runs; the thrown
+      // IllegalTransitionError rolls the transaction back (the two append-only
+      // rows written in steps 3–4 are discarded). We report fromStatus in the
+      // error because that is the value the operator acted on; the redirect
+      // target's revalidation shows the true (post-race) status.
+      throw new IllegalTransitionError(fromStatus, outcome);
+    }
 
-    // 5. Refresh the read model inside the same transaction (publish upsert /
+    // 6. Refresh the read model inside the same transaction (publish upsert /
     //    takedown delete / none no-op). publish-orchestrator is the sole writer
     //    of published_hot_events; we call it here so the refresh is atomic.
     await refreshPublishedReadModel({
