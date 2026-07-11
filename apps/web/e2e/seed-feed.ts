@@ -4,10 +4,18 @@
  * Run with: pnpm --filter web seed:feed
  *           (tsx e2e/seed-feed.ts)
  *
- * Self-contained: produces one PUBLISHED hot event (so the public feed has
- * something to show) and leaves one candidate UNPUBLISHED (so the e2e can assert
- * the unpublished title does not leak to `/`). The published event has a recent
- * latestEvidenceAt so the "近期升温" chip / today window have deterministic data.
+ * Self-contained: produces TWO PUBLISHED hot events and leaves one candidate
+ * UNPUBLISHED (so the e2e can assert the unpublished title does not leak to
+ * `/`):
+ *   - 新能源汽车销量再创新高  (5min ago, published)  — in today/7d/30d/all
+ *   - 稀土出口配额调整复盘      (40d ago, published)  — in all ONLY (outside 30d)
+ *   - 半导体出口同比下降        (5min ago, unpublished)
+ *
+ * The 5min-ago timestamp is always within the current UTC day, so window=today
+ * never flakes at UTC midnight (the prior `2h ago` fell on yesterday between
+ * 00:00–02:00 UTC). The 40d-ago published event makes the date-window filter
+ * distinguishable from a no-op: if the filter regresses, window=7d/30d would
+ * still show it and the AC3 tests would fail loudly.
  *
  * Requires DATABASE_URL pointing at local PG. Does NOT touch seed-console.ts or
  * console.spec.ts (1.6 zero-change contract). Clears the same set of tables so
@@ -24,10 +32,12 @@ import {
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
-const HOUR = 60 * 60 * 1000;
+const MINUTE = 60 * 1000;
+const DAY = 24 * 60 * MINUTE;
 
 export async function seedFeedEvents(): Promise<{
   publishedTitle: string;
+  publishedOldTitle: string;
   unpublishedTitle: string;
 }> {
   resetEnvCache();
@@ -57,11 +67,25 @@ export async function seedFeedEvents(): Promise<{
     },
   });
 
-  // Two distinct-event records → 2 candidates (different-event titles, no overlap).
-  // The published one is recent (2h ago) so window=today / window=7d include it
-  // and the "近期升温" chip has a signal.
-  const recentAgo = new Date(Date.now() - 2 * HOUR);
-  const olderAgo = new Date(Date.now() - 2 * HOUR);
+  // Three distinct-event records → 3 candidates (different-event titles, no
+  // signature overlap, and the 40d gap exceeds the 72h clustering time-window so
+  // no incremental merge either).
+  //
+  // AC3 date-window contract (see feed.spec.ts):
+  //   - recentAgo = now - 5min: ALWAYS within today/7d/30d/all, regardless of
+  //     the wall-clock hour. The previous `now - 2h` was a UTC-midnight time
+  //     bomb (between UTC 00:00 and 02:00 the 2h-ago instant falls on
+  //     yesterday and the today window filters it out → flake).
+  //   - otherAgo  = now - 5min: second distinct candidate left UNPUBLISHED.
+  //     Named for its role (the other candidate), not an age — both are 5min
+  //     old. Kept unpublished so AC2 asserts its title does not leak.
+  //   - oldAgo    = now - 40d: PUBLISHED event strictly outside 7d and outside
+  //     30d, so window=7d/30d must filter it out while window=all keeps it. If
+  //     the date filter ever regresses to a no-op, the 7d/30d tests fail
+  //     loudly instead of silently passing.
+  const recentAgo = new Date(Date.now() - 5 * MINUTE);
+  const otherAgo = new Date(Date.now() - 5 * MINUTE);
+  const oldAgo = new Date(Date.now() - 40 * DAY);
 
   await seedRecord(prisma, source.id, {
     title: "新能源汽车销量再创新高",
@@ -71,21 +95,38 @@ export async function seedFeedEvents(): Promise<{
   await seedRecord(prisma, source.id, {
     title: "半导体出口同比下降",
     summary: "半导体出口数据回落",
-    publishedAt: olderAgo,
+    publishedAt: otherAgo,
+  });
+  await seedRecord(prisma, source.id, {
+    title: "稀土出口配额调整复盘",
+    summary: "稀土出口政策早期调整回顾",
+    publishedAt: oldAgo,
   });
 
   await clusterEvents({ prisma, traceId: newTraceId() });
 
   const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
-  if (pending.length < 2) {
+  if (pending.length < 3) {
     throw new Error(
-      `[seed-feed] expected >= 2 candidates after cluster, got ${pending.length}`,
+      `[seed-feed] expected >= 3 candidates after cluster, got ${pending.length}`,
     );
   }
 
-  // Approve the 新能源 candidate → published. Leave the 半导体 candidate unpublished.
+  // Approve 新能源 (recent, in all windows) AND 稀土 (40d ago, excluded from
+  // today/7d/30d). Leave 半导体 unpublished so AC2's leak assertion holds.
   const toPublish = pending.find((c) => c.title.includes("新能源")) ?? pending[0]!;
-  const toLeave = pending.find((c) => c.id !== toPublish.id) ?? pending[1]!;
+  const toPublishOld =
+    pending.find((c) => c.title.includes("稀土")) ?? null;
+  const toLeave =
+    pending.find(
+      (c) => c.id !== toPublish.id && (!toPublishOld || c.id !== toPublishOld.id),
+    ) ?? pending[1]!;
+
+  if (!toPublishOld) {
+    throw new Error(
+      "[seed-feed] expected a 稀土 candidate for the 40d-ago window test, found none",
+    );
+  }
 
   await decideReview({
     prisma,
@@ -93,13 +134,22 @@ export async function seedFeedEvents(): Promise<{
     hotEventId: toPublish.id,
     outcome: "approve",
     reviewer: "feed-e2e-seeder",
-    note: "seed published for feed e2e",
+    note: "seed published (recent) for feed e2e",
+  });
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: toPublishOld.id,
+    outcome: "approve",
+    reviewer: "feed-e2e-seeder",
+    note: "seed published (40d ago) for AC3 date-window exclusion test",
   });
 
   resetPrisma();
 
   return {
     publishedTitle: toPublish.title,
+    publishedOldTitle: toPublishOld.title,
     unpublishedTitle: toLeave.title,
   };
 }
@@ -133,7 +183,9 @@ async function seedRecord(
 
 // Run directly (not imported by globalSetup).
 void seedFeedEvents().then((r) => {
-  console.log("[seed-feed] published:", r.publishedTitle, "| unpublished:", r.unpublishedTitle);
+  console.log(
+    `[seed-feed] published (recent): ${r.publishedTitle} | published (40d): ${r.publishedOldTitle} | unpublished: ${r.unpublishedTitle}`,
+  );
   process.exit(0);
 }).catch((error) => {
   console.error("[seed-feed] fatal", error);

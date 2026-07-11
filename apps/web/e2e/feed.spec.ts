@@ -6,9 +6,12 @@ import { expect, test } from "@playwright/test";
  * public `pnpm --filter web e2e` (which must stay DATABASE_URL-free — its
  * --grep-invert excludes both @console and @feed).
  *
- * Prerequisite: `pnpm --filter web seed:feed` must have been run to seed one
- * PUBLISHED hot event ("新能源汽车销量再创新高") and leave one UNPUBLISHED
- * candidate ("半导体出口同比下降"). The e2e:feed npm script runs the seed first.
+ * Prerequisite: `pnpm --filter web seed:feed` must have been run to seed TWO
+ * PUBLISHED hot events and leave one UNPUBLISHED candidate:
+ *   - "新能源汽车销量再创新高" (5min ago, published)  — within today/7d/30d/all
+ *   - "稀土出口配额调整复盘"     (40d ago, published)  — within all ONLY
+ *   - "半导体出口同比下降"       (5min ago, unpublished)
+ * The e2e:feed npm script runs the seed first.
  *
  * Requires request-time DATABASE_URL: the homepage is force-dynamic (Story 1.7)
  * and reads published_hot_events via getPrisma at request time. The public e2e
@@ -16,16 +19,20 @@ import { expect, test } from "@playwright/test";
  * `goto("/")` hits the force-dynamic homepage — this is the intentional AD-3
  * evolution (Design Notes in spec-1-7), noted in home.spec.ts.
  *
- * Seed timestamp contract (AC3 date-window coverage): the single PUBLISHED
- * event is seeded at latestEvidenceAt = now - 2h (seed-feed.ts:62). That means
- * all three windows include it:
- *   - today (>= start of current UTC day): 2h ago is today.
- *   - 7d / 30d (>= now - 7d / 30d): 2h ago is well within both.
- * So the window tests assert the event VISIBLE under each window, plus the
- * active pill highlight per window. The "filter no-result" branch cannot be
- * reached by window alone on this seed; it is reached by combining a window
- * with an association concept that matches no event (the event has no
- * association row) — the same empty-state technique associations.spec.ts uses.
+ * Seed timestamp contract (AC3 date-window coverage): the recent PUBLISHED
+ * event is seeded at now - 5min (seed-feed.ts). 5min ago is ALWAYS within the
+ * current UTC day, so window=today never flakes at UTC midnight (the prior
+ * `now - 2h` fell on yesterday between UTC 00:00 and 02:00). The 40d-ago
+ * PUBLISHED event is strictly outside the 30d (and 7d, today) window, so each
+ * date-window test asserts BOTH:
+ *   - the recent event VISIBLE under that window, AND
+ *   - the 40d-ago event EXCLUDED under that window (except window=all).
+ * The exclusion assertion is what distinguishes a working filter from a no-op:
+ * if the filter regressed to "show everything", window=7d/30d would render the
+ * 40d-ago event and the test would fail loudly. The "filter no-result" branch
+ * is reached by combining a window with an association concept that matches no
+ * event (the seeded events have no association row) — the same empty-state
+ * technique associations.spec.ts uses.
  *
  * Covers:
  *   - AD-8: `/` is anonymously reachable (200, no /login redirect).
@@ -78,15 +85,22 @@ test.describe("公开热点事件流 (Story 1.7) @feed", () => {
     await expect(page.getByText("半导体出口同比下降")).toBeHidden();
   });
 
-  test("AC3 ?window=today：今日窗口包含近期事件、pill 高亮", async ({ page }) => {
-    // The seeded published event is 2h old (seed-feed.ts:62), so it falls
-    // within the "今日" window (>= start of current UTC day).
+  test("AC3 ?window=today：今日窗口包含近期事件、排除 40d 事件、pill 高亮", async ({
+    page,
+  }) => {
+    // The recent seeded published event is 5min old (seed-feed.ts), always
+    // within the current UTC day. The 40d-ago published event is outside today.
     await page.goto("/?window=today");
 
-    // The published event is still visible under the today window.
+    // The recent published event is visible under the today window.
     await expect(
       page.getByText("新能源汽车销量再创新高").first(),
     ).toBeVisible();
+
+    // The 40d-ago published event is EXCLUDED from today. This is the no-op
+    // guard: if the date filter regressed to "show everything", this would
+    // appear and the test would fail loudly.
+    await expect(page.getByText("稀土出口配额调整复盘")).toHaveCount(0);
 
     // The "今日" pill is the active one (brand background). The "全部" pill is
     // NOT active under ?window=today. This pins the highlight state for the
@@ -101,13 +115,18 @@ test.describe("公开热点事件流 (Story 1.7) @feed", () => {
     );
   });
 
-  test("AC3 ?window=7d：近7天窗口包含近期事件、pill 高亮", async ({ page }) => {
-    // 2h-old event is within the 7d window.
+  test("AC3 ?window=7d：近7天窗口包含近期事件、排除 40d 事件、pill 高亮", async ({
+    page,
+  }) => {
+    // The 5min-old event is within the 7d window; the 40d-ago event is not.
     await page.goto("/?window=7d");
 
     await expect(
       page.getByText("新能源汽车销量再创新高").first(),
     ).toBeVisible();
+
+    // No-op guard: the 40d-ago published event must be excluded from 7d.
+    await expect(page.getByText("稀土出口配额调整复盘")).toHaveCount(0);
 
     // The "近7天" pill is active; "今日" is not. Asserting a different pill
     // than the today test proves the highlight follows the URL, not a hard-
@@ -122,13 +141,19 @@ test.describe("公开热点事件流 (Story 1.7) @feed", () => {
     );
   });
 
-  test("AC3 ?window=30d：近30天窗口包含近期事件、pill 高亮", async ({ page }) => {
-    // 2h-old event is within the 30d window.
+  test("AC3 ?window=30d：近30天窗口包含近期事件、排除 40d 事件、pill 高亮", async ({
+    page,
+  }) => {
+    // The 5min-old event is within the 30d window; the 40d-ago event is NOT
+    // (30d < 40d), so 30d is also a no-op-guarded window.
     await page.goto("/?window=30d");
 
     await expect(
       page.getByText("新能源汽车销量再创新高").first(),
     ).toBeVisible();
+
+    // No-op guard: the 40d-ago published event must be excluded from 30d.
+    await expect(page.getByText("稀土出口配额调整复盘")).toHaveCount(0);
 
     // The "近30天" pill is active; "全部" is not.
     await expect(page.getByText("近30天", { exact: true })).toHaveCSS(
@@ -136,6 +161,34 @@ test.describe("公开热点事件流 (Story 1.7) @feed", () => {
       BRAND_RGB,
     );
     await expect(page.getByText("全部", { exact: true })).not.toHaveCSS(
+      "background-color",
+      BRAND_RGB,
+    );
+  });
+
+  test("AC3 ?window=all：全部窗口包含近期与 40d 事件、pill 高亮", async ({
+    page,
+  }) => {
+    // window=all is the unfiltered default: BOTH the recent published event
+    // AND the 40d-ago published event render. This anchors the other window
+    // tests' exclusion assertions — it proves the 40d-ago event exists on the
+    // page under all, so its absence under today/7d/30d is genuinely the
+    // filter excluding it (not a seed/render bug).
+    await page.goto("/?window=all");
+
+    await expect(
+      page.getByText("新能源汽车销量再创新高").first(),
+    ).toBeVisible();
+    await expect(
+      page.getByText("稀土出口配额调整复盘").first(),
+    ).toBeVisible();
+
+    // The "全部" pill is active; "近30天" is not.
+    await expect(page.getByText("全部", { exact: true })).toHaveCSS(
+      "background-color",
+      BRAND_RGB,
+    );
+    await expect(page.getByText("近30天", { exact: true })).not.toHaveCSS(
       "background-color",
       BRAND_RGB,
     );
