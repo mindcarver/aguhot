@@ -28,7 +28,7 @@ file = true                  # ATTENTION file in the run dir
 #                    the done spec for a fresh review pass) after a dev pass.
 # enabled = false -> skip that session; the bmad-dev-auto pass's own inline review
 #                    is the only review and it finalizes the story straight to done.
-enabled = false
+enabled = true
 # trigger (only consulted when enabled = true) decides WHEN that session runs:
 #   "recommended" -> only when the bmad-dev-auto pass flags the story with
 #                    `followup_review_recommended: true` (it self-reviews inline
@@ -68,7 +68,7 @@ cleanup_session_on_finish = true  # kill the run's tmux session when it finishes
 # [adapter.dev]
 # model = "opus"
 [adapter.review]
-name = "codex"              # review pass on codex; dev + triage inherit [adapter] (claude)
+name = "claude"             # review pass on claude (codex out of quota); dev + triage inherit [adapter] (claude)
 # model = "gpt-5-codex"
 # stop_without_result_nudges = 5     # e.g. a multi-turn review needs more nudges than dev
 # [adapter.triage]
