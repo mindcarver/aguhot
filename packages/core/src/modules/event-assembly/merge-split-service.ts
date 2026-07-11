@@ -93,9 +93,15 @@ export async function mergeHotEvents(
   // recompute) commit together or not at all. Without this wrap, a crash between
   // the per-link create-then-delete pairs left evidence half-moved (source
   // drained but target not fully populated) and cluster_signature stale. The tx
-  // also grants row-level locks so a concurrent merge/split on the same link set
-  // serializes instead of producing divergent end states. This mirrors
-  // decideReview's $transaction pattern (review-service.ts:68).
+  // grants CRASH atomicity only — NOT concurrency serialization. Prisma's
+  // default $transaction is Read Committed; locks are taken on write/delete,
+  // not on the findMany reads above, so two concurrent merges into the same
+  // target do NOT serialize (a loser's link delete may throw P2003/P2025 —
+  // only P2002 is swallowed below — or recompute cluster_signature from a
+  // stale member set). True serialization (FOR UPDATE / advisory lock /
+  // Serializable) is deferred; V1 volume makes concurrent same-target
+  // merge/split implausible. This mirrors decideReview's $transaction
+  // pattern (review-service.ts:68).
   return prisma.$transaction(async (tx) => {
     // Read the source's evidence links. These are the records to move to target.
     const sourceLinks = await tx.hotEventEvidence.findMany({
