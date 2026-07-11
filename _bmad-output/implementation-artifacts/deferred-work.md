@@ -892,14 +892,14 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `_bmad-output/reviews/2026-07-11-salvaged-stories-code-review.md`
   summary: 1-6 运营写路径无 auth 闸 + decideReview TOCTOU 竞态（HIGH×2）
   evidence: 抢救故事专项评审「横切 2」+「三-1-6」：`apps/web/app/(operator)/layout.tsx:22-28` 无任何 auth 检查，`/console/*` 及其写 action（publish/takedown/merge/split/revise）对未认证请求开放，`reviewer:"operator"` 硬编码；`packages/core/src/modules/review-workflow/review-service.ts:68-135` `decideReview` 事务内 `findUniqueOrThrow`（无锁）→ `resolveTransition` → `update`，默认 Read Committed，两并发运营提交（approve + takedown 撞同一 candidate）可都读到 candidate、都过校验、都写，留下矛盾 PublicationDecision。修法：layout 加 `NODE_ENV==='production'` / env-flag `redirect()` 闸（V1 推迟真实 auth，但部署闸必须）；decideReview 改条件 update `where:{id, publicationStatus: fromStatus}`，Prisma P2025 → 映射 `IllegalTransitionError`（零迁移乐观锁）。由 bmad-quick-dev split 拆出，随 agent team 处理。
-  resolution: 进行中——agent team 目标 B。
+  resolution: 已解决（commit d304c3e，agent team 目标 B）——layout 加 `AGUHOT_OPERATOR_ENABLED` 部署闸（生产默认关闭、需显式 env 开启；非生产开释放行 dev/e2e），`decideReview` 改条件 `updateMany` where {id, publicationStatus: fromStatus}，count===0 → `IllegalTransitionError`，零迁移。verify:review-logic 33/33。
 
 - source_spec: `_bmad-output/reviews/2026-07-11-salvaged-stories-code-review.md`
   summary: 1-7 AC3 日期窗过滤 e2e 零覆盖 + filter-pill/空态链接裸 querystring（HIGH×2）
   evidence: 抢救故事专项评审「三-1-7」：`apps/web/e2e/feed.spec.ts` 未覆盖 `?window=today/7d/30d`、active pill 态、"筛选无结果"分支（头条过滤 UX 零测试），且 `来源数` 断言只查文案不查数值；`apps/web/app/(public)/_components/feed-filters.tsx:53` 与 `apps/web/app/(public)/.../page.tsx:101` 的 filter-pill/空态链接用裸 querystring，会冲掉未来 `concept/industry` 参数。修法：补 AC3 日期窗 e2e（含空态分支 + 来源数数值断言）；链接改 `pathname+searchParams` 合并，空态链接用 `href="/"`。由 bmad-quick-dev split 拆出，随 agent team 处理。
-  resolution: 进行中——agent team 目标 C。
+  resolution: 已解决（commit 9f557aa，agent team 目标 C）——feed.spec.ts 补 5 个 AC3 用例（today/7d/30d 可见+active pill 高亮、空态分支、来源数数值断言）；filter-pill 与 association-clear 链接改 `mergeSearchParams` 合并保留兄弟参数，空态链接 `href="/"`（server-side spread，未加 useSearchParams）。e2e 沙箱未实跑（无 DB/浏览器），typecheck 过。
 
 - source_spec: `_bmad-output/reviews/2026-07-11-salvaged-stories-code-review.md`
   summary: 1-9 operator 侧 AiLabel 源判定近似，误标已发布人工解释为 AI（HIGH）
   evidence: 抢救故事专项评审「三-1-9」：`apps/web/app/(operator)/console/[eventId]/page.tsx:223-227` operator 侧 `<AiLabel>` 用 `pending.explanation===true` 启发式判定源，"刚 republish 人工编辑后刷新"会误标已发布的人工解释为 AI（公开侧已用 `source` 字段精确判定，正确）。修法：给 `PublishedEventRevisionView.published.explanation` 投影补 `source` 字段，operator 侧直接判定 `source!=="human"`。`review-service.ts:388-389` pendingTitle/pendingTags 判据不一致为信息性项，本轮不动。由 bmad-quick-dev split 拆出，随 agent team 处理。
-  resolution: 进行中——agent team 目标 D。
+  resolution: 已解决（commit 969f922，agent team 目标 D）——operator 页改读 `publishedHotEventExplanation.explanationSource` 列（与公开侧 `getPublishedHotEventDetail` 同源），判定 `source !== "human"`，弃用 `pending.explanation===true` 启发式。列已存在于 schema（无迁移）。未改 review-service.ts 投影（授权锁定），改为页面级权威读。verify:revision 35/35。
