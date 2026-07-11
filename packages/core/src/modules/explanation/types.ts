@@ -138,3 +138,131 @@ export interface SaveExplanationResult {
   explanationVersionId?: string;
   notFound?: boolean;
 }
+
+// --- Story 5.1: LLMAdapter port + RecommendationReason (card AI 解读) -----------
+
+/**
+ * The provenance of a recommendation reason (AI 解读). Stored on every
+ * recommendation_reasons row so the audit chain can trace which provider +
+ * model + prompt version produced it (NFR-7). Mirrors `ExplanationSource` and
+ * reuses its "ai" value (already reserved there): V1 rows all carry source="ai"
+ * (the stub also writes "ai" so the projection pipeline is identical — only
+ * modelId/promptVersion mark a row as stub-generated).
+ *
+ * This alias exists so the LLMAdapter port + reason-service can name the source
+ * type in its own terms without reaching back into the ExplanationVersion
+ * vocabulary; the wire value is the same string union.
+ */
+export type LlmSource = ExplanationSource;
+
+/**
+ * One unit of LLMAdapter output — the ≤40 字 AI 解读 hook for one hot event.
+ * The adapter resolves a one-line reason from the event's title + summary and
+ * returns it with a non-empty `reason` plus its own provenance (modelId +
+ * promptVersion, recorded on the appended row for NFR-7). reason-service
+ * validates the reason is non-empty, ≤40 字, and passes the 6-class wording
+ * guardrail (passesRecommendationGuardrail) — violations throw (fail-fast,
+ * never silently truncates/rewrites).
+ *
+ *   - reason: NON-EMPTY one-line AI 解读, ≤40 字, free of the six forbidden
+ *     phrase classes (action / return-prediction / manipulation-frame /
+ *     recommendation-strength / timing-advice / over-certainty).
+ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future
+ *     real provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the
+ *     appended row.
+ *   - promptVersion: the prompt template version (e.g. "reason-stub-v1").
+ *     Recorded verbatim on the appended row.
+ */
+export interface LlmReasonResult {
+  reason: string;
+  modelId: string;
+  promptVersion: string;
+}
+
+/**
+ * The LLMAdapter port (AD-7). All LLM knowledge sources for AI 解读 (and,
+ * transitively, the future 5.2 AI 深读 / 5.3 趋势研判) enter through this
+ * interface; domain modules never import a third-party LLM SDK. V1 has no
+ * concrete implementation wired in prod (real provider procurement deferred) —
+ * the recommendation-reason worker resolves `adapter = undefined` so
+ * generateRecommendationReason returns null and prod degrades honestly (AC).
+ * verify/e2e pass StubLlmAdapter directly to generateRecommendationReason. The
+ * only concrete implementation today is StubLlmAdapter (test-only).
+ *
+ * Defined in types.ts (single source of truth, alongside the other explanation
+ * domain types) and re-exported from llm-adapter.ts as the port's home (mirrors
+ * the DigestAdapter precedent: types.ts holds the interface, *-adapter.ts is the
+ * thin re-export home).
+ *
+ * The adapter receives the event's title + summary as context (the same fields
+ * the card renders) so it can produce a one-line hook grounded in the evidence.
+ * A real LLM would also read the member evidence records; V1 keeps the context
+ * minimal (title + summary) since the stub returns a fixed string and a real
+ * provider's context window is a story-time decision when the provider lands.
+ */
+export interface LLMAdapter {
+  /**
+   * Resolve a one-line (≤40 字) AI 解读 for the given event. Implementations
+   * return a NON-EMPTY reason ≤40 字, free of the six forbidden phrase classes,
+   * plus their own modelId + promptVersion. Return null when no reason is
+   * available (the caller writes nothing and degrades honestly). Each returned
+   * reason is validated by generateRecommendationReason (non-empty, ≤40 字,
+   * passes guardrail) — violations throw at the generator, never silently
+   * truncated.
+   *
+   * The adapter receives the event's title + summary (the same context the card
+   * renders) so the reason is grounded in the factual evidence, not fabricated.
+   */
+  generateReason(args: {
+    hotEventId: string;
+    title: string;
+    summary: string;
+  }): Promise<LlmReasonResult | null>;
+}
+
+/**
+ * Options for generateRecommendationReason. `{ prisma, traceId, hotEventId,
+ * adapter? }` mirrors the established command pattern (generateExplanation,
+ * generateDailyDigest) plus an optional LLMAdapter. When adapter is omitted (or
+ * the event is missing / has no evidence), the function returns null and writes
+ * nothing (honest degradation — never fabricates a reason). Otherwise it loads
+ * the HotEvent, calls the adapter, validates the result (non-empty, ≤40 字,
+ * passesRecommendationGuardrail), and APPENDS one recommendation_reasons row
+ * (source="ai").
+ */
+export interface GenerateRecommendationReasonOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  adapter?: LLMAdapter;
+}
+
+/**
+ * The result of a successful generation: the newly-appended reason row's id +
+ * the reason text + provenance + createdAt. Callers (the worker's projection
+ * refresh, verify/seed) consume the reason directly.
+ */
+export interface GenerateRecommendationReasonResult {
+  recommendationReasonId: string;
+  hotEventId: string;
+  reason: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+  traceId: string;
+}
+
+/**
+ * One recommendation_reasons row projected for read. Mirrors the columns the
+ * worker + audit need (no write paths here).
+ */
+export interface RecommendationReasonRecord {
+  id: string;
+  hotEventId: string;
+  reason: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+}

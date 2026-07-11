@@ -993,3 +993,18 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 共享 `TIMELINE_ENTRY_SELECT`（11 列）的行形状只被 `verify-timeline.ts` 的 shape 断言钉住 7/11 列——重构后误删一列不会 fail 该门禁
   evidence: Story 4.4 抽取 `TIMELINE_ENTRY_SELECT` + `mapPublishedTimelineRow` 供 `listPublishedTimeline`（home feed，4.1）与 `listPublishedTimelineEntries`（search 语料，4.4）共用（`packages/core/src/modules/publish-orchestrator/timeline-read-model.ts`）。`apps/worker/src/verify-timeline.ts` 的 shape 断言（~line 262-275）只校验 7 个字段（`id`/`hotEventId`/`tradeDate`/`title`/`summary`/`evidenceCount`/`foldedEvidenceRecordIds`），未读 `occurredAt` 值（仅排序）、默认 feed 的 `sessionTag`、`sourceName`、`recommendationReason`。若共享 select 误删 `sourceName`/`recommendationReason` 等列，31/31 仍过——home feed 与 TimelineCard 会静默渲染 `undefined`。属 4.1 verify 既有覆盖缺口，经本次共享 select 重构被放大（影响面从 1 个读函数扩至 2 个）。
   resolution: 待 verify-harness 加固——把 `verify-timeline.ts` 的 shape 断言扩至全部 11 个 `TIMELINE_ENTRY_SELECT` 列（含 `occurredAt` 值、`sessionTag`、`sourceName`、`recommendationReason`），使共享 select 的列级回归可被该门禁捕获。属 4.1 测试基建加固，超 4.4 范围，登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-card-recommendation-reason.md`（5.1 review pass 登记）
+  summary: recommendation-reason worker 的候选查询（findMany）与逐条 append 之间存在 `publicationStatus` TOCTOU——事件可能在两步之间由 candidate 翻为 rejected/taken_down，仍被追加一条 reason（孤儿审计行）
+  evidence: Story 5.1 worker（`apps/worker/src/queues/recommendation-reason-queue.ts`）一次 `findMany({ where: { publicationStatus: { in: ["candidate","published"] }, recommendationReasons: { none: {} } } })` 读出 pending 快照，随后逐条 `generateRecommendationReason`（append）。事件若在快照与 append 之间被复核员 rejected 或 taken_down，worker 仍会为其追加一条 `recommendation_reasons` 行；该行不会被投影（投影仅作用于 published 事件），但会滞留在 append-only 审计表（FK cascade 仅在 HotEvent 删除时触发，非状态变更），污染审计链。竞争窗口小、后果低（不可见、仅审计噪声）。
+  resolution: 在逐条处理循环内 append 前重读一次 `publicationStatus`，若已非 candidate/published 则 skip（每事件一次额外 findUnique）。后果低，未在 5.1 内做；登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-card-recommendation-reason.md`（5.1 review pass 登记）
+  summary: recommendation-reason 生成无并发锁——未来多 worker 进程并发会在同一事件上追加重复 reason 行
+  evidence: Story 5.1 worker（`apps/worker/src/queues/recommendation-reason-queue.ts`）与既有所有 worker（explain/digest/market-reaction 等）一致：单进程、无 advisory lock、无 BullMQ job 级互斥。`recommendation_reasons` 表按 AD-5 append-only、无 `(hotEventId, ...)` 唯一约束（幂等性靠候选查询的 `recommendationReasons: { none: {} }` 前置过滤）。今日单 worker 下安全；一旦横向扩成多 worker 进程，两个副本可能同时读到同一 pending 集合并为同一事件各 append 一行，投影在两行间非确定翻转。与既有 worker 模式同源，非 5.1 引入。
+  resolution: 待多进程扩容时，为 worker 加 BullMQ job 级按 hotEventId 互斥（或 Postgres advisory lock），或在表上加生成冷却约束。属 worker 运行模式级升级，超 5.1 范围，登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-card-recommendation-reason.md`（5.1 review pass 登记）
+  summary: dev 库既有迁移 `20260710141148_association_read_models` checksum 漂移——未来任何 `prisma migrate dev` 会被要求全库 reset
+  evidence: Story 5.1 实现期发现本地 `aguhot_dev` 对 `20260710141148_association_read_models` 存在应用后被编辑的 checksum 漂移（早于 5.1，非本 story 引入）。`prisma migrate dev` 检测到该漂移会要求 reset 整库（销毁 dev 数据）；实现期改用 `prisma db execute` + `prisma migrate resolve --applied` 应用 5.1 迁移以绕开。漂移行仍在，`migrate status` 显示 up-to-date 但底层漂移未修。
+  resolution: 待专人择期对漂移迁移做 reconciliation（reset 或校正 checksum），与 5.1 无关，登记为 deferred。

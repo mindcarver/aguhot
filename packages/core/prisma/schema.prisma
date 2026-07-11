@@ -171,6 +171,16 @@ model HotEvent {
   // lets publish-orchestrator delete a HotEvent's timeline rows on takedown. It
   // does NOT change publish-orchestrator's write-ownership (AD-2/AD-3b).
   publishedTimeline   PublishedTimelineEntry[]
+  // Read-only reverse relation to the append-only AI 解读 rows (Story 5.1).
+  // The explanation module owns recommendation_reasons (AD-5 append-only, one
+  // row per generation of the ≤40 字 card hook); publish-orchestrator projects
+  // the LATEST row into published_timeline_entries.recommendation_reason (the
+  // sole writer of that column stays publish-orchestrator, AD-2/AD-3b). This
+  // navigation lets publish-orchestrator read the latest reason at projection
+  // time and lets the recommendation-reason worker query events lacking a
+  // reason via `recommendationReasons: { none: {} }`. It does NOT change the
+  // explanation module's write-ownership of recommendation_reasons.
+  recommendationReasons RecommendationReason[]
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -788,4 +798,45 @@ model PublishedTimelineEntry {
   @@unique([hotEventId])
   @@index([tradeDate, sessionTag, occurredAt])
   @@map("published_timeline_entries")
+}
+
+// An append-only AI 解读 (recommendation reason) for a HotEvent (AD-5, Story 5.1).
+// The explanation module is the sole writer of this table. Each row records a
+// one-line (≤40 字) AI 解读 — the card-surface hook rendered by the 4.2 timeline
+// card alongside the AiLabel when published_timeline_entries.recommendation_reason
+// is non-null. Rows are NEVER updated or deleted: every generation appends a new
+// row, so the full chain (ordered by created_at) is the auditable history of which
+// AI 解读 was generated when, by which model, under which prompt version (NFR-7
+// version + provenance: model_id + prompt_version + source on every row). The
+// publish-orchestrator timeline projection (projectTimelineFields) projects the
+// LATEST row (created_at desc first) into published_timeline_entries.recommendation_
+// reason — publish-orchestrator stays the SOLE writer of that column (AD-2/AD-3b);
+// the worker only appends here + calls refreshPublishedTimelineForEvent.
+//
+// Distinct from ExplanationVersion (the three-partition detail-page deep read):
+// ExplanationVersion is a fixed three-partition schema with NOT NULL hotEventId
+// and does not fit the single-line card hook. RecommendationReason is a separate
+// append-only table carrying one reason per row (epic-5-context data-model
+// decision: three independent append-only tables, do not reuse ExplanationVersion).
+//
+// FK onDelete: Cascade so a HotEvent deletion cleans up its AI 解读 history.
+// `source` is "ai" in V1 (real LLM deferred; the stub also writes "ai" so the
+// projection pipeline is identical — only the model_id/prompt_version mark it as
+// stub-generated). The recommendation_reason column on published_timeline_entries
+// is a DERIVED projection of the latest row here, NOT a second write path.
+model RecommendationReason {
+  id            String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId    String   @map("hot_event_id")
+  reason        String // ≤40 字 AI 解读; passesRecommendationGuardrail-enforced at write time
+  source        String // ExplanationSource union value ("ai" in V1)
+  modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+  promptVersion String   @map("prompt_version") // prompt template version (e.g. "reason-stub-v1")
+  traceId       String?  @map("trace_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("recommendation_reasons")
 }

@@ -1,0 +1,1796 @@
+=== TRACKED CHANGES since da46e6ea8630b7cf502fdec4cff0fa3be92385db ===
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index 9ebb209..ca2126e 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -14,6 +14,7 @@
+     "verify:associations": "tsx src/verify-associations.ts",
+     "verify:themes": "tsx src/verify-themes.ts",
+     "verify:digest": "tsx src/verify-digest.ts",
++    "verify:reason": "tsx src/verify-reason.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "verify:timeline": "tsx src/verify-timeline.ts",
+diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+index 6831696..a8739d6 100644
+--- a/apps/worker/src/index.ts
++++ b/apps/worker/src/index.ts
+@@ -1,27 +1,28 @@
+ /**
+  * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction /
+- * theme-backfill / daily-digest / publish-timeline runtime.
++ * theme-backfill / daily-digest / publish-timeline / recommendation-reason runtime.
+  *
+  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
+  * cluster worker. Story 1.8 added the explain worker. Story 2.1 added the
+  * market-reaction worker. Story 2.3 added the theme-backfill worker. Story 2.4
+- * added the daily-digest worker. Story 4.1 adds the publish-timeline self-heal
+- * worker alongside them: validate required env (DB + Redis), connect Redis,
+- * register all seven workers, wire the timeline self-heal repeatable schedule,
+- * and wire graceful shutdown (close all seven). The web request path never
+- * imports this module — heavy work is async (AD-4).
++ * added the daily-digest worker. Story 4.1 added the publish-timeline self-heal
++ * worker. Story 5.1 adds the recommendation-reason worker alongside them:
++ * validate required env (DB + Redis), connect Redis, register all eight workers,
++ * wire the timeline self-heal repeatable schedule, and wire graceful shutdown
++ * (close all eight). The web request path never imports this module — heavy
++ * work is async (AD-4).
+  *
+- * The seven workers are independent and idempotent: ingest does not trigger a
++ * The eight workers are independent and idempotent: ingest does not trigger a
+  * cluster job automatically, cluster does not trigger an explain job, explain
+  * does not trigger a market-reaction job, market-reaction does not trigger a
+- * theme-backfill job, theme-backfill does not trigger a daily-digest job, and
+- * none of the six triggers the publish-timeline self-heal automatically (the
+- * jobs are decoupled; pipeline chaining/cron orchestration is deferred — see
+- * deferred-work.md). The publish-timeline worker is the first to carry a
+- * repeatable self-heal schedule (every 15 min, corrective only — the main
+- * timeline refresh is the in-transaction refreshPublishedTimelineForEvent
+- * inside decideReview, AD-3b method A). Each worker can run in isolation
+- * against the shared DB/Redis.
++ * theme-backfill job, theme-backfill does not trigger a daily-digest job, none
++ * of those triggers the publish-timeline self-heal automatically, and none
++ * triggers the recommendation-reason job automatically (the jobs are decoupled;
++ * pipeline chaining/cron orchestration is deferred — see deferred-work.md). The
++ * publish-timeline worker is the only one carrying a repeatable self-heal
++ * schedule (every 15 min, corrective only — the main timeline refresh is the
++ * in-transaction refreshPublishedTimelineForEvent inside decideReview, AD-3b
++ * method A). Each worker can run in isolation against the shared DB/Redis.
+  */
+ 
+ import { requireEnv } from "@aguhot/config";
+@@ -31,10 +32,8 @@ import { registerDailyDigestWorker } from "./queues/daily-digest-queue.js";
+ import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
+ import { registerExplainWorker } from "./queues/explain-queue.js";
+ import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
+-import {
+-  registerPublishTimelineWorker,
+-  schedulePublishTimelineSelfHeal,
+-} from "./queues/publish-timeline-queue.js";
++import { registerPublishTimelineWorker, schedulePublishTimelineSelfHeal } from "./queues/publish-timeline-queue.js";
++import { registerRecommendationReasonWorker } from "./queues/recommendation-reason-queue.js";
+ import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
+ import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
+ 
+@@ -54,6 +53,7 @@ async function main(): Promise<void> {
+   const themeBackfillWorker = registerThemeBackfillWorker();
+   const dailyDigestWorker = registerDailyDigestWorker();
+   const publishTimelineWorker = registerPublishTimelineWorker();
++  const recommendationReasonWorker = registerRecommendationReasonWorker();
+ 
+   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
+   // only — the main timeline refresh is the in-tx refreshPublishedTimeline-
+@@ -61,7 +61,7 @@ async function main(): Promise<void> {
+   // existing schedule with the same key on restart.
+   await schedulePublishTimelineSelfHeal();
+ 
+-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline workers registered and running");
++  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason workers registered and running");
+ 
+   const shutdown = async (signal: string): Promise<void> => {
+     console.log(`[worker] received ${signal}, shutting down`);
+@@ -73,6 +73,7 @@ async function main(): Promise<void> {
+       themeBackfillWorker.close(),
+       dailyDigestWorker.close(),
+       publishTimelineWorker.close(),
++      recommendationReasonWorker.close(),
+     ]);
+     await closeRedis();
+     process.exit(0);
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index c1222da..321d530 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -171,6 +171,16 @@ model HotEvent {
+   // lets publish-orchestrator delete a HotEvent's timeline rows on takedown. It
+   // does NOT change publish-orchestrator's write-ownership (AD-2/AD-3b).
+   publishedTimeline   PublishedTimelineEntry[]
++  // Read-only reverse relation to the append-only AI 解读 rows (Story 5.1).
++  // The explanation module owns recommendation_reasons (AD-5 append-only, one
++  // row per generation of the ≤40 字 card hook); publish-orchestrator projects
++  // the LATEST row into published_timeline_entries.recommendation_reason (the
++  // sole writer of that column stays publish-orchestrator, AD-2/AD-3b). This
++  // navigation lets publish-orchestrator read the latest reason at projection
++  // time and lets the recommendation-reason worker query events lacking a
++  // reason via `recommendationReasons: { none: {} }`. It does NOT change the
++  // explanation module's write-ownership of recommendation_reasons.
++  recommendationReasons RecommendationReason[]
+ 
+   @@index([publicationStatus])
+   @@map("hot_events")
+@@ -789,3 +799,44 @@ model PublishedTimelineEntry {
+   @@index([tradeDate, sessionTag, occurredAt])
+   @@map("published_timeline_entries")
+ }
++
++// An append-only AI 解读 (recommendation reason) for a HotEvent (AD-5, Story 5.1).
++// The explanation module is the sole writer of this table. Each row records a
++// one-line (≤40 字) AI 解读 — the card-surface hook rendered by the 4.2 timeline
++// card alongside the AiLabel when published_timeline_entries.recommendation_reason
++// is non-null. Rows are NEVER updated or deleted: every generation appends a new
++// row, so the full chain (ordered by created_at) is the auditable history of which
++// AI 解读 was generated when, by which model, under which prompt version (NFR-7
++// version + provenance: model_id + prompt_version + source on every row). The
++// publish-orchestrator timeline projection (projectTimelineFields) projects the
++// LATEST row (created_at desc first) into published_timeline_entries.recommendation_
++// reason — publish-orchestrator stays the SOLE writer of that column (AD-2/AD-3b);
++// the worker only appends here + calls refreshPublishedTimelineForEvent.
++//
++// Distinct from ExplanationVersion (the three-partition detail-page deep read):
++// ExplanationVersion is a fixed three-partition schema with NOT NULL hotEventId
++// and does not fit the single-line card hook. RecommendationReason is a separate
++// append-only table carrying one reason per row (epic-5-context data-model
++// decision: three independent append-only tables, do not reuse ExplanationVersion).
++//
++// FK onDelete: Cascade so a HotEvent deletion cleans up its AI 解读 history.
++// `source` is "ai" in V1 (real LLM deferred; the stub also writes "ai" so the
++// projection pipeline is identical — only the model_id/prompt_version mark it as
++// stub-generated). The recommendation_reason column on published_timeline_entries
++// is a DERIVED projection of the latest row here, NOT a second write path.
++model RecommendationReason {
++  id            String   @id // UUIDv7, assigned in application code (newTraceId)
++  hotEventId    String   @map("hot_event_id")
++  reason        String // ≤40 字 AI 解读; passesRecommendationGuardrail-enforced at write time
++  source        String // ExplanationSource union value ("ai" in V1)
++  modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
++  promptVersion String   @map("prompt_version") // prompt template version (e.g. "reason-stub-v1")
++  traceId       String?  @map("trace_id")
++  createdAt     DateTime @default(now()) @map("created_at")
++
++  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
++
++  @@index([hotEventId])
++  @@index([createdAt])
++  @@map("recommendation_reasons")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 8b67467..0b4bd26 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -203,13 +203,26 @@ export type {
+ 
+ // explanation module (Story 1.8 — deterministic three-partition generation +
+ // append-only ExplanationVersion, AD-5; Story 1.9 — saveExplanation operator
+-// revision write-point, source passed by caller, V1 "human").
++// revision write-point, source passed by caller, V1 "human";
++// Story 5.1 — LLMAdapter port AD-7 + StubLlmAdapter test-only +
++// generateRecommendationReason append-only AD-2 + recommendation_reasons table +
++// 6-class wording guardrail; recommendation-reason worker resolves no adapter →
++// prod degrades honestly, stub is verify/e2e-only).
+ export {
+   generateExplanation,
+   getLatestExplanation,
+   derivePartitions,
+   saveExplanation,
+ } from "./modules/explanation/explain-service.js";
++export {
++  generateRecommendationReason,
++  getLatestRecommendationReason,
++  passesRecommendationGuardrail,
++  RECOMMENDATION_REASON_MAX_LENGTH,
++  RECOMMENDATION_FORBIDDEN_PHRASES,
++  StubLlmAdapter,
++  STUB_RECOMMENDATION_REASON,
++} from "./modules/explanation/index.js";
+ export {
+   ExplanationSource,
+ } from "./modules/explanation/types.js";
+@@ -222,6 +235,12 @@ export type {
+   ExplanationVersionRecord,
+   SaveExplanationOptions,
+   SaveExplanationResult,
++  LlmSource,
++  LlmReasonResult,
++  LLMAdapter,
++  GenerateRecommendationReasonOptions,
++  GenerateRecommendationReasonResult,
++  RecommendationReasonRecord,
+ } from "./modules/explanation/types.js";
+ 
+ // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
+diff --git a/packages/core/src/modules/explanation/index.ts b/packages/core/src/modules/explanation/index.ts
+index 317a5fc..4f6a088 100644
+--- a/packages/core/src/modules/explanation/index.ts
++++ b/packages/core/src/modules/explanation/index.ts
+@@ -1,17 +1,29 @@
+ /**
+- * explanation module barrel — Story 1.8.
++ * explanation module barrel — Story 1.8 + Story 5.1.
+  *
+- * Owns the ExplanationVersion table (AD-5 append-only). Exposes the
+- * deterministic three-partition generator + the latest-version read query.
+- * The Prisma client lives one level up and is re-exported from the package
+- * barrel.
++ * Owns the ExplanationVersion table (AD-5 append-only) and, as of Story 5.1,
++ * the recommendation_reasons table (AD-5 append-only, the ≤40 字 AI 解读 card
++ * hook). Exposes the deterministic three-partition generator + the latest-
++ * version read query (1.8), the LLMAdapter port + StubLlmAdapter test-only +
++ * the recommendation-reason generator + the 6-class guardrail (5.1). The Prisma
++ * client lives one level up and is re-exported from the package barrel.
+  *
+  * This module never writes hot_events, evidence_records, or published_* tables.
+- * It only appends explanation_versions; publish-orchestrator reads the latest
+- * version at projection time and writes the public read models.
++ * It only appends explanation_versions + recommendation_reasons; publish-
++ * orchestrator reads the latest of each at projection time and writes the public
++ * read models (it is the SOLE writer of published_timeline_entries.recommendation_
++ * reason — the worker only appends here + triggers the existing projection).
+  */
+ 
+ export { generateExplanation, getLatestExplanation, derivePartitions, saveExplanation } from "./explain-service.js";
++export {
++  generateRecommendationReason,
++  getLatestRecommendationReason,
++  passesRecommendationGuardrail,
++  RECOMMENDATION_REASON_MAX_LENGTH,
++  RECOMMENDATION_FORBIDDEN_PHRASES,
++} from "./reason-service.js";
++export { StubLlmAdapter, STUB_RECOMMENDATION_REASON } from "./stub-llm-adapter.js";
+ export { ExplanationSource } from "./types.js";
+ export type {
+   ExplanationSource as ExplanationSourceType,
+@@ -22,4 +34,10 @@ export type {
+   ExplanationVersionRecord,
+   SaveExplanationOptions,
+   SaveExplanationResult,
++  LlmSource,
++  LlmReasonResult,
++  LLMAdapter,
++  GenerateRecommendationReasonOptions,
++  GenerateRecommendationReasonResult,
++  RecommendationReasonRecord,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/explanation/types.ts b/packages/core/src/modules/explanation/types.ts
+index 37f3723..e17c588 100644
+--- a/packages/core/src/modules/explanation/types.ts
++++ b/packages/core/src/modules/explanation/types.ts
+@@ -138,3 +138,131 @@ export interface SaveExplanationResult {
+   explanationVersionId?: string;
+   notFound?: boolean;
+ }
++
++// --- Story 5.1: LLMAdapter port + RecommendationReason (card AI 解读) -----------
++
++/**
++ * The provenance of a recommendation reason (AI 解读). Stored on every
++ * recommendation_reasons row so the audit chain can trace which provider +
++ * model + prompt version produced it (NFR-7). Mirrors `ExplanationSource` and
++ * reuses its "ai" value (already reserved there): V1 rows all carry source="ai"
++ * (the stub also writes "ai" so the projection pipeline is identical — only
++ * modelId/promptVersion mark a row as stub-generated).
++ *
++ * This alias exists so the LLMAdapter port + reason-service can name the source
++ * type in its own terms without reaching back into the ExplanationVersion
++ * vocabulary; the wire value is the same string union.
++ */
++export type LlmSource = ExplanationSource;
++
++/**
++ * One unit of LLMAdapter output — the ≤40 字 AI 解读 hook for one hot event.
++ * The adapter resolves a one-line reason from the event's title + summary and
++ * returns it with a non-empty `reason` plus its own provenance (modelId +
++ * promptVersion, recorded on the appended row for NFR-7). reason-service
++ * validates the reason is non-empty, ≤40 字, and passes the 6-class wording
++ * guardrail (passesRecommendationGuardrail) — violations throw (fail-fast,
++ * never silently truncates/rewrites).
++ *
++ *   - reason: NON-EMPTY one-line AI 解读, ≤40 字, free of the six forbidden
++ *     phrase classes (action / return-prediction / manipulation-frame /
++ *     recommendation-strength / timing-advice / over-certainty).
++ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future
++ *     real provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the
++ *     appended row.
++ *   - promptVersion: the prompt template version (e.g. "reason-stub-v1").
++ *     Recorded verbatim on the appended row.
++ */
++export interface LlmReasonResult {
++  reason: string;
++  modelId: string;
++  promptVersion: string;
++}
++
++/**
++ * The LLMAdapter port (AD-7). All LLM knowledge sources for AI 解读 (and,
++ * transitively, the future 5.2 AI 深读 / 5.3 趋势研判) enter through this
++ * interface; domain modules never import a third-party LLM SDK. V1 has no
++ * concrete implementation wired in prod (real provider procurement deferred) —
++ * the recommendation-reason worker resolves `adapter = undefined` so
++ * generateRecommendationReason returns null and prod degrades honestly (AC).
++ * verify/e2e pass StubLlmAdapter directly to generateRecommendationReason. The
++ * only concrete implementation today is StubLlmAdapter (test-only).
++ *
++ * Defined in types.ts (single source of truth, alongside the other explanation
++ * domain types) and re-exported from llm-adapter.ts as the port's home (mirrors
++ * the DigestAdapter precedent: types.ts holds the interface, *-adapter.ts is the
++ * thin re-export home).
++ *
++ * The adapter receives the event's title + summary as context (the same fields
++ * the card renders) so it can produce a one-line hook grounded in the evidence.
++ * A real LLM would also read the member evidence records; V1 keeps the context
++ * minimal (title + summary) since the stub returns a fixed string and a real
++ * provider's context window is a story-time decision when the provider lands.
++ */
++export interface LLMAdapter {
++  /**
++   * Resolve a one-line (≤40 字) AI 解读 for the given event. Implementations
++   * return a NON-EMPTY reason ≤40 字, free of the six forbidden phrase classes,
++   * plus their own modelId + promptVersion. Return null when no reason is
++   * available (the caller writes nothing and degrades honestly). Each returned
++   * reason is validated by generateRecommendationReason (non-empty, ≤40 字,
++   * passes guardrail) — violations throw at the generator, never silently
++   * truncated.
++   *
++   * The adapter receives the event's title + summary (the same context the card
++   * renders) so the reason is grounded in the factual evidence, not fabricated.
++   */
++  generateReason(args: {
++    hotEventId: string;
++    title: string;
++    summary: string;
++  }): Promise<LlmReasonResult | null>;
++}
++
++/**
++ * Options for generateRecommendationReason. `{ prisma, traceId, hotEventId,
++ * adapter? }` mirrors the established command pattern (generateExplanation,
++ * generateDailyDigest) plus an optional LLMAdapter. When adapter is omitted (or
++ * the event is missing / has no evidence), the function returns null and writes
++ * nothing (honest degradation — never fabricates a reason). Otherwise it loads
++ * the HotEvent, calls the adapter, validates the result (non-empty, ≤40 字,
++ * passesRecommendationGuardrail), and APPENDS one recommendation_reasons row
++ * (source="ai").
++ */
++export interface GenerateRecommendationReasonOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  hotEventId: string;
++  adapter?: LLMAdapter;
++}
++
++/**
++ * The result of a successful generation: the newly-appended reason row's id +
++ * the reason text + provenance + createdAt. Callers (the worker's projection
++ * refresh, verify/seed) consume the reason directly.
++ */
++export interface GenerateRecommendationReasonResult {
++  recommendationReasonId: string;
++  hotEventId: string;
++  reason: string;
++  source: LlmSource;
++  modelId: string;
++  promptVersion: string;
++  createdAt: Date;
++  traceId: string;
++}
++
++/**
++ * One recommendation_reasons row projected for read. Mirrors the columns the
++ * worker + audit need (no write paths here).
++ */
++export interface RecommendationReasonRecord {
++  id: string;
++  hotEventId: string;
++  reason: string;
++  source: LlmSource;
++  modelId: string;
++  promptVersion: string;
++  createdAt: Date;
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts b/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
+index 62625ca..0792230 100644
+--- a/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
++++ b/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
+@@ -51,6 +51,13 @@ import type {
+  * The projection input: everything refreshPublishedTimelineForEvent needs to
+  * derive one timeline row from a published HotEvent. Loaded in one findUniqueOrThrow
+  * with nested selects (same shape as refreshPublishedReadModel's event load).
++ *
++ * `recommendationReasons` (Story 5.1) is take:1 ordered createdAt desc + id desc
++ * — the latest AI 解读 row, or empty when none exist. projectTimelineFields
++ * projects its `reason` (or null) into published_timeline_entries.recommendation_
++ * reason. This keeps publish-orchestrator the SOLE writer of that column (AD-2/
++ * AD-3b): the recommendation-reason worker only appends recommendation_reasons
++ * and calls refreshPublishedTimelineForEvent to trigger this projection.
+  */
+ interface TimelineProjectionInput {
+   title: string;
+@@ -64,6 +71,7 @@ interface TimelineProjectionInput {
+     };
+   }>;
+   explanationVersions: ReadonlyArray<{ summary: string }>;
++  recommendationReasons: ReadonlyArray<{ reason: string }>;
+ }
+ 
+ /**
+@@ -82,6 +90,7 @@ function projectTimelineFields(input: TimelineProjectionInput): {
+   summary: string;
+   evidenceCount: number;
+   foldedEvidenceRecordIds: string[];
++  recommendationReason: string | null;
+ } | null {
+   if (input.evidence.length === 0) {
+     return null;
+@@ -97,6 +106,15 @@ function projectTimelineFields(input: TimelineProjectionInput): {
+   const latestExplanation = input.explanationVersions[0] ?? null;
+   const summary = latestExplanation !== null ? latestExplanation.summary : "";
+ 
++  // Recommendation reason (Story 5.1): latest RecommendationReason.reason, or
++  // null when none. Derived from the recommendation_reasons append-only table
++  // (explanation module owns it); publish-orchestrator projects the latest into
++  // published_timeline_entries.recommendation_reason — the SOLE writer of that
++  // column (AD-2/AD-3b). null → the 4.2 card renders NO AI 解读 slot (absent
++  // state, never an empty marketing placeholder).
++  const latestReason = input.recommendationReasons[0] ?? null;
++  const recommendationReason = latestReason !== null ? latestReason.reason : null;
++
+   // occurredAt: the MAX member publishedAt. Falls back to the HotEvent's stable
+   // createdAt when all members have null publishedAt (the column is non-null).
+   // A STABLE fallback — not now() — is required so consecutive self-heal passes
+@@ -158,6 +176,7 @@ function projectTimelineFields(input: TimelineProjectionInput): {
+     summary,
+     evidenceCount: input.evidence.length,
+     foldedEvidenceRecordIds,
++    recommendationReason,
+   };
+ }
+ 
+@@ -219,6 +238,11 @@ export async function refreshPublishedTimelineForEvent(
+         take: 1,
+         select: { summary: true },
+       },
++      recommendationReasons: {
++        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++        take: 1,
++        select: { reason: true },
++      },
+     },
+   });
+ 
+@@ -228,6 +252,7 @@ export async function refreshPublishedTimelineForEvent(
+     revisions: event.revisions,
+     evidence: event.evidence,
+     explanationVersions: event.explanationVersions,
++    recommendationReasons: event.recommendationReasons,
+   };
+   const projected = projectTimelineFields(input);
+ 
+@@ -257,7 +282,7 @@ export async function refreshPublishedTimelineForEvent(
+       evidenceCount: projected.evidenceCount,
+       foldedEvidenceRecordIds:
+         projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
+-      recommendationReason: null,
++      recommendationReason: projected.recommendationReason,
+       traceId,
+     },
+     update: {
+@@ -270,6 +295,7 @@ export async function refreshPublishedTimelineForEvent(
+       evidenceCount: projected.evidenceCount,
+       foldedEvidenceRecordIds:
+         projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
++      recommendationReason: projected.recommendationReason,
+       traceId,
+     },
+   });
+@@ -324,6 +350,11 @@ export async function refreshPublishedTimelineAll(
+         take: 1,
+         select: { summary: true },
+       },
++      recommendationReasons: {
++        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++        take: 1,
++        select: { reason: true },
++      },
+     },
+   });
+ 
+@@ -345,6 +376,7 @@ export async function refreshPublishedTimelineAll(
+         revisions: event.revisions,
+         evidence: event.evidence,
+         explanationVersions: event.explanationVersions,
++        recommendationReasons: event.recommendationReasons,
+       };
+       const projected = projectTimelineFields(input);
+       if (projected === null) {
+@@ -367,7 +399,7 @@ export async function refreshPublishedTimelineAll(
+           evidenceCount: projected.evidenceCount,
+           foldedEvidenceRecordIds:
+             projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
+-          recommendationReason: null,
++          recommendationReason: projected.recommendationReason,
+           traceId,
+         },
+         update: {
+@@ -380,6 +412,7 @@ export async function refreshPublishedTimelineAll(
+           evidenceCount: projected.evidenceCount,
+           foldedEvidenceRecordIds:
+             projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
++          recommendationReason: projected.recommendationReason,
+           traceId,
+         },
+       });
+
+=== UNTRACKED NEW FILES ===
+diff --git a/apps/worker/src/queues/recommendation-reason-queue.ts b/apps/worker/src/queues/recommendation-reason-queue.ts
+new file mode 100644
+index 0000000..0c488f7
+--- /dev/null
++++ b/apps/worker/src/queues/recommendation-reason-queue.ts
+@@ -0,0 +1,214 @@
++/**
++ * BullMQ recommendation-reason queue + worker (worker runtime) — Story 5.1.
++ *
++ * AD-4: AI 解读 generation runs as a BullMQ job, off the web request path. The
++ * worker dynamically imports @aguhot/core's `generateRecommendationReason` (the
++ * single writer of recommendation_reasons, AD-5) and runs one pass over
++ * candidate + published hot events that have no recommendation_reason yet.
++ *
++ * This mirrors explain-queue.ts (self-discovering candidate query, per-event
++ * try/catch isolation, no auto-trigger) and daily-digest-queue.ts (the
++ * `const adapter = undefined` honest-degradation injection point). Same
++ * structure: lazy Queue singleton, enqueue helper with job-retention caps, and a
++ * worker that resolves the Prisma client via a dynamic import so the worker
++ * bundle stays the only place that pulls in the domain+DB layer.
++ *
++ * Queue name + job name are kebab-case per ARCHITECTURE-SPINE conventions
++ * ("recommendation-reason"). Like the other workers, this job is independent and
++ * idempotent: it does NOT chain from explain/publish automatically (explain →
++ * recommendation-reason auto orchestration / cron is deferred — same decoupling
++ * as the other jobs). The worker processes candidate + published hot events that
++ * have no recommendation_reasons; running it again is safe
++ * (generateRecommendationReason appends a new row each time, AD-5 — a re-run
++ * over an already-reasoned event produces a fresh appended reason, which is the
++ * intended idempotent append behavior).
++ *
++ * V1 HONESTY RULE (load-bearing, mirrors daily-digest-queue.ts): the worker
++ * runtime resolves NO adapter (real LLM provider procurement is deferred). With
++ * no adapter, generateRecommendationReason returns null and writes nothing, so
++ * prod degrades honestly — the timeline card renders NO AI 解读 slot (absent
++ * state). StubLlmAdapter is TEST-ONLY (verify/e2e import it from core and pass
++ * it to generateRecommendationReason directly); apps/worker MUST NOT import it.
++ *
++ *   // ponytail: real provider wired when procured — V1 no adapter, prod degrades
++ *   // honestly.
++ *
++ * When a real provider lands, the worker will resolve that adapter here (one
++ * line), generateRecommendationReason will flow reasons through, and the append
++ * → projection → card pipeline is already in place.
++ *
++ * Scope: candidate + published (NOT rejected/taken_down). The AC reads "已发布/
++ * 候选 HotEvent" — reasons are generated while an event is a review candidate
++ * (pre-publish) AND for already-published events (so a published event that
++ * predates the worker gets a reason on the next pass). After a successful append
++ * to a PUBLISHED event, the worker calls refreshPublishedTimelineForEvent
++ * (action:"publish") to project the new reason onto the card immediately (no
++ * need to wait for the 15-min timeline self-heal). Candidate events get the
++ * reason appended but skip the projection refresh (their timeline row does not
++ * exist yet — it is created inside decideReview's transaction on publish, which
++ * reads the latest recommendation_reasons row at projection time).
++ */
++
++import { Queue, Worker, type Job } from "bullmq";
++
++import { getRedis } from "./connection.js";
++
++export const RECOMMENDATION_REASON_QUEUE_NAME = "recommendation-reason";
++export const RECOMMENDATION_REASON_JOB_NAME = "recommendation-reason";
++
++export interface RecommendationReasonJobData {
++  traceId: string;
++}
++
++/**
++ * Lazily-constructed Queue for enqueuing recommendation-reason jobs. Reused
++ * across enqueue calls in the same process.
++ */
++let queue: Queue | null = null;
++
++export function getRecommendationReasonQueue(): Queue {
++  if (queue !== null) return queue;
++  queue = new Queue(RECOMMENDATION_REASON_QUEUE_NAME, {
++    connection: getRedis(),
++  });
++  return queue;
++}
++
++/**
++ * Enqueue one recommendation-reason job. Returns the job so callers (e.g. the
++ * verify script) can await its completion.
++ */
++export async function enqueueRecommendationReason(
++  traceId: string,
++): Promise<Job> {
++  const q = getRecommendationReasonQueue();
++  // Prune completed/failed jobs so Redis does not grow unbounded as
++  // recommendation-reason runs accumulate (keep a short tail for operator
++  // inspection).
++  return q.add(
++    RECOMMENDATION_REASON_JOB_NAME,
++    { traceId },
++    {
++      removeOnComplete: 100,
++      removeOnFail: 500,
++    },
++  );
++}
++
++/**
++ * Register the recommendation-reason Worker in this process. The worker resolves
++ * the prisma client, then finds CANDIDATE + PUBLISHED hot events (excludes
++ * rejected/taken_down) that have no recommendation_reasons yet and calls
++ * generateRecommendationReason for each (the single writer of
++ * recommendation_reasons, AD-5). The job resolves as long as the infrastructure
++ * (DB/Redis) is reachable; per-event errors are isolated (one bad event does not
++ * abort the rest — a guardrail violation throws at the generator and is caught
++ * here so that event stays at null while the batch continues).
++ *
++ * V1 worker runtime resolves NO adapter (procurement deferred) →
++ * generateRecommendationReason returns null → the whole job skips → returns
++ * {generated:0, skipped} and prod degrades honestly. This is the intended V1
++ * behavior: the pipeline is correct (verify/e2e prove the happy path with
++ * StubLlmAdapter), but the worker cannot produce real reasons without a real
++ * provider, so it writes nothing rather than fabricating fixture data.
++ *
++ * When an adapter IS available, the worker calls generateRecommendationReason
++ * per event. On a successful append to a PUBLISHED event, it calls
++ * refreshPublishedTimelineForEvent(action:"publish") to project the new reason
++ * onto the card immediately (reuses the same upsert decideReview uses — no new
++ * write path; publish-orchestrator stays the sole writer of
++ * published_timeline_entries.recommendation_reason).
++ */
++export function registerRecommendationReasonWorker(): Worker {
++  const worker = new Worker(
++    RECOMMENDATION_REASON_QUEUE_NAME,
++    async (job: Job) => {
++      const {
++        getPrisma,
++        generateRecommendationReason,
++        refreshPublishedTimelineForEvent,
++      } = await import("@aguhot/core");
++      const prisma = getPrisma();
++      const data = job.data as RecommendationReasonJobData;
++
++      // V1 HONESTY RULE: no real LLM provider is wired (procurement deferred).
++      // With no adapter, generateRecommendationReason cannot run — it would
++      // return null and write nothing. We skip and report it as skipped so the
++      // caller knows the pipeline ran but produced no reasons (honest
++      // degradation). StubLlmAdapter is test-only and is NOT imported here.
++      //
++      // ponytail: real provider wired when procured — V1 no adapter, prod
++      // degrades honestly.
++      const adapter = undefined;
++      if (adapter === undefined) {
++        // Count the pending set anyway so the return value surfaces how many
++        // events are waiting for a reason (SM-7 denominator visibility).
++        const pendingCount = await prisma.hotEvent.count({
++          where: {
++            publicationStatus: { in: ["candidate", "published"] },
++            recommendationReasons: { none: {} },
++          },
++        });
++        return { generated: 0, considered: pendingCount, skipped: pendingCount };
++      }
++
++      // Find CANDIDATE + PUBLISHED hot events with no recommendation_reason yet.
++      // The status filter is load-bearing (see the doc comment above): without it
++      // the worker would also process rejected/taken_down events (wasted work +
++      // reason-chain pollution on non-public events). A left join via the reverse
++      // relation selects events whose recommendationReasons is empty.
++      const pending = await prisma.hotEvent.findMany({
++        where: {
++          publicationStatus: { in: ["candidate", "published"] },
++          recommendationReasons: { none: {} },
++        },
++        select: { id: true, publicationStatus: true },
++      });
++
++      let generated = 0;
++      for (const ev of pending) {
++        try {
++          const result = await generateRecommendationReason({
++            prisma,
++            traceId: data.traceId,
++            hotEventId: ev.id,
++            adapter,
++          });
++          if (result === null) continue;
++          generated += 1;
++          // If the event is already published, project the new reason onto its
++          // timeline card immediately by reusing the existing per-event refresh
++          // (the same upsert decideReview uses on publish — publish-orchestrator
++          // stays the sole writer of published_timeline_entries.recommendation_
++          // reason, AD-2/AD-3b). Candidate events skip this: their timeline row
++          // does not exist yet and will be created inside decideReview's
++          // transaction on publish, reading the latest reason row at projection
++          // time.
++          if (ev.publicationStatus === "published") {
++            await refreshPublishedTimelineForEvent({
++              prisma,
++              traceId: data.traceId,
++              hotEventId: ev.id,
++              action: "publish",
++            });
++          }
++        } catch (error) {
++          // Isolate per-event failures: log and continue so one bad event
++          // (e.g. a guardrail violation) does not abort the whole pass.
++          // generateRecommendationReason returns null (no write) for missing
++          // events / no-evidence events / no-adapter; only guardrail/DB errors
++          // land here. The event stays at null (absent card slot) — the next
++          // worker run naturally retries (no retry loop here; retry is deferred
++          // per spec Never).
++          console.error(
++            `[recommendation-reason-worker] failed for hotEvent ${ev.id}`,
++            error,
++          );
++        }
++      }
++      return { generated, considered: pending.length };
++    },
++    { connection: getRedis() },
++  );
++  return worker;
++}
+diff --git a/apps/worker/src/verify-reason.ts b/apps/worker/src/verify-reason.ts
+new file mode 100644
+index 0000000..2d6c2b2
+--- /dev/null
++++ b/apps/worker/src/verify-reason.ts
+@@ -0,0 +1,520 @@
++/**
++ * Deterministic integration verification for the recommendation-reason (AI 解读)
++ * generation pipeline + projection — Story 5.1.
++ *
++ * Run with: pnpm --filter worker verify:reason (tsx src/verify-reason.ts).
++ *
++ * It exercises generateRecommendationReason with the StubLlmAdapter (test-only,
++ * imported from core — NOT wired in the worker/prod runtime: the recommendation-
++ * reason worker resolves adapter = undefined so prod degrades honestly) against
++ * real local PostgreSQL (NO Redis needed — generateRecommendationReason is pure
++ * logic + a DB append, no BullMQ queue at the generator level, same convention
++ * as verify-digest calling generateDailyDigest directly), then asserts the DB
++ * state — surface-anchored, not mock-based. It prints PASS/FAIL and exits
++ * non-zero iff any assertion fails.
++ *
++ * Flow:
++ *   resetState → seed one source + 2 archived records → clusterEvents
++ *   (candidates) → generateExplanation → decideReview(approve) → published →
++ *   generateRecommendationReason({adapter: StubLlmAdapter}) → assert row
++ *   projected → refreshPublishedTimelineForEvent → assert card non-null →
++ *
++ * Assertions:
++ *   1. generateRecommendationReason appends one recommendation_reasons row
++ *      (source="ai", modelId, promptVersion, createdAt, traceId all present),
++ *      reason = STUB_RECOMMENDATION_REASON.
++ *   2. After refreshPublishedTimelineForEvent, published_timeline_entries.
++ *      recommendation_reason is non-null and equals the appended reason (the
++ *      projection derived it from the latest row — publish-orchestrator is the
++ *      sole writer of that column).
++ *   3. AD-5 append-only: a second call appends a SECOND row; the projection
++ *      reflects the latest.
++ *   4. adapter missing → generateRecommendationReason returns null, writes
++ *      nothing (V1 prod honest-degradation path).
++ *   5. AC fail-fast: an adapter reason that hits the guardrail (forbidden
++ *      phrase) → generateRecommendationReason THROWS (never silently truncates).
++ *   6. AC fail-fast: an adapter reason >40 字 → THROWS.
++ *   7. Missing hotEventId → returns null, no write.
++ *   8. Coverage: SM-7 denominator — non-null recommendation_reason rows / total
++ *      published rows.
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateExplanation,
++  generateRecommendationReason,
++  getPrisma,
++  getLatestRecommendationReason,
++  listPendingCandidates,
++  newTraceId,
++  passesRecommendationGuardrail,
++  RECOMMENDATION_FORBIDDEN_PHRASES,
++  refreshPublishedTimelineForEvent,
++  resetPrisma,
++  StubLlmAdapter,
++  STUB_RECOMMENDATION_REASON,
++  type LLMAdapter,
++  type LlmReasonResult,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++interface Assertion {
++  name: string;
++  ok: boolean;
++  detail?: string;
++}
++
++// Fixed base time so all seeded records land on the same UTC day
++// deterministically.
++const BASE_MS = Date.UTC(2024, 0, 1); // 2024-01-01 UTC
++const HOUR = 60 * 60 * 1000;
++
++async function main(): Promise<void> {
++  // Resolve infra (Block-If: PG must be reachable). No Redis needed — the
++  // derivation is pure logic + a DB append. The recommendation-reason worker
++  // exists (Epic-5 job category) but this verify calls
++  // generateRecommendationReason directly.
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  const assertions: Assertion[] = [];
++
++  try {
++    await resetState(prisma);
++
++    // --- Seed: one source + 2 archived records → clusterEvents → 1 candidate →
++    // approve it so it's published + has an ExplanationVersion (the summary
++    // context the reason adapter reads). ---
++    const source = await prisma.evidenceSource.create({
++      data: {
++        id: newTraceId(),
++        name: "verify-reason-source",
++        kind: "rss",
++        feedUrl: "file:///unused",
++        enabled: true,
++      },
++    });
++
++    // Two overlapping-title records so they merge into ONE candidate via
++    // overlap-coefficient.
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺",
++      summary: "全球芯片供应链短缺",
++      url: "https://verify.test/芯片-1",
++      publishedAt: new Date(BASE_MS),
++    });
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺持续蔓延",
++      summary: "芯片供应链紧张覆盖多个行业",
++      url: "https://verify.test/芯片-2",
++      publishedAt: new Date(BASE_MS + 2 * HOUR),
++    });
++
++    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
++    assertions.push({
++      name: "seed: cluster produced 1 candidate from 2 overlapping records",
++      ok: clusterResult.newCandidates === 1,
++      detail: `newCandidates=${clusterResult.newCandidates}`,
++    });
++
++    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++    if (pending.length !== 1) {
++      throw new Error(
++        `[verify-reason] expected 1 candidate, got ${pending.length}`,
++      );
++    }
++    const candidate = pending[0]!;
++
++    // Generate the deterministic explanation (provides summary context) +
++    // publish so the timeline projection row exists.
++    await generateExplanation({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++    });
++    await decideReview({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      outcome: "approve",
++      reviewer: "verify-reason",
++      note: "publish for reason verify",
++    });
++
++    // --- 1: generateRecommendationReason appends one row, reason = stub ---
++    const adapter = new StubLlmAdapter();
++    const genTrace = newTraceId();
++    const gen1 = await generateRecommendationReason({
++      prisma,
++      traceId: genTrace,
++      hotEventId: candidate.id,
++      adapter,
++    });
++    assertions.push({
++      name: "generateRecommendationReason returns non-null",
++      ok: gen1 !== null,
++      detail: gen1 === null ? "(null result)" : "(non-null)",
++    });
++
++    if (gen1 !== null) {
++      assertions.push({
++        name: "result reason = STUB_RECOMMENDATION_REASON (deterministic)",
++        ok: gen1.reason === STUB_RECOMMENDATION_REASON,
++        detail: `reason=${gen1.reason}`,
++      });
++      assertions.push({
++        name: "result carries source=ai + modelId + promptVersion + traceId",
++        ok:
++          gen1.source === "ai" &&
++          gen1.modelId.trim() !== "" &&
++          gen1.promptVersion.trim() !== "" &&
++          gen1.traceId === genTrace,
++        detail: `source=${gen1.source} modelId=${gen1.modelId} promptVersion=${gen1.promptVersion}`,
++      });
++      assertions.push({
++        name: "result reason ≤40 字 + passes guardrail",
++        ok:
++          gen1.reason.length <= 40 && passesRecommendationGuardrail(gen1.reason),
++        detail: `len=${gen1.reason.length}`,
++      });
++    }
++
++    const rowsAfter1 = await prisma.recommendationReason.count({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "recommendation_reasons row appended (count=1)",
++      ok: rowsAfter1 === 1,
++      detail: `count=${rowsAfter1}`,
++    });
++
++    const row1 = await prisma.recommendationReason.findFirst({
++      where: { hotEventId: candidate.id },
++      orderBy: { createdAt: "asc" },
++    });
++    assertions.push({
++      name: "appended row: source=ai, modelId/promptVersion/traceId carried",
++      ok:
++        row1 !== null &&
++        row1!.source === "ai" &&
++        row1!.modelId.trim() !== "" &&
++        row1!.promptVersion.trim() !== "" &&
++        row1!.traceId === genTrace,
++    });
++
++    // --- 2: projection derives published_timeline_entries.recommendation_reason
++    // from the latest row (publish-orchestrator is the sole writer of that column).
++    // The worker path reuses refreshPublishedTimelineForEvent(action:"publish").
++    await refreshPublishedTimelineForEvent({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      action: "publish",
++    });
++    const timelineRow = await prisma.publishedTimelineEntry.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "projection: published_timeline_entries.recommendation_reason non-null = appended reason",
++      ok:
++        timelineRow !== null &&
++        timelineRow!.recommendationReason === STUB_RECOMMENDATION_REASON,
++      detail:
++        timelineRow === null
++          ? "(no timeline row)"
++          : `reason=${timelineRow!.recommendationReason}`,
++    });
++
++    // --- 3: AD-5 append-only — calling AGAIN appends a SECOND row; projection
++    // reflects the latest. ---
++    await sleep(20);
++    const gen2 = await generateRecommendationReason({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      adapter,
++    });
++    const rowsAfter2 = await prisma.recommendationReason.count({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "AD-5 append-only: second call appends a second row (first untouched)",
++      ok: rowsAfter2 === 2 && gen2 !== null,
++      detail: `count=${rowsAfter2}`,
++    });
++
++    await refreshPublishedTimelineForEvent({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      action: "publish",
++    });
++    const latestViaRead = await getLatestRecommendationReason({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++    });
++    const timelineAfterGen2 = await prisma.publishedTimelineEntry.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "refresh projects the LATEST reason (getLatestRecommendationReason + projection agree)",
++      ok:
++        latestViaRead !== null &&
++        timelineAfterGen2 !== null &&
++        timelineAfterGen2!.recommendationReason === latestViaRead!.reason,
++      detail:
++        latestViaRead === null || timelineAfterGen2 === null
++          ? "(read or projection null)"
++          : `projected=${timelineAfterGen2!.recommendationReason}`,
++    });
++
++    // --- 4: adapter missing → returns null, writes nothing ---
++    // Use a second candidate (publish it) so we have an event with NO reason
++    // to assert the no-adapter path does not write. Reuse the same event: it
++    // already has reasons, so we assert the no-adapter call does not append a
++    // third row.
++    const rowsBeforeNoAdapter = await prisma.recommendationReason.count({
++      where: { hotEventId: candidate.id },
++    });
++    const noAdapter = await generateRecommendationReason({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      // adapter omitted → V1 prod path (recommendation-reason worker resolves
++      // none) → returns null.
++    });
++    assertions.push({
++      name: "adapter missing: generateRecommendationReason returns null",
++      ok: noAdapter === null,
++    });
++    const rowsAfterNoAdapter = await prisma.recommendationReason.count({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "adapter missing: no recommendation_reasons row written",
++      ok: rowsAfterNoAdapter === rowsBeforeNoAdapter,
++      detail: `before=${rowsBeforeNoAdapter} after=${rowsAfterNoAdapter}`,
++    });
++
++    // --- 5: AC fail-fast — forbidden-phrase reason → THROWS ---
++    const forbiddenAdapter: LLMAdapter = {
++      async generateReason(): Promise<LlmReasonResult | null> {
++        // Hit ACTION class (买入).
++        return {
++          reason: "建议买入相关概念股，证据链完整。",
++          modelId: "stub:forbidden",
++          promptVersion: "reason-stub-v1",
++        };
++      },
++    };
++    let threwForbidden = false;
++    try {
++      await generateRecommendationReason({
++        prisma,
++        traceId: newTraceId(),
++        hotEventId: candidate.id,
++        adapter: forbiddenAdapter,
++      });
++    } catch {
++      threwForbidden = true;
++    }
++    assertions.push({
++      name: "AC: forbidden-phrase reason → generateRecommendationReason throws (fail-fast)",
++      ok: threwForbidden,
++    });
++
++    // --- 5b: every forbidden phrase across all 6 classes is actually rejected ---
++    // (guards against a regression where a class list is empty by accident).
++    const allForbidden = Object.values(RECOMMENDATION_FORBIDDEN_PHRASES).flat();
++    let allForbiddenRejected = true;
++    for (const phrase of allForbidden) {
++      const localAdapter: LLMAdapter = {
++        async generateReason(): Promise<LlmReasonResult | null> {
++          return {
++            reason: `事件涉及${phrase}，后续仍需观察。`,
++            modelId: "stub:forbidden",
++            promptVersion: "reason-stub-v1",
++          };
++        },
++      };
++      try {
++        await generateRecommendationReason({
++          prisma,
++          traceId: newTraceId(),
++          hotEventId: candidate.id,
++          adapter: localAdapter,
++        });
++        allForbiddenRejected = false;
++      } catch {
++        // expected
++      }
++    }
++    assertions.push({
++      name: "AC: all 6 classes × all phrases rejected by guardrail (none slips through)",
++      ok: allForbiddenRejected,
++      detail: `phrases checked=${allForbidden.length}`,
++    });
++
++    // --- 6: AC fail-fast — over-length (>40 字) reason → THROWS ---
++    const overlength = "证据链已归档但事件仍在持续演化中多源覆盖提高了可信度然而读者仍需对照原始来源核验细节四十一字";
++    // Confirm it's >40 字 (the test's own precondition).
++    const overlenAdapter: LLMAdapter = {
++      async generateReason(): Promise<LlmReasonResult | null> {
++        return {
++          reason: overlength,
++          modelId: "stub:overlen",
++          promptVersion: "reason-stub-v1",
++        };
++      },
++    };
++    let threwOverlen = false;
++    try {
++      await generateRecommendationReason({
++        prisma,
++        traceId: newTraceId(),
++        hotEventId: candidate.id,
++        adapter: overlenAdapter,
++      });
++    } catch {
++      threwOverlen = true;
++    }
++    assertions.push({
++      name: "AC: >40 字 reason → generateRecommendationReason throws (fail-fast)",
++      ok: threwOverlen && overlength.length > 40,
++      detail: `len=${overlength.length}`,
++    });
++
++    // --- 6b: forbidden-phrase / over-length throws did NOT write rows ---
++    // (fail-fast means no append, not just a throw).
++    const rowsAfterFailFast = await prisma.recommendationReason.count({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "AC: fail-fast throws wrote no extra rows (still count=2 from gen1+gen2)",
++      ok: rowsAfterFailFast === 2,
++      detail: `count=${rowsAfterFailFast}`,
++    });
++
++    // --- 7: missing hotEventId → null, no write ---
++    const missing = await generateRecommendationReason({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: "00000000-0000-0000-0000-000000000000",
++      adapter,
++    });
++    assertions.push({
++      name: "missing hotEventId: returns null (no write)",
++      ok: missing === null,
++    });
++
++    // --- 8: SM-7 coverage — non-null rows / total published rows ---
++    const publishedTotal = await prisma.publishedTimelineEntry.count();
++    const nonNullReason = await prisma.publishedTimelineEntry.count({
++      where: { recommendationReason: { not: null } },
++    });
++    assertions.push({
++      name: "SM-7 coverage: published rows carry a non-null recommendation_reason",
++      ok: publishedTotal > 0 && nonNullReason === publishedTotal,
++      detail: `non-null=${nonNullReason}/${publishedTotal}`,
++    });
++  } finally {
++    await cleanup(prisma);
++    resetPrisma();
++  }
++
++  report(assertions);
++}
++
++// --- helpers -----------------------------------------------------------------
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((resolve) => setTimeout(resolve, ms));
++}
++
++async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  // Order matters for FK constraints. recommendation_reasons has a Cascade FK
++  // to hot_events, but we clear it explicitly before hot_events to keep reset
++  // ordering uniform with verify-digest/verify-timeline. The published_timeline
++  // projection carries the derived recommendation_reason column.
++  await prisma.publishedTimelineEntry.deleteMany({});
++  await prisma.recommendationReason.deleteMany({});
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  await resetState(prisma);
++}
++
++// --- reporting ---------------------------------------------------------------
++
++function report(assertions: Assertion[]): void {
++  console.log("");
++  console.log("=== recommendation-reason verification ===");
++  for (const a of assertions) {
++    const mark = a.ok ? "PASS" : "FAIL";
++    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
++  }
++  const failed = assertions.filter((a) => !a.ok);
++  console.log("");
++  if (failed.length === 0) {
++    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
++    process.exit(0);
++  } else {
++    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
++    process.exit(1);
++  }
++}
++
++void main().catch((error) => {
++  console.error("[verify-reason] fatal", error);
++  process.exit(1);
++});
+diff --git a/packages/core/prisma/migrations/20260712000000_add_recommendation_reason/migration.sql b/packages/core/prisma/migrations/20260712000000_add_recommendation_reason/migration.sql
+new file mode 100644
+index 0000000..d13289c
+--- /dev/null
++++ b/packages/core/prisma/migrations/20260712000000_add_recommendation_reason/migration.sql
+@@ -0,0 +1,32 @@
++-- Story 5.1: recommendation_reasons append-only table (AD-5).
++-- One row per generation of the ≤40 字 AI 解读 (card hook) for a HotEvent. The
++-- explanation module is the sole writer. publish-orchestrator projects the LATEST
++-- row (created_at desc first) into published_timeline_entries.recommendation_reason
++-- (the sole writer of that column stays publish-orchestrator, AD-2/AD-3b). Every
++-- row carries source + model_id + prompt_version for NFR-7 version + provenance
++-- audit. FK onDelete: Cascade so a HotEvent deletion cleans up its reason history.
++
++-- CreateTable
++CREATE TABLE "recommendation_reasons" (
++    "id" TEXT NOT NULL,
++    "hot_event_id" TEXT NOT NULL,
++    "reason" TEXT NOT NULL,
++    "source" TEXT NOT NULL,
++    "model_id" TEXT NOT NULL,
++    "prompt_version" TEXT NOT NULL,
++    "trace_id" TEXT,
++    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "recommendation_reasons_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex: hot_event_id backs the publish-orchestrator latest-row projection
++-- lookup and the worker's `recommendationReasons: { none: {} }` candidate query.
++CREATE INDEX "recommendation_reasons_hot_event_id_idx" ON "recommendation_reasons"("hot_event_id");
++
++-- CreateIndex: created_at backs the createdAt desc + id desc tiebreaker ordering
++-- used to resolve the latest row for the projection.
++CREATE INDEX "recommendation_reasons_created_at_idx" ON "recommendation_reasons"("created_at");
++
++-- AddForeignKey: Cascade so a HotEvent deletion cleans up its AI 解读 history.
++ALTER TABLE "recommendation_reasons" ADD CONSTRAINT "recommendation_reasons_hot_event_id_fkey" FOREIGN KEY ("hot_event_id") REFERENCES "hot_events"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+diff --git a/packages/core/src/modules/explanation/llm-adapter.ts b/packages/core/src/modules/explanation/llm-adapter.ts
+new file mode 100644
+index 0000000..1fde65d
+--- /dev/null
++++ b/packages/core/src/modules/explanation/llm-adapter.ts
+@@ -0,0 +1,30 @@
++/**
++ * LLMAdapter port — the boundary domain modules use to reach external LLM
++ * knowledge sources for AI 解读 (and, transitively, the future 5.2 AI 深读 /
++ * 5.3 趋势研判) (AD-7).
++ *
++ * The explanation sub-domain depends only on this interface; concrete adapters
++ * are resolved and constructed at the call site. In V1 the recommendation-reason
++ * worker resolves NO adapter (real LLM provider procurement is deferred) →
++ * generateRecommendationReason returns null and writes nothing → prod degrades
++ * honestly (AC). The only concrete implementation today is StubLlmAdapter,
++ * which is test-only (verify/e2e import it from core and pass it to
++ * generateRecommendationReason directly; it is NOT imported by apps/worker
++ * runtime code — the worker resolves adapter = undefined).
++ *
++ * This mirrors the sibling in-module ports: theme-adapter.ts (ThemeAdapter) +
++ * association-adapter.ts (AssociationAdapter) + market-reaction/adapter.ts
++ * (MarketDataAdapter) + source-ingest/adapter.ts + digest-adapter.ts
++ * (DigestAdapter). Same shape, same conventions: the port lives in the module it
++ * serves, the interface is defined once in types.ts, and this file is the thin
++ * re-export home (describe-by-purpose, not a separate contracts dir). Story 5.2
++ * (AI 深读) and 5.3 (趋势研判) will reuse this port — ponytail: if cross-module
++ * import friction appears when those land, hoist the port to a shared location
++ * then (a move, not a redesign — the interface shape is general).
++ */
++
++// The interface is defined in types.ts (single source of truth, alongside the
++// other explanation domain types) and re-exported here as the port's home.
++// Importing code reaches the port via either ./types.js or ./llm-adapter.js
++// — both resolve to the same interface.
++export type { LLMAdapter } from "./types.js";
+diff --git a/packages/core/src/modules/explanation/reason-service.ts b/packages/core/src/modules/explanation/reason-service.ts
+new file mode 100644
+index 0000000..4ffcdd0
+--- /dev/null
++++ b/packages/core/src/modules/explanation/reason-service.ts
+@@ -0,0 +1,351 @@
++/**
++ * reason-service — generate the ≤40 字 AI 解读 (recommendation reason) for a
++ * HotEvent from an LLMAdapter's output and append a recommendation_reasons row
++ * (AD-5 append-only).
++ *
++ * Story 5.1. This module owns the recommendation_reasons table (AD-2/AD-5
++ * append-only). It derives a one-line reason for one hot event from:
++ *   1. the event's title + summary (the same context the timeline card renders);
++ *   2. an LLMAdapter's output (a one-line reason + its provenance).
++ *
++ *   - generateRecommendationReason: load HotEvent (missing → null) → read
++ *     adapter reason → validate (non-empty, ≤40 字, passesRecommendationGuardrail;
++ *     throw on violation — fail-fast, never silently truncate) → APPEND one
++ *     recommendation_reasons row (source="ai"). Returns null when the adapter is
++ *     missing (V1 prod: recommendation-reason worker resolves none), the event is
++ *     missing, or the event has no member evidence (no honest derivation; never
++ *     writes a fabricated reason).
++ *
++ * This module NEVER writes published_timeline_entries (publish-orchestrator owns
++ * that projection — the sole writer of its recommendation_reason column, AD-2/
++ * AD-3b). It only appends recommendation_reasons; publish-orchestrator reads the
++ * latest at projection time (projectTimelineFields derives the column from the
++ * latest row). The worker triggers that projection by calling the existing
++ * refreshPublishedTimelineForEvent after a successful append.
++ *
++ * The derivation is pure logic + a DB append (no BullMQ, no SDK), so verify/seed
++ * scripts can call it directly without Redis — same convention as
++ * generateExplanation / generateDailyDigest. The recommendation-reason worker
++ * calls this with adapter = undefined in V1 prod (procurement deferred) → honest
++ * degradation.
++ *
++ * NFR-3/NFR-7/SM-7: every appended row carries source="ai" + modelId +
++ * promptVersion + createdAt for audit + version tracing. The 6-class wording
++ * guardrail (passesRecommendationGuardrail) is enforced at write time so a
++ * forbidden phrase can never reach the card surface.
++ */
++
++import type { PrismaClient } from "../../../generated/client.js";
++import { newTraceId } from "../../shared/ids.js";
++import { ExplanationSource } from "./types.js";
++import type {
++  GenerateRecommendationReasonOptions,
++  GenerateRecommendationReasonResult,
++  LlmReasonResult,
++  RecommendationReasonRecord,
++} from "./types.js";
++
++/**
++ * The max reason length in codepoints (字). PRD §10 + epic-5-context cap the
++ * card-surface AI 解读 at one line ≤40 字. Checked at write time so an
++ * over-length adapter output can never reach the card.
++ */
++export const RECOMMENDATION_REASON_MAX_LENGTH = 40;
++
++/**
++ * The six forbidden phrase classes for AI 解读 (PRD §10). Carried as a
++ * POSITIVELY-ENUMERABLE constant (not a free-text rule) so the guardrail is a
++ * simple substring check — fail-fast at write time, no fuzzy matching, no
++ * silent rewrite. A hit on ANY phrase in ANY class rejects the reason (throws
++ * at the generator; the worker's per-event try/catch isolates it so that one
++ * event stays at null without aborting the batch).
++ *
++ * The six classes (mirrors epic-5-context 措辞黑名单 + spec Design Notes):
++ *   - ACTION (动作类):        buy/sell/position-sizing verbs.
++ *   - RETURN_PREDICTION (收益预测类): guaranteed-direction / multiplier claims.
++ *   - MANIPULATION_FRAME (操纵框架类): "main force / dealer / washing / shipping"
++ *     framing that implies an unseen actor controlling price.
++ *   - RECOMMENDATION_STRENGTH (推荐强度类): strong-recommend / first-pick / must-buy.
++ *   - TIMING_ADVICE (时点建议类): pick-the-bottom / escape-the-top / target-price /
++ *     stop-loss — actionable entry/exit/level cues.
++ *   - OVER_CERTAINTY (过度确定类): "will definitely / certain / inevitable".
++ *
++ * The list is conservative (common terms in each class). A real provider may
++ * emit synonyms outside this list; the guardrail is the LAST line of defense,
++ * not the only one — prompt engineering + operator review (SM-6) carry the
++ * larger share. Extending this list is a one-line edit when new forbidden terms
++ * surface in review.
++ */
++export const RECOMMENDATION_FORBIDDEN_PHRASES = {
++  ACTION: [
++    "买入",
++    "卖出",
++    "建仓",
++    "加仓",
++    "减仓",
++    "清仓",
++  ],
++  RETURN_PREDICTION: [
++    "必涨",
++    "必跌",
++    "翻倍",
++    "翻番",
++    "暴涨",
++    "暴跌",
++  ],
++  MANIPULATION_FRAME: [
++    "主力",
++    "庄家",
++    "洗盘",
++    "拉升",
++    "出货",
++    "诱多",
++  ],
++  RECOMMENDATION_STRENGTH: [
++    "强烈推荐",
++    "首推",
++    "首选",
++    "必买",
++  ],
++  TIMING_ADVICE: [
++    "抄底",
++    "逃顶",
++    "目标价",
++    "止损位",
++  ],
++  OVER_CERTAINTY: [
++    "必将",
++    "一定",
++    "必然",
++    "肯定",
++  ],
++} as const;
++
++/**
++ * The flattened list of every forbidden phrase across all six classes. Used by
++ * passesRecommendationGuardrail's substring check. Computed once at module load
++ * (the constant above is frozen, so the flatten is stable).
++ */
++const ALL_FORBIDDEN_PHRASES: readonly string[] = Object.values(
++  RECOMMENDATION_FORBIDDEN_PHRASES,
++).flat();
++
++/**
++ * Pure function: returns true iff the text is free of every forbidden phrase
++ * across all six classes (PRD §10). Same input → identical output (deterministic,
++ * testable without DB). Mirrors digest-service's noInvestAdvice shape — the
++ * guardrail is a positively-enumerable substring check, fail-fast at write time.
++ *
++ * `text.includes(phrase)` is the right check for CJK: a forbidden phrase like
++ * "买入" appearing anywhere in the reason (even as a substring of a longer
++ * token) is still a forbidden phrase. There is no word-boundary concept for CJK;
++ * substring is both necessary and sufficient.
++ */
++export function passesRecommendationGuardrail(text: string): boolean {
++  return !ALL_FORBIDDEN_PHRASES.some((phrase) => text.includes(phrase));
++}
++
++/**
++ * Generate the ≤40 字 AI 解读 for a HotEvent from the adapter's output, then
++ * APPEND one recommendation_reasons row (source="ai"). Returns null and writes
++ * nothing when:
++ *   - adapter is undefined (V1 prod: recommendation-reason worker resolves
++ *     none), OR
++ *   - the HotEvent does not exist, OR
++ *   - the HotEvent has no member evidence (no honest derivation; never a
++ *     fabricated reason).
++ *
++ * Honest degradation (NFR: never fake data): no adapter / no event / no evidence
++ * → no reason → the timeline card renders NO AI 解读 slot (the 4.2 card renders
++ * the slot only when recommendation_reason is non-null). Never fabricates a
++ * reason from nothing.
++ *
++ * Fail-fast validation: every adapter-returned reason MUST be non-empty AND
++ * ≤40 字 AND free of the six forbidden phrase classes. A reason violating any of
++ * these is rejected — generateRecommendationReason THROWS (the worker's
++ * per-event try/catch isolates it so that one event stays at null without
++ * aborting the batch). It never silently truncates/rewrites a reason, because
++ * that would make the NFR "never advisory / never over-certain" decorative.
++ *
++ * Append-only (AD-5): every successful call inserts a NEW row. Prior rows are
++ * never updated or deleted — the full reason history for an event is the version
++ * series. publish-orchestrator projects the LATEST row (createdAt desc, id desc
++ * tiebreaker) into published_timeline_entries.recommendation_reason.
++ */
++export async function generateRecommendationReason(
++  options: GenerateRecommendationReasonOptions,
++): Promise<GenerateRecommendationReasonResult | null> {
++  const { prisma, traceId, hotEventId, adapter } = options;
++
++  // 1. No adapter → honest degradation (V1 prod: recommendation-reason worker
++  // resolves none). Never fabricate.
++  if (adapter === undefined) return null;
++
++  // 2. Load the HotEvent + confirm it has member evidence (no honest derivation
++  // for an evidence-less event — mirrors generateExplanation's guard). The
++  // title + summary context passed to the adapter is read from the latest
++  // revision + latest ExplanationVersion so the reason is grounded in what the
++  // card actually renders.
++  const event = await prisma.hotEvent.findUnique({
++    where: { id: hotEventId },
++    select: {
++      id: true,
++      title: true,
++      revisions: {
++        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++        take: 1,
++        select: { title: true },
++      },
++      explanationVersions: {
++        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++        take: 1,
++        select: { summary: true },
++      },
++      evidence: { select: { evidenceRecordId: true } },
++    },
++  });
++
++  // Missing event → no honest derivation.
++  if (event === null) return null;
++  // No member evidence → no honest derivation (mirrors generateExplanation).
++  if (event.evidence.length === 0) return null;
++
++  // Effective title + summary (same overlay rule as publish-orchestrator's
++  // timeline projection): latest revision title ?? baseline title; latest
++  // ExplanationVersion summary ?? "".
++  const latestRevision = event.revisions[0] ?? null;
++  const effectiveTitle = latestRevision !== null ? latestRevision.title : event.title;
++  const latestExplanation = event.explanationVersions[0] ?? null;
++  const effectiveSummary = latestExplanation !== null ? latestExplanation.summary : "";
++
++  // 3. Call the adapter with the event context.
++  const raw = await adapter.generateReason({
++    hotEventId,
++    title: effectiveTitle,
++    summary: effectiveSummary,
++  });
++  if (raw === null) return null;
++
++  // 4. Validate the result (non-empty, ≤40 字, guardrail). Throw on any
++  // violation (fail-fast, never silently truncate). The worker's per-event
++  // try/catch isolates the throw so one bad event stays at null without
++  // aborting the batch.
++  validateReason(raw);
++
++  // 5. APPEND a new reason row (source="ai"). Never update or delete prior rows
++  // (AD-5). modelId + promptVersion are carried verbatim from the adapter so the
++  // audit chain records which provider + prompt produced each row (NFR-7).
++  const created = await prisma.recommendationReason.create({
++    data: {
++      id: newTraceId(),
++      hotEventId,
++      reason: raw.reason,
++      source: ExplanationSource.Ai,
++      modelId: raw.modelId,
++      promptVersion: raw.promptVersion,
++      traceId,
++    },
++    select: {
++      id: true,
++      hotEventId: true,
++      reason: true,
++      source: true,
++      modelId: true,
++      promptVersion: true,
++      createdAt: true,
++    },
++  });
++
++  return {
++    recommendationReasonId: created.id,
++    hotEventId: created.hotEventId,
++    reason: created.reason,
++    source: created.source as GenerateRecommendationReasonResult["source"],
++    modelId: created.modelId,
++    promptVersion: created.promptVersion,
++    createdAt: created.createdAt,
++    traceId,
++  };
++}
++
++/**
++ * Return the latest recommendation_reasons row for an event (createdAt desc, id
++ * desc tiebreaker — UUIDv7 ids embed a monotonic timestamp so two reasons
++ * sharing the same createdAt millisecond resolve deterministically to the newer
++ * one), or null if none exist. publish-orchestrator's timeline projection reads
++ * the latest at projection time; this read helper is exposed for verify/seed +
++ * operator audit.
++ */
++export async function getLatestRecommendationReason(
++  options: {
++    prisma: PrismaClient;
++    traceId: string;
++    hotEventId: string;
++  },
++): Promise<RecommendationReasonRecord | null> {
++  const { prisma, hotEventId } = options;
++
++  const latest = await prisma.recommendationReason.findFirst({
++    where: { hotEventId },
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      id: true,
++      hotEventId: true,
++      reason: true,
++      source: true,
++      modelId: true,
++      promptVersion: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) return null;
++  return {
++    id: latest.id,
++    hotEventId: latest.hotEventId,
++    reason: latest.reason,
++    source: latest.source as RecommendationReasonRecord["source"],
++    modelId: latest.modelId,
++    promptVersion: latest.promptVersion,
++    createdAt: latest.createdAt,
++  };
++}
++
++// --- validation ---------------------------------------------------------------
++
++/**
++ * Validate an adapter-returned reason: non-empty, ≤40 字, and passes the
++ * 6-class wording guardrail. Throw on any violation (fail-fast). Pure function
++ * (same input → identical throw), testable without DB.
++ */
++function validateReason(result: LlmReasonResult): void {
++  // Non-empty.
++  if (
++    result.reason === undefined ||
++    result.reason === null ||
++    result.reason.trim() === ""
++  ) {
++    throw new Error(
++      "[reason] adapter returned an empty reason; AC requires a non-empty ≤40 字 reason",
++    );
++  }
++  // ≤40 字 (codepoints — the right measure for CJK 字).
++  if (result.reason.length > RECOMMENDATION_REASON_MAX_LENGTH) {
++    throw new Error(
++      `[reason] adapter returned a reason of ${result.reason.length} 字 (> ${RECOMMENDATION_REASON_MAX_LENGTH}); AC requires ≤40 字`,
++    );
++  }
++  // 6-class wording guardrail (PRD §10).
++  if (!passesRecommendationGuardrail(result.reason)) {
++    throw new Error(
++      "[reason] adapter returned a reason containing a forbidden phrase (action / return-prediction / manipulation-frame / recommendation-strength / timing-advice / over-certainty); PRD §10 forbids these",
++    );
++  }
++  // Provenance must be present (NFR-7 audit). modelId + promptVersion are the
++  // version-tracing pair; an empty value would break the audit chain.
++  if (result.modelId.trim() === "" || result.promptVersion.trim() === "") {
++    throw new Error(
++      "[reason] adapter returned an empty modelId or promptVersion; NFR-7 requires both for audit tracing",
++    );
++  }
++}
+diff --git a/packages/core/src/modules/explanation/stub-llm-adapter.ts b/packages/core/src/modules/explanation/stub-llm-adapter.ts
+new file mode 100644
+index 0000000..e69e204
+--- /dev/null
++++ b/packages/core/src/modules/explanation/stub-llm-adapter.ts
+@@ -0,0 +1,81 @@
++/**
++ * StubLlmAdapter — a deterministic test-only LLMAdapter (AD-7).
++ *
++ * TEST-ONLY: this adapter is NOT wired in the worker/prod runtime. It returns a
++ * fixed ≤40 字 reason for every event. Putting a fixture AI 解读 on a public
++ * timeline card without a real LLM provider would mislead readers — a violation
++ * of the NFR "absence shown as absence, never fabricated completeness" (see spec
++ * Design Notes).
++ *
++ * V1 has a recommendation-reason worker (Epic 5 job category) but the worker
++ * resolves adapter = undefined (procurement deferred) → generateRecommendationReason
++ * returns null → prod degrades honestly (AC). This stub exists solely so
++ * verify/e2e can call generateRecommendationReason directly and exercise the
++ * happy path (proving the pipeline is correct end-to-end: append → projection →
++ * card). apps/worker does NOT import it.
++ *
++ * The fixture is deterministic: every call returns the SAME reason string
++ * (one fixed string, no per-event variation) so verify/e2e assertions on the
++ * projected recommendation_reason are deterministic across runs. The reason is
++ * ≤40 字 and passes the 6-class wording guardrail
++ * (passesRecommendationGuardrail) — verify's self-check asserts both.
++ */
++
++import type { LLMAdapter, LlmReasonResult } from "./types.js";
++
++/**
++ * The fixed AI 解读 the stub reports for every event. Exported so verify/e2e
++ * can assert the projected published_timeline_entries.recommendation_reason
++ * carries exactly this string (deterministic across runs). ≤40 字 and free of
++ * the six forbidden phrase classes (action / return-prediction / manipulation-
++ * frame / recommendation-strength / timing-advice / over-certainty).
++ *
++ * The string is intentionally restrained and factual: it states the evidence is
++ * archived and the event is still unfolding — no buy/sell/price/target/timeframe
++ * wording, no over-certainty. This is the tone baseline a real provider must
++ * match (PRD §10 + epic-5-context 语气基调: 克制、可证、不煽动).
++ */
++export const STUB_RECOMMENDATION_REASON = "证据链已归档，事件仍在演化。";
++
++/**
++ * The fixed provenance the stub reports. modelId + promptVersion are recorded
++ * on every appended recommendation_reasons row (NFR-7). The "stub:" prefix on
++ * modelId makes a stub-generated row trivially distinguishable from a future
++ * real-provider row in the audit chain (a real provider would carry e.g.
++ * "openai:gpt-4o"). promptVersion "reason-stub-v1" names this stub's prompt
++ * template version.
++ */
++const STUB_MODEL_ID = "stub:v1";
++const STUB_PROMPT_VERSION = "reason-stub-v1";
++
++/**
++ * Deterministic stub LLM adapter. Returns a fixed non-null LlmReasonResult on
++ * every call — the STUB_RECOMMENDATION_REASON string + the fixed
++ * modelId/promptVersion provenance. See the module doc for why this is
++ * test-only.
++ *
++ * Always returns a result (never null): the stub's contract is "given any event,
++ * produce the fixture reason". The event's evidence existence is checked
++ * upstream by generateRecommendationReason (which returns null for an
++ * evidence-less event before calling the adapter), so by the time the stub is
++ * reached the event is known to have evidence.
++ */
++export class StubLlmAdapter implements LLMAdapter {
++  async generateReason(args: {
++    hotEventId: string;
++    title: string;
++    summary: string;
++  }): Promise<LlmReasonResult | null> {
++    // Reference args to make the contract explicit (the stub ignores the event
++    // context — a real adapter would use it). Avoids an unused-vars lint while
++    // documenting that the fixture is context-independent.
++    void args.hotEventId;
++    void args.title;
++    void args.summary;
++    return {
++      reason: STUB_RECOMMENDATION_REASON,
++      modelId: STUB_MODEL_ID,
++      promptVersion: STUB_PROMPT_VERSION,
++    };
++  }
++}

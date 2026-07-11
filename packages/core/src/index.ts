@@ -203,13 +203,26 @@ export type {
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
 // append-only ExplanationVersion, AD-5; Story 1.9 — saveExplanation operator
-// revision write-point, source passed by caller, V1 "human").
+// revision write-point, source passed by caller, V1 "human";
+// Story 5.1 — LLMAdapter port AD-7 + StubLlmAdapter test-only +
+// generateRecommendationReason append-only AD-2 + recommendation_reasons table +
+// 6-class wording guardrail; recommendation-reason worker resolves no adapter →
+// prod degrades honestly, stub is verify/e2e-only).
 export {
   generateExplanation,
   getLatestExplanation,
   derivePartitions,
   saveExplanation,
 } from "./modules/explanation/explain-service.js";
+export {
+  generateRecommendationReason,
+  getLatestRecommendationReason,
+  passesRecommendationGuardrail,
+  RECOMMENDATION_REASON_MAX_LENGTH,
+  RECOMMENDATION_FORBIDDEN_PHRASES,
+  StubLlmAdapter,
+  STUB_RECOMMENDATION_REASON,
+} from "./modules/explanation/index.js";
 export {
   ExplanationSource,
 } from "./modules/explanation/types.js";
@@ -222,6 +235,12 @@ export type {
   ExplanationVersionRecord,
   SaveExplanationOptions,
   SaveExplanationResult,
+  LlmSource,
+  LlmReasonResult,
+  LLMAdapter,
+  GenerateRecommendationReasonOptions,
+  GenerateRecommendationReasonResult,
+  RecommendationReasonRecord,
 } from "./modules/explanation/types.js";
 
 // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
