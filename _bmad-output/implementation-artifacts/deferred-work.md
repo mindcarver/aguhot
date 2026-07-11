@@ -940,3 +940,8 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: Next 16 弃用 middleware 约定 → proxy.ts（当前 build 仅警告、可用）
   evidence: apps/web/middleware.ts 在 `pnpm next build`（Next 16.2.10）触发 deprecation 警告："The 'middleware' file convention is deprecated. Please use 'proxy' instead." 功能不受影响（build 通过、/console 路由 dynamic、闸在 request 时评估），但下次升级/清理时需按 Next 16 proxy 约定重命名 middleware.ts→proxy.ts 并核对导出签名。本次修复保留 middleware 命名以最小化改动面，重命名作为独立 follow-up。
   resolution: 待 Next 16 proxy 约定迁移时一并处理。
+
+- source_spec: `_bmad-output/reviews/2026-07-11-salvaged-stories-code-review.md`（收口验证 e2e 实跑发现）
+  summary: merge-split e2e AC4 数据依赖型失败——serial 状态变迁后合并 <select> 条件渲染消失
+  evidence: `apps/web/e2e/merge-split.spec.ts` AC4「合并非法：source 非 published」在 serial 模式下跑在 AC1-3 之后：AC1 把 B 合并进 A（B taken_down）、AC2 拆分 A、AC3 下线重发布 A。到 AC4 时唯一 published 事件是 A 本身。`apps/web/app/(operator)/console/[eventId]/page.tsx:622` 的合并表单 `{otherPublished.length === 0 ? <p>暂无…</p> : <select name="sourceId">}` —— 无其它 published 事件时 <select> 不渲染，AC4 的 `querySelector('select[name="sourceId"]')` 返回 null → 抛 "merge source select not found"。是测试设计假设缺陷（依赖 ambient DB 有其它 published 事件），非本轮 auth/harness 改动引入（4/5 merge-split 测试过、含一次真实合并）。本轮 auth cookie 注入正确、harness build+start 改造让全套件首次实跑。
+  resolution: 待修——AC4 应自带 seed 一个 published source 事件（不依赖 ambient 状态），或显式处理 select 缺席分支。
