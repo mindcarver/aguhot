@@ -935,3 +935,8 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: refreshPublishedReadModel 确定性失败会把该事件永久卡死（每次重试都回滚、无错误分类）
   evidence: review-service.ts:150-155 decideReview step5 已条件更新状态后，step6 refreshPublishedReadModel 若确定性抛错（如某 event 的 published 行 malformed），整事务回滚（含 step5 状态与 append-only 决策记录），运营每次重试都回滚 500，无诊断面告诉是读模型刷新而非竞态。
   resolution: V1 接受（读模型是投影可重建；确定性失败需具体 malformed 数据才会触发）。
+
+- source_spec: `_bmad-output/reviews/2026-07-11-salvaged-stories-code-review.md`（fix commit 复核期间发现）
+  summary: Next 16 弃用 middleware 约定 → proxy.ts（当前 build 仅警告、可用）
+  evidence: apps/web/middleware.ts 在 `pnpm next build`（Next 16.2.10）触发 deprecation 警告："The 'middleware' file convention is deprecated. Please use 'proxy' instead." 功能不受影响（build 通过、/console 路由 dynamic、闸在 request 时评估），但下次升级/清理时需按 Next 16 proxy 约定重命名 middleware.ts→proxy.ts 并核对导出签名。本次修复保留 middleware 命名以最小化改动面，重命名作为独立 follow-up。
+  resolution: 待 Next 16 proxy 约定迁移时一并处理。
