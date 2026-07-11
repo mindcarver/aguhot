@@ -36,9 +36,12 @@ import { submitReview, submitRevision, submitMerge, submitSplit } from "./action
  * ink-*), NOT the 1.6 drifted bg-surface/border-line-subtle/bg-brand-strong.
  *
  * AC3 (operator AiLabel): the revision view renders the effective explanation
- * partitions with the SAME source gating as the public detail page
- * (source !== "human" → <AiLabel>), so the operator sees the same provenance
- * label the public reader sees (uniform, identical on public and operator).
+ * partitions with the SAME source gating as the public detail page — show the
+ * AiLabel only when a published explanation projection row exists AND its
+ * source is one of the system-derived provenances ("template" | "ai"). Absent
+ * projection (null — explain worker has not run yet) and "human" both render no
+ * label, matching the public page's honest degraded state. So the operator sees
+ * the same provenance label the public reader sees (uniform, identical).
  */
 export const dynamic = "force-dynamic";
 
@@ -72,9 +75,11 @@ export default async function CandidateDetailPage({
   let otherPublished: { hotEventId: string; title: string }[] = [];
   // Story 1-9 fix: the published explanation's provenance (source). Read from
   // the published_hot_event_explanations read model so the operator <AiLabel>
-  // gating matches the public detail page EXACTLY (source !== "human"), instead
-  // of the fragile `pending.explanation === true` heuristic that mislabeled an
-  // already-published human explanation as AI right after a republish.
+  // gating matches the public detail page EXACTLY (show the label only when the
+  // projection row exists AND its source is "template"|"ai"; absent/"human" →
+  // no label), instead of the fragile `pending.explanation === true` heuristic
+  // that mislabeled an already-published human explanation as AI right after a
+  // republish.
   let publishedExplanationSource: string | null = null;
   if (detail.publicationStatus === "published") {
     try {
@@ -239,9 +244,11 @@ export default async function CandidateDetailPage({
  *
  * `publishedExplanationSource` is the authoritative provenance string read
  * from published_hot_event_explanations.explanation_source (same column the
- * public detail page reads). AC3 source gating (source !== "human") is applied
- * IDENTICALLY on public and operator — the operator sees exactly the provenance
- * label the public reader sees, with no heuristic.
+ * public detail page reads). AC3 source gating is applied IDENTICALLY on public
+ * and operator: the AiLabel renders only when the projection row exists AND its
+ * source is "template"|"ai" (system-derived). null (absent projection / not
+ * published yet) and "human" both render no label. The operator sees exactly
+ * the provenance label the public reader sees, with no heuristic.
  */
 function RevisionBranch({
   eventId,
@@ -254,23 +261,28 @@ function RevisionBranch({
    * The provenance of the CURRENTLY PUBLISHED explanation, read from the public
    * read model. null when the published explanation projection has not run yet
    * (absent row) or the event is not currently published. "human" → operator-
-   * authored → no AiLabel; "template"/"ai" → system-derived → AiLabel, exactly
-   * like the public detail page.
+   * authored → no AiLabel; "template"/"ai" → system-derived → AiLabel; null →
+   * no label (honest degraded state, same as the public detail page).
    */
   publishedExplanationSource: string | null;
 }) {
   const published = view.published;
   const hasPending = view.pending.title || view.pending.tags || view.pending.explanation;
-  // AC3 source gating: identical to the public detail page
-  // (detail.explanation !== null && detail.explanation.source !== "human").
-  // We gate on the PUBLISHED explanation's source (the currently public one),
-  // read straight from the published read model — NOT on the fragile
-  // `pending.explanation === true` heuristic that mislabeled a human-sourced
-  // explanation as AI right after a republish.
+  // AC3 source gating: identical to the public detail page, which renders the
+  // AiLabel only when an explanation is present AND its source is system-
+  // derived. Here that means: a published row exists, its explanation partition
+  // exists, the projection row exists (non-null source), and the source is one
+  // of the system-derived provenances ("template" | "ai"). Absent projection
+  // row (null source — explain worker has not run yet) → no label, matching the
+  // public page's honest degraded state. "human" (operator-authored revision) →
+  // no label. We use a POSITIVE list (template|ai) rather than `!== "human"`
+  // because `explanation_source` is a free String in the schema (no Prisma
+  // enum), so a future/legacy source value would otherwise slip past the
+  // negative list and get mislabeled as AI.
   const publishedIsAiSourced =
     published !== null &&
     published.explanation !== null &&
-    publishedExplanationSource !== "human";
+    (publishedExplanationSource === "template" || publishedExplanationSource === "ai");
 
   return (
     <section className="mt-10 space-y-6">
