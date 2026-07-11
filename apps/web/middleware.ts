@@ -1,37 +1,50 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { isOperatorEnabled } from "@/lib/operator-gate";
+import { isRequestAuthenticated } from "@/lib/operator-auth";
 
 /**
- * Request-time gate for `/console/*` — the defense-in-depth layer that closes
- * the hole left by the `(operator)/layout.tsx` RSC gate.
+ * Request-time auth gate for `/console/*` — the primary trust boundary.
  *
- * Why this exists (Story fix B follow-up):
- *   The layout's `redirect()` only runs during RSC render (GET). A server
- *   action POST goes straight to the action handler and does NOT re-render the
- *   layout, so without this middleware the `/console/*` write actions
- *   (submitReview / submitMerge / submitSplit / submitRevision) were reachable
- *   in production regardless of `AGUHOT_OPERATOR_ENABLED`. This middleware runs
- *   on BOTH GET and POST (and every other method) for `/console`, so a closed
- *   gate blocks the write path at the network edge before the action executes.
+ * Replaces the old env-flag gate (`isOperatorEnabled`) with REAL auth: a
+ * signed operator cookie (`aguhot:operator`) issued by the login server
+ * action after a timing-safe token comparison. The verify path is shared with
+ * the RSC/action gates via `isRequestAuthenticated` in `lib/operator-auth.ts`,
+ * so middleware, layout, and the 4 server actions all agree on "is this an
+ * authenticated operator request?".
  *
- * Runtime: `nodejs` (NOT edge). Edge middleware only sees build-time-inlined
- * `process.env`, so a runtime-injected `AGUHOT_OPERATOR_ENABLED` would read as
- * `undefined` and the gate would silently fail. The Node.js runtime reads the
- * live runtime env. `isOperatorEnabled()` is the SAME function the layout +
- * server actions use, so all three gates are consistent by construction.
+ *   - `/console/login` is ALWAYS allowed through (an unauthenticated operator
+ *     must be able to reach the login form + the login action).
+ *   - Every other `/console/*` path requires `isRequestAuthenticated(request)`
+ *     to pass; on failure it redirects to `/console/login`.
+ *   - NON-production bypass (inside `isRequestAuthenticated`): dev/test always
+ *     returns true so `pnpm e2e:console` seed/spec paths stay reachable
+ *     without a token.
  *
- * Matcher: matches `/console` and any sub-path (`/console/:path*`), and NOTHING
- * else — `(public)` routes and API routes are untouched. The matcher is a path
- * matcher (not method-based), so POST server-action requests to `/console` are
- * intercepted too (Next.js middleware runs for all methods the matcher covers).
+ * Runtime: `nodejs` (NOT edge). The nodejs runtime reads the live runtime
+ * `process.env.SESSION_SECRET` / `process.env.NODE_ENV` directly; edge
+ * middleware would only see build-time-inlined env and the verify would
+ * silently fail closed (or the NODE_ENV bypass would freeze at build).
  *
- * When closed, redirect to `/` (mirrors the layout's closed-branch behavior —
- * a bare redirect avoids leaking the console's existence via a 403).
+ * Matcher: matches `/console` and any sub-path (`/console/:path*`), and
+ * NOTHING else — `(public)` routes and API routes are untouched. The matcher
+ * is a path matcher (not method-based), so POST server-action requests to
+ * `/console` are intercepted too (Next.js middleware runs for all methods the
+ * matcher covers) — this is what closes the write-path hole (server actions
+ * POST straight to the action handler without re-rendering the layout).
+ *
+ * On a closed gate, redirect to `/console/login` (NOT a 403) — mirrors the
+ * login flow so an operator with an expired cookie re-authenticates smoothly.
  */
 export function middleware(request: NextRequest): NextResponse {
-  if (!isOperatorEnabled()) {
-    return NextResponse.redirect(new URL("/", request.url));
+  const pathname = new URL(request.url).pathname;
+  // The login route + login action must be reachable by an unauthenticated
+  // operator. Without this carve-out the middleware would redirect /console/login
+  // → /console/login → ... infinitely.
+  if (pathname === "/console/login") {
+    return NextResponse.next();
+  }
+  if (!isRequestAuthenticated(request)) {
+    return NextResponse.redirect(new URL("/console/login", request.url));
   }
   return NextResponse.next();
 }
@@ -41,11 +54,11 @@ export const config = {
   // is matched by the literal. Together they cover the whole console surface
   // without touching `(public)` or API routes.
   matcher: ["/console", "/console/:path*"],
-  // Node.js runtime so `process.env.AGUHOT_OPERATOR_ENABLED` reads the
-  // RUNTIME value (edge would only see build-time inlined env → gate stuck).
-  // NOTE: value must be a bare string literal — Turbopack's static config
-  // parser rejects `as const` (Next 16 build error: "runtime needs to be a
-  // static string"). Also: the `middleware` file convention is deprecated in
-  // Next 16 in favor of `proxy.ts`; rename is a follow-up, not blocking.
+  // Node.js runtime so `process.env.SESSION_SECRET` / `process.env.NODE_ENV`
+  // read the RUNTIME value (edge would only see build-time inlined env → gate
+  // stuck). NOTE: value must be a bare string literal — Turbopack's static
+  // config parser rejects `as const` (Next 16 build error: "runtime needs to
+  // be a static string"). Also: the `middleware` file convention is deprecated
+  // in Next 16 in favor of `proxy.ts`; rename is a follow-up, not blocking.
   runtime: "nodejs",
 };

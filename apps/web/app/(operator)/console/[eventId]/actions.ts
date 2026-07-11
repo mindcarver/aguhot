@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { isOperatorEnabled } from "@/lib/operator-gate";
+import { isOperatorAuthenticated } from "@/lib/operator-auth";
 
 import {
   decideReview,
@@ -48,9 +48,10 @@ import {
  * (operator) layout and flows a verified identity here when user-profile lands.
  */
 export async function submitReview(formData: FormData): Promise<void> {
-  // Defense-in-depth: middleware + layout already gate `/console/*`, but a
-  // server action POST does not re-render the layout, so gate here too.
-  if (!isOperatorEnabled()) redirect("/");
+  // Defense-in-depth: middleware is the primary auth gate (covers POST), but a
+  // server action POST does not re-render the layout, so re-check auth here in
+  // case the middleware matcher is ever misconfigured.
+  if (!(await isOperatorAuthenticated())) redirect("/console/login");
   const eventId = formData.get("eventId");
   const outcome = formData.get("outcome");
   const note = formData.get("note");
@@ -130,9 +131,10 @@ export async function submitReview(formData: FormData): Promise<void> {
  * pending diff. This is the AC2 "pending" semantics.
  */
 export async function submitRevision(formData: FormData): Promise<void> {
-  // Defense-in-depth: middleware + layout already gate `/console/*`, but a
-  // server action POST does not re-render the layout, so gate here too.
-  if (!isOperatorEnabled()) redirect("/");
+  // Defense-in-depth: middleware is the primary auth gate (covers POST), but a
+  // server action POST does not re-render the layout, so re-check auth here in
+  // case the middleware matcher is ever misconfigured.
+  if (!(await isOperatorAuthenticated())) redirect("/console/login");
   const eventId = formData.get("eventId");
   const title = formData.get("title");
   const tags = formData.get("tags");
@@ -213,9 +215,10 @@ export async function submitRevision(formData: FormData): Promise<void> {
  * (operator) layout when user-profile lands.
  */
 export async function submitMerge(formData: FormData): Promise<void> {
-  // Defense-in-depth: middleware + layout already gate `/console/*`, but a
-  // server action POST does not re-render the layout, so gate here too.
-  if (!isOperatorEnabled()) redirect("/");
+  // Defense-in-depth: middleware is the primary auth gate (covers POST), but a
+  // server action POST does not re-render the layout, so re-check auth here in
+  // case the middleware matcher is ever misconfigured.
+  if (!(await isOperatorAuthenticated())) redirect("/console/login");
   const targetId = formData.get("targetId");
   const sourceId = formData.get("sourceId");
 
@@ -332,9 +335,10 @@ export async function submitMerge(formData: FormData): Promise<void> {
  * link-move safety as submitMerge).
  */
 export async function submitSplit(formData: FormData): Promise<void> {
-  // Defense-in-depth: middleware + layout already gate `/console/*`, but a
-  // server action POST does not re-render the layout, so gate here too.
-  if (!isOperatorEnabled()) redirect("/");
+  // Defense-in-depth: middleware is the primary auth gate (covers POST), but a
+  // server action POST does not re-render the layout, so re-check auth here in
+  // case the middleware matcher is ever misconfigured.
+  if (!(await isOperatorAuthenticated())) redirect("/console/login");
   const sourceId = formData.get("sourceId");
   const title = formData.get("title");
   // formData.getAll returns all values for the repeated `evidenceRecordId` key

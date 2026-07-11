@@ -23,12 +23,19 @@ const nodeEnvSchema = z.enum(["development", "test", "production"]);
  * its presence at REQUEST time via `requireEnv("SESSION_SECRET")` — mirroring
  * the DATABASE_URL pattern: the public web build stays SESSION_SECRET-free, and
  * only force-dynamic routes / server actions that touch the session resolve it.
+ *
+ * AGUHOT_OPERATOR_TOKEN follows the SAME pattern: optional at the schema level
+ * so `next build` stays token-free. The operator login server action
+ * (apps/web/app/(operator)/console/login/actions.ts) asserts its presence at
+ * REQUEST time via `requireEnv("AGUHOT_OPERATOR_TOKEN")`. The shared operator
+ * key gates `/console/*` in production (signed cookie issued on login).
  */
 export const envSchema = z.object({
   NODE_ENV: nodeEnvSchema.default("development"),
   DATABASE_URL: z.string().url().optional(),
   REDIS_URL: z.string().url().optional(),
   SESSION_SECRET: z.string().min(16).optional(),
+  AGUHOT_OPERATOR_TOKEN: z.string().min(16).optional(),
   NEXT_PUBLIC_APP_NAME: z.string().default("AGUHOT"),
 });
 
