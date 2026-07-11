@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { isOperatorEnabled } from "@/lib/operator-gate";
+
 /**
  * Operator route group layout — Story 1.6.
  *
@@ -39,19 +41,15 @@ export const metadata: Metadata = {
 };
 
 /**
- * Deployment gate for the operator console. In production the console is
- * closed unless `AGUHOT_OPERATOR_ENABLED=true` is set in the runtime env.
- * dev/test are always open (local development + e2e seed need `/console/*`).
+ * Deployment gate lives in `lib/operator-gate.ts` so the SAME gate covers:
+ *   - this layout (RSC render / GET gate), and
+ *   - `middleware.ts` (GET + POST request gate — server actions POST straight
+ *     to the action handler without re-rendering the layout, so the layout gate
+ *     alone does not cover the write path), and
+ *   - each server action's first-line defense-in-depth gate.
  *
- * Read directly from `process.env` — same pattern as `lib/session.ts` reading
- * `process.env.NODE_ENV`. Not added to `packages/config/env.ts`'s schema: this
- * is a Next.js runtime guard, not an infra contract that a workspace asserts;
- * adding a schema field for a one-off boolean gate would be over-engineering.
+ * See `lib/operator-gate.ts` for the env contract.
  */
-function isOperatorEnabled(): boolean {
-  if (process.env.NODE_ENV !== "production") return true;
-  return process.env.AGUHOT_OPERATOR_ENABLED === "true";
-}
 
 export default async function OperatorLayout({
   children,
