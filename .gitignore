@@ -9,6 +9,9 @@ _bmad/config.user.yaml
 .bmad-loop/runs/
 .bmad-loop/cache/
 
+# bmad skill render scratch (intermediate workflow renderings, regenerable)
+_bmad/render/
+
 # Dependencies
 node_modules/
 

@@ -945,3 +945,12 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: merge-split e2e AC4 数据依赖型失败——serial 状态变迁后合并 <select> 条件渲染消失
   evidence: `apps/web/e2e/merge-split.spec.ts` AC4「合并非法：source 非 published」在 serial 模式下跑在 AC1-3 之后：AC1 把 B 合并进 A（B taken_down）、AC2 拆分 A、AC3 下线重发布 A。到 AC4 时唯一 published 事件是 A 本身。`apps/web/app/(operator)/console/[eventId]/page.tsx:622` 的合并表单 `{otherPublished.length === 0 ? <p>暂无…</p> : <select name="sourceId">}` —— 无其它 published 事件时 <select> 不渲染，AC4 的 `querySelector('select[name="sourceId"]')` 返回 null → 抛 "merge source select not found"。是测试设计假设缺陷（依赖 ambient DB 有其它 published 事件），非本轮 auth/harness 改动引入（4/5 merge-split 测试过、含一次真实合并）。本轮 auth cookie 注入正确、harness build+start 改造让全套件首次实跑。
   resolution: 待修——AC4 应自带 seed 一个 published source 事件（不依赖 ambient 状态），或显式处理 select 缺席分支。
+
+---
+
+## 2026-07-11 Sprint Change Proposal — 时间流首页与 AI 分析层（Major pivot）
+
+- source_spec: `_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-11.md`（correct-course 工作流产物，用户已 Approve 进入实施）
+  summary: V1 交付后对照参考站 AI HOT (`https://aihot.virxact.com/all`)，决定把首页从"优先级热点事件流"改为"分钟级时间流 + 同事件精选"，并补三层 AI 分析（列表卡AI 解读 / 事件级 AI 深读 / 跨事件趋势研判）。与 PRD §1"不是财经资讯门户"、FR-1"而不是原始文章列表"直接冲突，属定位级转向（A 股版 AI HOT 方向）。
+  evidence: sprint-change-proposal-2026-07-11.md 含 13 条编辑提案（PRD 8 / Arch 1 / UX 1 / Epic 2 / sprint-status 1），全部 Incremental Approve。新增 Epic 4（时间流首页，4 story）+ Epic 5（AI 分析层，4 story），已入 sprint-status.yaml backlog。lazy senior dev 风险已向用户明示：整个 PRD/brief/architecture 围绕"不做原始资讯流"构建的重机器（evidence-timeline / market-reaction / operator-review）在新定位下价值重心转移；用户知悉并坚持。
+  resolution: Major → 已经本地 bmad-agent-pm / bmad-agent-architect 评审（均 Approve-with-conditions），阻塞项全部应用到源文件。状态：(1) §12 Q6/Q7/Q8/Q9 全部收口（Q8 分层闸门、Q9 假设三合规义务均触发、阻塞 GA 不阻塞 dev）；(2) 架构阻塞 A1-A5 已应用（method A 事务内增量刷新、三实体独立 append-only 表不复用 ExplanationVersion、LLMAdapter 进 5.1 首任务、spec-4-1 Code Map 补齐、折叠阈值归 event-assembly 模块配置）；(3) PM 阻塞 P1-P7 已应用（§10 三合规面、SM-8 重定义+基线、NFR-7 AI provenance、视觉权重、"AI 解读"全局改名+黑名单六类、5.3 拆 5.3a/5.3b、Vision 置顶带+锚定句）；(4) "推荐理由"→"AI 解读"文案定稿（解读 ≠ recommendation，合规风险最低）。待 PM 执行（非文件编辑）：SM-8 基线冻结（Epic 4 dev 启动前）、外部律所书面意见（§10 三合规面，2 周窗口）、算法推荐备案实操（GA 前）。源文件 prd/arch/epics/design/spec-4-1/epic-4-5-context/sprint-status 全部同步；Story 4.1 spec 已 ready-for-dev，可转 /bmad-create-story 正式化或直接交 bmad-loop。fallback（共存方案）被用户否决，仅作 Major 评审失败时备选。

@@ -66,6 +66,12 @@ graph TD
 - **Prevents:** 首页、详情、日报、主题页各自临时拼 SQL，导致排序、可见性和性能行为不一致
 - **Rule:** 所有公开页面与公开 API 只能读取 `published_*` 读模型或等价 materialized read model，不能直接读取原始采集表、处理中间表或运营工作表。发布态读模型由 `publish-orchestrator` 统一生成与刷新。
 
+### AD-3b — 时间流读模型按时间序投影事件与证据条目
+
+- **Binds:** 时间流, 热点事件流, 热点事件详情与证据时间线
+- **Prevents:** 首页临时拼时间序 SQL，导致同事件折叠、盘前/盘中/盘后分段与公开可见性行为不一致
+- **Rule:** 新增 `published_timeline` 读模型，由 `publish-orchestrator` 统一刷新。它按交易日分组、组内分钟级时间倒序投影；同一 `HotEvent` 的多条 `EvidenceSource` 折叠为单条"同事件精选"条目。折叠阈值与单源独立成条规则是 event-assembly 的聚类语义，由 `event-assembly` 模块配置拥有（不进全局 env）。`published_timeline` 只读，不得被 Web 请求路径直接写入。刷新遵循 codebase 既有的"闸门原子"范式：`decideReview` 事务内对 per-HotEvent 折叠条目做增量 upsert（publish）/ delete（takedown），与 `refreshPublishedReadModel` 并列调用，保证 approve/takedown 零可见性窗口；另保留周期性全量自愈 job 做纠偏（该 job 走 BullMQ 异步，AD-4）。timeline 条目是 per-HotEvent 折叠（非全局聚合），可像 `published_hot_events` 一样增量 upsert/delete，不得采用全量幂等覆盖写入引入可见性窗口。
+
 ### AD-4 — 重计算与外部调用全部走异步流水线
 
 - **Binds:** 热点事件流, 热点事件详情与证据时间线, 日报与主题页, 运营复核
@@ -149,6 +155,16 @@ erDiagram
     USER_ACCOUNT ||--o{ FOLLOW_TARGET : follows
     THEME ||--o{ FOLLOW_TARGET : targeted_by
     HOT_EVENT ||--o{ FOLLOW_TARGET : targeted_by
+    HOT_EVENT ||--o{ TIMELINE_ENTRY : appears_as
+    EVIDENCE_SOURCE ||--o{ TIMELINE_ENTRY : contributes_to
+    HOT_EVENT ||--o{ RECOMMENDATION_REASON : has
+    HOT_EVENT ||--o{ DEEP_READ : has
+    DAILY_DIGEST ||--o{ TREND_BRIEFING : summarized_by
+    THEME ||--o{ TREND_BRIEFING : summarized_by
+    TREND_BRIEFING }o--o{ HOT_EVENT : based_on
+    %% AI 生成物三实体各自独立 append-only 表，遵循 AD-5 追加式版本化模式，
+    %% 不复用 ExplanationVersion 表（其固定三段式 schema + NOT NULL hotEventId 不适用）。
+    %% 写拥有权：RecommendationReason/DeepRead 归 explanation 模块；TrendBriefing 归 digest/theme-linking 模块。
 ```
 
 ```mermaid
@@ -205,6 +221,8 @@ packages/
 | 日报与主题页 | `publish-orchestrator` + `theme-linking` + `apps/web/(public)` | AD-3, AD-4, AD-5 |
 | 搜索与关注列表 | `search-read` + `user-profile` + `apps/web/(public)` | AD-3, AD-8 |
 | 运营复核 | `apps/web/(operator)` + `review-workflow` | AD-1, AD-5, AD-6 |
+| 时间流 | `apps/web/(public)` + `event-assembly` + `publish-orchestrator` | AD-2, AD-3, AD-3b, AD-4 |
+| AI 分析层（AI 解读/深读/研判） | `apps/worker` explain jobs + `LLMAdapter` + `publish-orchestrator` | AD-4, AD-5, AD-7, NFR-3 |
 
 ## Deferred
 
@@ -214,3 +232,6 @@ packages/
 - 是否引入 WebSocket / SSE 实时推送：V1 先保证读模型刷新与主动拉取体验。
 - 是否对低风险事件自动发布：先保留 `review-workflow` 闸门，自动发布策略等真实运营负载后再下放。
 - 是否提供机构 API：不属于当前 feature altitude；若进入专业终端或 API 产品线，再起新 spine。
+- `时间流` 折叠阈值：PRD §12 Q6 已收口为 2，由 `event-assembly` 模块配置拥有（不进全局 env），运维可调。
+- `LLMAdapter` 端口：当前 codebase 尚未实现（仅 SourceAdapter/MarketDataAdapter/AssociationAdapter/ThemeAdapter/DigestAdapter 五端口就位，`explain-service.ts` 明文 deferred），Epic 5 Story 5.1 需先落地端口骨架（接口 + Stub + worker resolve，照抄 DigestAdapter 先例）。
+- AI 三种生成物（AI 解读/深读/研判）的模型选择与 prompt 策略：待 Epic 5 story 化时定，spine 只固定走 `LLMAdapter` 端口与 BullMQ 异步 job。
