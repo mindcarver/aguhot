@@ -164,6 +164,13 @@ model HotEvent {
   // write-ownership (AD-2).
   eventThemeSets   EventThemeSet[]
   publishedTheme   PublishedHotEventTheme?
+  // Read-only reverse relation to the timeline read model (Story 4.1).
+  // publish-orchestrator owns published_timeline_entries (AD-3b public
+  // projection of per-HotEvent folded timeline rows). This navigation lets the
+  // self-heal job find published events whose timeline projection is stale and
+  // lets publish-orchestrator delete a HotEvent's timeline rows on takedown. It
+  // does NOT change publish-orchestrator's write-ownership (AD-2/AD-3b).
+  publishedTimeline   PublishedTimelineEntry[]
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -727,4 +734,58 @@ model FollowTarget {
   @@unique([userAccountId, targetKind, targetThemeSlug])
   @@index([userAccountId])
   @@map("follow_targets")
+}
+
+// The public timeline read model (AD-3b, Story 4.1). publish-orchestrator is
+// the sole writer. Each row is a per-HotEvent FOLDED entry projected from the
+// member EvidenceRecords: a HotEvent with >= TIMELINE_FOLD_THRESHOLD (default 2,
+// owned by event-assembly) member sources folds into ONE row carrying the set of
+// folded evidence_record ids; a single-source event is one independent row. The
+// home timeline reads this table grouped by trade_date (A-share trading day),
+// ordered occurred_at DESC within each group (session_tag partitions PreOpen /
+// Intraday / PostClose / NonTrading). Refresh is gate-atomic (AD-3b method A):
+// decideReview's $transaction upserts this row on publish and deletes it on
+// takedown beside refreshPublishedReadModel (zero visibility window); a periodic
+// self-heal BullMQ job does full corrective recompute as a safety net.
+//
+// Row existence = currently published (no status column, mirroring the other
+// published_* read models). trade_date / occurred_at / session_tag are derived
+// via pure functions over A-share trading sessions (session-tag.ts). source_name
+// is the representative source (the latest member's source.name when folded;
+// same source for a single-source entry). title/summary are the HotEvent's
+// effective title (latest revision overlay) and a one-line summary (latest
+// ExplanationVersion summary, or "" when none). evidence_count is the member
+// EvidenceRecord count; folded_evidence_record_ids holds the folded id set (Json
+// string[] — a normalized child table would be over-engineering for a display-
+// only set always read whole, mirroring published_hot_event_associations.items).
+// recommendation_reason is reserved for Story 5.1 (AI 解读) and stays NULL here.
+//
+// FK onDelete: Cascade so a HotEvent deletion cleans up its timeline rows. The
+// composite index (trade_date, session_tag, occurred_at) backs the home feed
+// grouped-descent read and the 4.3 session filter (built once here).
+model PublishedTimelineEntry {
+  id                      String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId              String   @map("hot_event_id")
+  tradeDate               String   @map("trade_date") // YYYY-MM-DD (Asia/Shanghai trading day)
+  occurredAt              DateTime @map("occurred_at") // UTC instant; max member publishedAt
+  sessionTag              String   @map("session_tag") // TimelineSessionTag union (pre_open|intraday|post_close|non_trading)
+  sourceName              String   @map("source_name")
+  title                   String
+  summary                 String
+  evidenceCount           Int      @map("evidence_count")
+  foldedEvidenceRecordIds Json     @default("[]") @map("folded_evidence_record_ids") // string[] (EvidenceRecord.id)
+  recommendationReason    String?  @map("recommendation_reason") // Story 5.1 slot (AI 解读); NULL until 5.1
+  traceId                 String?  @map("trace_id")
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  // One row per published HotEvent — enforced at the DB. The folded projection
+  // is per-event (not global), so a UNIQUE on hot_event_id makes the upsert
+  // race-free: a concurrent in-tx publish and the self-heal job cannot create
+  // two rows for the same event. The unique index also backs takedown's
+  // deleteMany and the upsert's where:{ hotEventId } lookup.
+  @@unique([hotEventId])
+  @@index([tradeDate, sessionTag, occurredAt])
+  @@map("published_timeline_entries")
 }

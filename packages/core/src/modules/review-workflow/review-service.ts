@@ -29,6 +29,7 @@
 import type { PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
 import { refreshPublishedReadModel } from "../publish-orchestrator/publish-service.js";
+import { refreshPublishedTimelineForEvent } from "../publish-orchestrator/timeline-read-model.js";
 import { resolveTransition } from "./transitions.js";
 import type {
   CandidateDecisionEntry,
@@ -148,6 +149,20 @@ export async function decideReview(
     //    takedown delete / none no-op). publish-orchestrator is the sole writer
     //    of published_hot_events; we call it here so the refresh is atomic.
     await refreshPublishedReadModel({
+      prisma: tx as unknown as PrismaClient,
+      traceId,
+      hotEventId,
+      action: transition.action,
+    });
+
+    // 7. Refresh the timeline read model inside the SAME transaction (Story 4.1,
+    //    AD-3b method A). publish-orchestrator is the sole writer of
+    //    published_timeline_entries; the per-HotEvent incremental upsert (publish)
+    //    / delete (takedown) here is the MAIN refresh path, guaranteeing zero
+    //    visibility window between the decision and the home feed. A periodic
+    //    self-heal BullMQ job (refreshPublishedTimelineAll) is a corrective safety
+    //    net only — never the main path. Same `tx` cast pattern as step 6.
+    await refreshPublishedTimelineForEvent({
       prisma: tx as unknown as PrismaClient,
       traceId,
       hotEventId,

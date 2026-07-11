@@ -16,6 +16,7 @@
     "verify:digest": "tsx src/verify-digest.ts",
     "verify:revision": "tsx src/verify-revision.ts",
     "verify:merge-split": "tsx src/verify-merge-split.ts",
+    "verify:timeline": "tsx src/verify-timeline.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "build": "tsc --noEmit"

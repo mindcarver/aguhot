@@ -37,6 +37,7 @@ export {
   PublicationStatus,
   SIMILARITY_THRESHOLD,
   TIME_WINDOW_MS,
+  TIMELINE_FOLD_THRESHOLD,
 } from "./types.js";
 export type {
   ClusterInput,

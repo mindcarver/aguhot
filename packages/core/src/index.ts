@@ -77,6 +77,7 @@ export { mergeHotEvents, splitHotEvent } from "./modules/event-assembly/merge-sp
 export {
   SIMILARITY_THRESHOLD,
   TIME_WINDOW_MS,
+  TIMELINE_FOLD_THRESHOLD,
 } from "./modules/event-assembly/types.js";
 // `PublicationStatus` is exported from the shared kernel above (line 18). It is
 // also re-exported by event-assembly/types.ts for API stability, but TypeScript
@@ -135,6 +136,11 @@ export type {
 // /daily-page queries).
 // Story 3.1 — listPublishedHotEventExplanations (sibling list fn surfacing
 // published_hot_event_explanations.summary for the search-read 3rd corpus).
+// Story 4.1 — published_timeline read model (AD-3b): per-HotEvent incremental
+// refresh inside decideReview's $transaction (refreshPublishedTimelineForEvent)
+// + periodic self-heal job (refreshPublishedTimelineAll) + Web home feed read
+// contract (listPublishedTimeline). deriveSessionTag / deriveTradeDate are the
+// pure A-share session-boundary functions (AC5).
 export {
   refreshPublishedReadModel,
   listPublishedHotEvents,
@@ -146,8 +152,26 @@ export {
   getPublishedDailyDigest,
   listPublishedDailyDigestCoverageDates,
 } from "./modules/publish-orchestrator/publish-service.js";
+export {
+  refreshPublishedTimelineForEvent,
+  refreshPublishedTimelineAll,
+  listPublishedTimeline,
+} from "./modules/publish-orchestrator/timeline-read-model.js";
+export {
+  deriveSessionTag,
+  deriveTradeDate,
+  SHANGHAI_OFFSET_MIN,
+} from "./modules/publish-orchestrator/session-tag.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
+export {
+  TimelineSessionTag,
+} from "./modules/publish-orchestrator/types.js";
 export type {
+  RefreshPublishedTimelineForEventOptions,
+  RefreshPublishedTimelineAllOptions,
+  ListPublishedTimelineOptions,
+  PublishedTimelineEntry,
+  TimelineSessionTagType,
   ListPublishedHotEventsOptions,
   PublishedHotEventSummary,
   GetPublishedHotEventDetailOptions,

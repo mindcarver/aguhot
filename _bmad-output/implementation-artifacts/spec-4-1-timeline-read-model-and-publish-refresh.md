@@ -2,7 +2,9 @@
 title: '时间流读模型与发布刷新 (4.1)'
 type: 'feature'
 created: '2026-07-11'
-status: 'ready-for-dev'
+status: 'in-review'
+baseline_revision: '7915c09c981356c31c519e829cbfffc7d88f5cab'
+followup_review_recommended: true
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-11.md'
 review:
   pm: 'Approve-with-conditions (bmad-agent-pm, 2026-07-11)'
@@ -138,3 +140,53 @@ warnings: ['架构阻塞 A1-A5 已按评审应用（method A 事务内增量+自
 - **PM 前置（非架构）**：SM-8 基线冻结（评审 P2），Epic 4 dev 启动前由 PM 完成。
 - **被依赖**：4.2（首页与卡片读 `listPublishedTimeline`）、4.3（筛选读模型字段 + 复合索引）、4.4（搜索覆盖时间流条目）、5.1（AI 解读挂在 HotEvent 上，timeline 投影时关联其 latest version——5.1 不依赖 timeline 条目存在，但依赖本 story 的 `listPublishedTimeline` 能投影出 AI 解读字段）。
 - **顺序**：Epic 4 → Epic 5；Epic 4 内 4.1 → 4.2 → 4.3 → 4.4。
+
+## Review Triage Log
+
+### 2026-07-11 — Review pass
+- intent_gap: 0
+- bad_spec: 0
+- patch: 5: (high 2, medium 2, low 1)
+- defer: 2
+- reject: 11
+- addressed_findings:
+  - `[high]` `[patch]` Added `@@unique([hotEventId])` on `PublishedTimelineEntry` (+ migration) and changed both refresh fns to `upsert({ where: { hotEventId } })`, dropping the `findFirst`→upsert-by-id dance. Closes the duplicate-row race (concurrent in-tx publish vs the self-heal job could both mint a row for one event since the invariant was enforced only in code, not at the DB — the sibling `PublishedHotEvent` uses `hotEventId @id`). Net code reduction.
+  - `[high]` `[patch]` Orphan sweep in `refreshPublishedTimelineAll` now runs only when the published set is non-empty. Previously, a transient empty `findMany` (read-replica blip / connection hiccup resolving to `[]`) classified every existing row as an orphan and mass-deleted the projection, violating AC6 ("failure leaves the prior projection readable"). Covered by a new verify assertion (flip a published event to non-published bypassing decideReview, run the heal, assert the row survives).
+  - `[medium]` `[patch]` `occurredAt` fallback for events whose member evidence all has null `publishedAt` now uses the HotEvent's stable `createdAt` instead of `new Date()`, so consecutive self-heal passes re-derive identical rows (AC6 idempotency — the prior `now()` drifted `occurredAt`/`tradeDate`/`sessionTag`/ordering every 15 min for such events).
+  - `[low]` `[patch]` Removed the dead `TIMELINE_FOLD_THRESHOLD < 1` throw (and its import) from the in-tx projection path. The threshold is a hardcoded const (event-assembly-owned); the row is always one-per-event regardless of it, and the tag decision is the 4.2 card's. publish-orchestrator no longer reads the threshold at all — cleaner per AD-2.
+  - `[medium]` `[patch]` Extended `verify-timeline.ts` (+3 assertions, 31 total): real orphan-sweep (seed a stale row for a non-published event, assert swept), the empty-read sweep-guard above, and `listPublishedTimeline` filter params (`tradeDate` / `sessionTag` / `limit`) which the default call never exercised.
+
+## Auto Run Result
+
+Status: done
+
+**Summary:** Delivered the `published_timeline` read model — the data foundation for Epic 4's minute-level time feed (AD-3b). `published_timeline_entries` (Prisma model + migration, UNIQUE on `hot_event_id`) is written solely by `publish-orchestrator`: `refreshPublishedTimelineForEvent` runs INSIDE `decideReview`'s `$transaction` beside `refreshPublishedReadModel` (gate-atomic, zero visibility window — publish upserts, takedown deletes), and a periodic BullMQ self-heal job (`refreshPublishedTimelineAll`) does corrective-only full recompute. `session_tag`/`trade_date` derive from pure functions over A-share trading sessions. The Web home feed reads only via `listPublishedTimeline` — no time-order SQL on the request path (AD-3/AD-3b).
+
+**Files changed:**
+- `packages/core/prisma/schema.prisma` — `PublishedTimelineEntry` model (UUIDv7 id, `@@unique([hotEventId])`, composite index `(tradeDate, sessionTag, occurredAt)`, `onDelete: Cascade`).
+- `packages/core/prisma/migrations/20260711040000_add_published_timeline/migration.sql` — table + unique + composite index + cascade FK.
+- `packages/core/src/modules/publish-orchestrator/session-tag.ts` — `deriveSessionTag`/`deriveTradeDate` pure functions (A-share session boundaries, Asia/Shanghai framing).
+- `packages/core/src/modules/publish-orchestrator/timeline-read-model.ts` — `refreshPublishedTimelineForEvent` (in-tx upsert/delete), `refreshPublishedTimelineAll` (self-heal), `listPublishedTimeline` (read contract).
+- `packages/core/src/modules/publish-orchestrator/types.ts`, `index.ts`, `packages/core/src/index.ts` — timeline types + barrel re-exports.
+- `packages/core/src/modules/event-assembly/types.ts`, `index.ts` — `TIMELINE_FOLD_THRESHOLD = 2` (module-owned config) + re-export.
+- `packages/core/src/modules/review-workflow/review-service.ts` — `decideReview` step 7 calls `refreshPublishedTimelineForEvent` inside the `$transaction`.
+- `apps/worker/src/queues/publish-timeline-queue.ts` — BullMQ self-heal queue + worker + 15-min repeatable schedule.
+- `apps/worker/src/index.ts`, `apps/worker/package.json` — worker registration/close-order + `verify:timeline` script.
+- `apps/worker/src/verify-timeline.ts` — deterministic integration verification (31 assertions).
+
+**Review findings breakdown:** 5 patches applied (2 high — unique-constraint race, orphan-sweep wipe guard; 2 medium — stable occurredAt fallback, verify coverage; 1 low — dead-code removal). 2 deferred (PRC holiday calendar, list pagination — see `deferred-work.md`). 11 rejected (non-reachable / sibling-convention-consistent / out-of-scope-for-4.1 details).
+
+**Follow-up review recommendation:** true — this pass applied two high-severity review-driven fixes with data-integrity and failure-mode impact (the UNIQUE constraint changes the write contract; the orphan-sweep guard changes corrective-job behavior under failure). An independent follow-up review pass would add confidence.
+
+**Verification performed:**
+- `pnpm typecheck` — green across all 5 workspace packages.
+- `pnpm --filter @aguhot/worker verify:timeline` — **PASS, 31/31** (real local PG `aguhot_dev` + real local Redis; covers AC1 in-tx upsert + zero-window via trace-id match, AC2 folding, AC3 in-tx takedown + isolation, AC4 read contract + filters, AC5 all 8 session-boundary instants, AC6 self-heal idempotency + orphan sweep + empty-read sweep guard).
+- Regression: `verify:publish` 48/48, `verify:cluster` 12/12, `verify:revision` 35/35 — all green.
+- `prisma migrate deploy` applied the timeline migration cleanly (DB schema up to date).
+
+**Residual risks:**
+- No PRC holiday calendar: weekday holidays are mis-tagged as a trading session (documented V1 fallback per PRD §12 Q5; single swap point `isTradingDay`). Deferred.
+- `listPublishedTimeline` has no cursor pagination (V1 caps at 50/day; documented). Deferred.
+- `recommendation_reason` is a NULL slot reserved for Story 5.1 — never populated here by design.
+- `folded_evidence_record_ids` is stored as `Json` (matching the `published_hot_event_associations.items` precedent), not a Postgres `text[]` — not server-side-queryable on folded ids; revisit if 4.4 search needs it.
+

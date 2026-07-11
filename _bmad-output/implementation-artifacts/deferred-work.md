@@ -954,3 +954,18 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: V1 交付后对照参考站 AI HOT (`https://aihot.virxact.com/all`)，决定把首页从"优先级热点事件流"改为"分钟级时间流 + 同事件精选"，并补三层 AI 分析（列表卡AI 解读 / 事件级 AI 深读 / 跨事件趋势研判）。与 PRD §1"不是财经资讯门户"、FR-1"而不是原始文章列表"直接冲突，属定位级转向（A 股版 AI HOT 方向）。
   evidence: sprint-change-proposal-2026-07-11.md 含 13 条编辑提案（PRD 8 / Arch 1 / UX 1 / Epic 2 / sprint-status 1），全部 Incremental Approve。新增 Epic 4（时间流首页，4 story）+ Epic 5（AI 分析层，4 story），已入 sprint-status.yaml backlog。lazy senior dev 风险已向用户明示：整个 PRD/brief/architecture 围绕"不做原始资讯流"构建的重机器（evidence-timeline / market-reaction / operator-review）在新定位下价值重心转移；用户知悉并坚持。
   resolution: Major → 已经本地 bmad-agent-pm / bmad-agent-architect 评审（均 Approve-with-conditions），阻塞项全部应用到源文件。状态：(1) §12 Q6/Q7/Q8/Q9 全部收口（Q8 分层闸门、Q9 假设三合规义务均触发、阻塞 GA 不阻塞 dev）；(2) 架构阻塞 A1-A5 已应用（method A 事务内增量刷新、三实体独立 append-only 表不复用 ExplanationVersion、LLMAdapter 进 5.1 首任务、spec-4-1 Code Map 补齐、折叠阈值归 event-assembly 模块配置）；(3) PM 阻塞 P1-P7 已应用（§10 三合规面、SM-8 重定义+基线、NFR-7 AI provenance、视觉权重、"AI 解读"全局改名+黑名单六类、5.3 拆 5.3a/5.3b、Vision 置顶带+锚定句）；(4) "推荐理由"→"AI 解读"文案定稿（解读 ≠ recommendation，合规风险最低）。待 PM 执行（非文件编辑）：SM-8 基线冻结（Epic 4 dev 启动前）、外部律所书面意见（§10 三合规面，2 周窗口）、算法推荐备案实操（GA 前）。源文件 prd/arch/epics/design/spec-4-1/epic-4-5-context/sprint-status 全部同步；Story 4.1 spec 已 ready-for-dev，可转 /bmad-create-story 正式化或直接交 bmad-loop。fallback（共存方案）被用户否决，仅作 Major 评审失败时备选。
+
+---
+
+## 2026-07-11 Story 4.1 review — deferred findings
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-1-timeline-read-model-and-publish-refresh.md`（4.1 review pass，code-review 期间发现）
+  summary: `deriveSessionTag`/`deriveTradeDate` 无 PRC 节假日日历——工作日节假日/周末补班日 session_tag 误判
+  evidence: `packages/core/src/modules/publish-orchestrator/session-tag.ts` 的 `isTradingDay` 仅按 Mon–Fri 判定（无节假日表）。一个落在工作日的 PRC 法定假日（如国庆周）会被 tag 为 `Intraday`/`PostClose` 而非 `NonTrading`；一个周末补班日会被 tag 为 `NonTrading` 而市场实际开盘。每年约影响 ~20 个交易日的 `session_tag` 列（`trade_date` 仍为自然日、分组不受影响），会误导 4.3 的盘前/盘中/盘后筛选。PRD §12 Q5 已将日历列为 V1 后置；单一替换点是 `isTradingDay`。`apps/worker/src/verify-timeline.ts` 无节假日 fixture 覆盖。
+  resolution: 待 V1.1——引入 PRC 交易日历（或交易所 holiday feed）注入 `isTradingDay`，并在 verify-timeline 加节假日边界 fixture。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-1-timeline-read-model-and-publish-refresh.md`（4.1 review pass，code-review 期间发现）
+  summary: `listPublishedTimeline` 无游标分页 / `hasMore` 信号——单个 trade_date 超过 limit（默认 50）时静默截断
+  evidence: `packages/core/src/modules/publish-orchestrator/timeline-read-model.ts` 的 `listPublishedTimeline` 用 `take: limit ?? 50` 取首页，`ListPublishedTimelineOptions` 无 `cursor`/`offset` 字段，返回类型无 `totalCount`/`hasMore`。代码注释标明 "No cursor pagination in V1 (tiny scale)"。当一个热门交易日条目 >50 时，首页无法触达后续条目且无 "加载更多" 契约——属文档化的 V1 限制，但规模误判时是静默截断。4.2 首页落地前不构成阻塞。
+  resolution: 待规模评估——若首波真实流量出现单日 >50 条，为 `listPublishedTimeline` 加 cursor 分页 + `hasMore`，并在 4.2 卡片接 "加载更多"。
+

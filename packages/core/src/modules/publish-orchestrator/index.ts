@@ -5,14 +5,16 @@
  * (Story 1.6) + published_hot_event_explanations + published_hot_event_evidence
  * (Story 1.8) + published_hot_event_reactions (Story 2.1) +
  * published_hot_event_associations (Story 2.2) + published_hot_event_themes
- * (Story 2.3). Exposes the read-model refresh command consumed by
- * review-workflow's decideReview, plus the public read queries (feed + detail +
- * association feed-filter + theme-page membership map). The Prisma client lives
- * one level up and is re-exported from the package barrel.
+ * (Story 2.3) + published_timeline_entries (Story 4.1, AD-3b). Exposes the
+ * read-model refresh commands consumed by review-workflow's decideReview (the
+ * per-event refresh runs inside decideReview's $transaction, gate-atomic), plus
+ * the public read queries (feed + detail + association feed-filter + theme-page
+ * membership map + timeline home feed). The Prisma client lives one level up
+ * and is re-exported from the package barrel.
  *
  * This module never writes hot_events, review_decisions, publication_decisions,
  * explanation_versions, market_reaction_snapshots, event_association_sets,
- * event_theme_sets, or any other module's aggregate — only the six published_*
+ * event_theme_sets, or any other module's aggregate — only the published_*
  * read models.
  */
 
@@ -27,8 +29,30 @@ export {
   getPublishedDailyDigest,
   listPublishedDailyDigestCoverageDates,
 } from "./publish-service.js";
+// Story 4.1 (AD-3b): the published_timeline read model. The per-event refresh
+// (refreshPublishedTimelineForEvent) runs inside decideReview's $transaction;
+// the full self-heal (refreshPublishedTimelineAll) runs as a BullMQ job;
+// listPublishedTimeline is the Web home feed read contract.
+export {
+  refreshPublishedTimelineForEvent,
+  refreshPublishedTimelineAll,
+  listPublishedTimeline,
+} from "./timeline-read-model.js";
+export {
+  deriveSessionTag,
+  deriveTradeDate,
+  SHANGHAI_OFFSET_MIN,
+} from "./session-tag.js";
 export type { RefreshPublishedReadModelOptions } from "./publish-service.js";
+export {
+  TimelineSessionTag,
+} from "./types.js";
 export type {
+  RefreshPublishedTimelineForEventOptions,
+  RefreshPublishedTimelineAllOptions,
+  ListPublishedTimelineOptions,
+  PublishedTimelineEntry,
+  TimelineSessionTagType,
   ListPublishedHotEventsOptions,
   PublishedHotEventSummary,
   GetPublishedHotEventDetailOptions,

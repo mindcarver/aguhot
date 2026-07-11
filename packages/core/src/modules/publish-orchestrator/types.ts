@@ -450,3 +450,105 @@ export interface ListPublishedDailyDigestCoverageDatesOptions {
   prisma: PrismaClient;
   traceId: string;
 }
+
+// --- Story 4.1: published_timeline read model (AD-3b) ------------------------
+
+/**
+ * The A-share trading session a timeline entry's `occurredAt` falls into.
+ * Stored as a String column (no TS enum, per erasableSyntaxOnly). Boundary
+ * instants are Asia/Shanghai-local; see deriveSessionTag for the exact ranges:
+ *   - pre_open:    09:00 <= local < 09:30 (集合竞价 + 开盘前)
+ *   - intraday:    09:30 <= local < 11:30 or 13:00 <= local < 15:00 (连续竞价)
+ *   - post_close:  15:00 <= local < 23:59:59 (收盘后) — also covers 11:30–13:00
+ *                  (午间休市) since neither intraday continuous auction applies.
+ *   - non_trading: any other local time on a non-trading day OR outside the
+ *                  trading window (weekends, holidays, before 09:00).
+ * Non-trading days fall back to natural-day grouping for trade_date (PRD §12 Q5).
+ */
+export const TimelineSessionTag = {
+  PreOpen: "pre_open",
+  Intraday: "intraday",
+  PostClose: "post_close",
+  NonTrading: "non_trading",
+} as const;
+
+export type TimelineSessionTagType =
+  (typeof TimelineSessionTag)[keyof typeof TimelineSessionTag];
+
+/**
+ * Options for refreshPublishedTimelineForEvent — the per-HotEvent incremental
+ * upsert/delete that runs INSIDE decideReview's $transaction beside
+ * refreshPublishedReadModel (AD-3b method A, gate-atomic, zero visibility
+ * window). `action` is the same PublishAction resolved by resolveTransition;
+ * publish → upsert this event's folded timeline row, takedown → delete it,
+ * none → no-op. The caller passes its `tx` transaction client cast to
+ * PrismaClient (same pattern as refreshPublishedReadModel).
+ */
+export interface RefreshPublishedTimelineForEventOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  action: import("../review-workflow/types.js").PublishAction;
+}
+
+/**
+ * Options for refreshPublishedTimelineAll — the periodic full self-heal
+ * recompute (BullMQ job, AD-4). It recomputes the published_timeline_entries
+ * projection for ALL currently-published HotEvents: re-inserts any missing
+ * rows, deletes any rows whose HotEvent is no longer published, and re-derives
+ * trade_date/session_tag/title/summary/folded ids for the current published
+ * set. Corrective only — the main refresh path is the in-transaction
+ * refreshPublishedTimelineForEvent. Idempotent (full overwrite of the table's
+ * published content); failure leaves the prior projection readable.
+ */
+export interface RefreshPublishedTimelineAllOptions {
+  prisma: PrismaClient;
+  traceId: string;
+}
+
+/**
+ * Options for listPublishedTimeline — the Web home feed read contract (AD-3 /
+ * AD-3b). Reads only published_timeline_entries; never assembles time-order SQL
+ * on the request path. `tradeDate` filters to one trading day (YYYY-MM-DD);
+ * when omitted, returns the latest day that has entries. `sessionTag` filters
+ * by A-share session (Story 4.3). `limit` caps the page (default 50). No cursor
+ * pagination in V1 — tiny scale; mirror listPublishedHotEvents' full-read shape.
+ */
+export interface ListPublishedTimelineOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  tradeDate?: string;
+  sessionTag?: TimelineSessionTagType;
+  limit?: number;
+}
+
+/**
+ * One published timeline entry — the per-HotEvent folded projection the home
+ * feed card renders. Mirrors published_timeline_entries columns. The 4.2 card
+ * renders: occurredAt (timestamp) → sourceName → title → summary → evidence_count,
+ * with `recommendationReason` as the Story 5.1 AI 解读 slot (NULL until 5.1).
+ *   - hotEventId: stable FK to hot_events (whole card clicks into the detail page).
+ *   - tradeDate / occurredAt / sessionTag: derived from the latest member
+ *     evidence publishedAt (Asia/Shanghai trading-day framing).
+ *   - sourceName: representative source name (latest member's source.name).
+ *   - title: effective HotEvent title (latest revision overlay ?? HotEvent.title).
+ *   - summary: one-line summary (latest ExplanationVersion.summary ?? "").
+ *   - evidenceCount: number of member EvidenceRecords.
+ *   - foldedEvidenceRecordIds: the set of member EvidenceRecord ids this entry
+ *     folds (>= threshold → "同事件精选"; 1 source → single-element set).
+ *   - recommendationReason: Story 5.1 AI 解读 slot; NULL here.
+ */
+export interface PublishedTimelineEntry {
+  id: string;
+  hotEventId: string;
+  tradeDate: string;
+  occurredAt: Date;
+  sessionTag: TimelineSessionTagType;
+  sourceName: string;
+  title: string;
+  summary: string;
+  evidenceCount: number;
+  foldedEvidenceRecordIds: string[];
+  recommendationReason: string | null;
+}
+

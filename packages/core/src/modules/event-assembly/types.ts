@@ -40,6 +40,20 @@ export const SIMILARITY_THRESHOLD = 0.7;
 export const TIME_WINDOW_MS = 72 * 60 * 60 * 1000; // 72h
 
 /**
+ * Timeline fold threshold (Story 4.1, PRD §12 Q6 closed). A HotEvent with at
+ * least this many member EvidenceRecords folds into ONE "同事件精选" timeline
+ * entry; a single-source event stays as one independent entry. Owned by
+ * event-assembly because folding is clustering semantics (the same kind of
+ * "are these one thing?" decision as SIMILARITY_THRESHOLD). publish-orchestrator
+ * READS this constant when projecting published_timeline_entries; it never
+ * writes it, and it is deliberately NOT in global env.ts (architect review
+ * decision: cluster semantics do not belong in global config). Operator-
+ * adjustable in a future story by making this a per-deployment override; V1 is
+ * the fixed default of 2.
+ */
+export const TIMELINE_FOLD_THRESHOLD = 2;
+
+/**
  * The input shape for clustering: the minimal projection of an archived
  * EvidenceRecord needed to group records into candidate events. `publishedAt`
  * may be null (a missing_fields record has no publication time); such records
