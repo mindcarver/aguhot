@@ -12,12 +12,12 @@ context:
   - '{project-root}/_bmad-output/planning-artifacts/architecture/architecture-aguhot-2026-07-09/ARCHITECTURE-SPINE.md'
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
-warnings: ['架构阻塞 A1-A5 已按评审应用（method A 事务内增量+自愈 job、读 fn、session_tag 派生、折叠归 event-assembly）；PM 阻塞 P2 SM-8 基线冻结须 Epic 4 dev 启动前完成；GA 受 §10 合规复核阻塞（非 dev 阻塞）']
+warnings: ['架构阻塞 A1-A5 已按评审应用（method A 事务内增量+自愈 job、读 fn、session_tag 派生、折叠归 event-assembly）；PM 阻塞 P2 SM-8 基线已冻结（pre-launch baseline，2026-07-11，详见 sprint-change-proposal §待 PM 执行），dev 启动前置解除；GA 受 §10 合规复核阻塞（非 dev 阻塞）']
 ---
 
 # 预稿说明
 
-本 spec 对应 Sprint Change Proposal 2026-07-11 新增 Epic 4 Story 4.1，已经 bmad-agent-pm 与 bmad-agent-architect 评审（均 Approve-with-conditions），架构阻塞项 A1-A5 已按评审意见应用。PM 阻塞 P2（SM-8 基线冻结）须在 Epic 4 dev 启动前由 PM 完成；§10 合规复核阻塞 GA 不阻塞 dev。审批通过后转 `/bmad-create-story` 正式化并补 `baseline_revision` 等字段。
+本 spec 对应 Sprint Change Proposal 2026-07-11 新增 Epic 4 Story 4.1，已经 bmad-agent-pm 与 bmad-agent-architect 评审（均 Approve-with-conditions），架构阻塞项 A1-A5 已按评审意见应用。PM 阻塞 P2（SM-8 基线冻结）已于 2026-07-11 冻结为 pre-launch baseline（项目当前无真实流量，深度阅读占比基线值待首波真实流量后立基；冻结动作本身已完成、可追溯，解除 dev 启动前置）；§10 合规复核阻塞 GA 不阻塞 dev。审批通过后转 `/bmad-create-story` 正式化并补 `baseline_revision` 等字段。
 
 <intent-contract>
 
@@ -39,7 +39,7 @@ warnings: ['架构阻塞 A1-A5 已按评审应用（method A 事务内增量+自
 - 不变性：状态/种类用 `const … as const` + union，禁用 TS `enum`；类型导入用 `import type`；相对导入带 `.js` 后缀。
 
 **Block If:**
-- PM 未完成 SM-8 基线冻结（评审 P2）→ 阻塞 Epic 4 dev 启动（非本 story 架构阻塞，但 PM 须先落）。
+- ~~PM 未完成 SM-8 基线冻结（评审 P2）→ 阻塞 Epic 4 dev 启动。~~（已于 2026-07-11 冻结为 pre-launch baseline，前置解除。）
 - `refreshPublishedTimelineForEvent` 在 `decideReview` 事务内针对本地 PostgreSQL 集成验证失败且非可自愈原因 → HALT。
 - 本地 Redis 不可达（自愈 job 集成验证）→ HALT，不得跳过。
 
