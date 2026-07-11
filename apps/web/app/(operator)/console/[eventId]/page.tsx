@@ -70,6 +70,12 @@ export default async function CandidateDetailPage({
   // page renders the existing 1.6 ReviewForm unchanged.
   let revisionView = null;
   let otherPublished: { hotEventId: string; title: string }[] = [];
+  // Story 1-9 fix: the published explanation's provenance (source). Read from
+  // the published_hot_event_explanations read model so the operator <AiLabel>
+  // gating matches the public detail page EXACTLY (source !== "human"), instead
+  // of the fragile `pending.explanation === true` heuristic that mislabeled an
+  // already-published human explanation as AI right after a republish.
+  let publishedExplanationSource: string | null = null;
   if (detail.publicationStatus === "published") {
     try {
       revisionView = await getPublishedEventForRevision({
@@ -82,6 +88,15 @@ export default async function CandidateDetailPage({
       // back to the ReviewForm-only view rather than crashing the whole page.
       revisionView = null;
     }
+    // Fetch the authoritative published explanation source (same column the
+    // public detail page reads via getPublishedHotEventDetail). Absent when the
+    // explain worker has not projected yet → treat as not-AI (no label), same
+    // honest degraded state as the public page.
+    const publishedExplanation = await prisma.publishedHotEventExplanation.findUnique({
+      where: { hotEventId: eventId },
+      select: { explanationSource: true },
+    });
+    publishedExplanationSource = publishedExplanation?.explanationSource ?? null;
     // Load the other published events for the merge-source <select>. Exclude the
     // current event (merging an event into itself is rejected by submitMerge +
     // mergeHotEvents, so it is not offered). Reuses the public read query —
@@ -151,7 +166,11 @@ export default async function CandidateDetailPage({
             event is published AND the revision view loaded. Shows the current
             public version, the pending diff, and the revision + republish form. */}
         {detail.publicationStatus === "published" && revisionView !== null ? (
-          <RevisionBranch eventId={eventId} view={revisionView!} />
+          <RevisionBranch
+            eventId={eventId}
+            view={revisionView!}
+            publishedExplanationSource={publishedExplanationSource}
+          />
         ) : null}
 
         {/* Merge / split branch (Story 1.10). Rendered alongside the revision
@@ -217,35 +236,41 @@ export default async function CandidateDetailPage({
  *      what the form is pre-filled with and what a republish would project).
  *   4. The revision form (submitRevision) + republish + takedown buttons
  *      (submitReview).
+ *
+ * `publishedExplanationSource` is the authoritative provenance string read
+ * from published_hot_event_explanations.explanation_source (same column the
+ * public detail page reads). AC3 source gating (source !== "human") is applied
+ * IDENTICALLY on public and operator — the operator sees exactly the provenance
+ * label the public reader sees, with no heuristic.
  */
 function RevisionBranch({
   eventId,
   view,
+  publishedExplanationSource,
 }: {
   eventId: string;
   view: import("@aguhot/core").PublishedEventRevisionView;
+  /**
+   * The provenance of the CURRENTLY PUBLISHED explanation, read from the public
+   * read model. null when the published explanation projection has not run yet
+   * (absent row) or the event is not currently published. "human" → operator-
+   * authored → no AiLabel; "template"/"ai" → system-derived → AiLabel, exactly
+   * like the public detail page.
+   */
+  publishedExplanationSource: string | null;
 }) {
   const published = view.published;
   const hasPending = view.pending.title || view.pending.tags || view.pending.explanation;
-  // Effective explanation source gating (AC3): the operator sees the same
-  // provenance label the public reader sees. Since the operator is editing the
-  // working copy, we label the EFFECTIVE explanation. But the effective could
-  // be the human-typed draft (not yet public) — once it's human-sourced it is
-  // not system-derived, so no AiLabel. We can only know the source after
-  // republish (it's on the published read model). For the working copy we show
-  // the AiLabel only when the PUBLISHED explanation is non-human (i.e. the
-  // currently public one is system-derived); the draft the operator types is
-  // assumed human (they typed it) and gets no label once republished.
+  // AC3 source gating: identical to the public detail page
+  // (detail.explanation !== null && detail.explanation.source !== "human").
+  // We gate on the PUBLISHED explanation's source (the currently public one),
+  // read straight from the published read model — NOT on the fragile
+  // `pending.explanation === true` heuristic that mislabeled a human-sourced
+  // explanation as AI right after a republish.
   const publishedIsAiSourced =
     published !== null &&
     published.explanation !== null &&
-    // The published read model carry explanationSource; PublishedEventRevisionView
-    // does not surface the published source string (only partitions), so we
-    // approximate: if the published explanation differs from effective, the
-    // public one is still the prior (template) version → AI-sourced. This label
-    // is informational for the operator; the authoritative gating lives on the
-    // public detail page where source is read from the read model.
-    view.pending.explanation === true;
+    publishedExplanationSource !== "human";
 
   return (
     <section className="mt-10 space-y-6">
