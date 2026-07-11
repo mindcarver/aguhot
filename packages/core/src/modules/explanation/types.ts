@@ -235,6 +235,26 @@ export interface LLMAdapter {
    * 模式"); the second method is added here rather than spawning a parallel port.
    */
   generateDeepRead(args: LlmDeepReadArgs): Promise<LlmDeepReadResult | null>;
+
+  /**
+   * Resolve the single-paragraph AI 趋势研判 (cross-event trend briefing) for the given
+   * coverageDate's daily digest page. Implementations return a NON-EMPTY briefing
+   * (≤ TREND_BRIEFING_MAX_LENGTH = 200 字, free of the six forbidden phrase classes)
+   * plus their own modelId + promptVersion. Return null when no briefing is available
+   * (the caller writes nothing and degrades honestly). The returned briefing is
+   * validated by generateTrendBriefing (non-empty, ≤200 字, passes guardrail) —
+   * violations throw at the generator, never silently truncated.
+   *
+   * The adapter receives the day's published hot events (hotEventId + title + summary
+   * per event) so the briefing is grounded in the factual evidence timeline, not
+   * fabricated (NFR-2: AI content must not fabricate sourceless conclusions; must stay
+   * consistent with the evidence timeline). Story 5.3 reuses the same LLMAdapter port
+   * 5.1/5.2 introduced (epic-5-context :108 "三者共用端口"); this third method is added
+   * here rather than spawning a parallel port.
+   */
+  generateTrendBriefing(
+    args: LlmTrendBriefingArgs,
+  ): Promise<LlmTrendBriefingResult | null>;
 }
 
 /**
@@ -385,4 +405,51 @@ export interface DeepReadRecord {
   modelId: string;
   promptVersion: string;
   createdAt: Date;
+}
+
+// --- Story 5.3: LLMAdapter.generateTrendBriefing + TrendBriefing (daily-page AI 趋势研判)
+
+/**
+ * One unit of LLMAdapter trend-briefing output — the single-paragraph cross-event AI
+ * 趋势研判 for one coverageDate's daily digest page. The adapter resolves the paragraph
+ * from the day's published hot events (title + summary per event) and returns it with its
+ * own provenance (modelId + promptVersion, recorded on the appended row for NFR-7).
+ * trend-briefing-service validates the briefing is non-empty, ≤ TREND_BRIEFING_MAX_LENGTH
+ * (200 字), and passes the 6-class wording guardrail (passesRecommendationGuardrail,
+ * reused from 5.1 — the guardrail is generic PRD §10, not reason-specific) — violations
+ * throw (fail-fast, never silently truncates/rewrites).
+ *
+ *   - briefing: NON-EMPTY single-paragraph cross-event trend briefing, ≤200 字, free of
+ *     the six forbidden phrase classes (action / return-prediction / manipulation-frame /
+ *     recommendation-strength / timing-advice / over-certainty).
+ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future real
+ *     provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the appended row.
+ *   - promptVersion: the prompt template version (e.g. "trendbriefing-stub-v1").
+ *     Recorded verbatim on the appended row.
+ */
+export interface LlmTrendBriefingResult {
+  briefing: string;
+  modelId: string;
+  promptVersion: string;
+}
+
+/**
+ * The context passed to LLMAdapter.generateTrendBriefing. Carries the coverageDate plus
+ * the day's published hot events (hotEventId + title + summary per event) so the adapter
+ * can ground the cross-event briefing in the factual evidence timeline (NFR-2: AI content
+ * must not fabricate sourceless conclusions; must stay consistent with the evidence
+ * timeline). events is a ReadonlyArray so the adapter cannot mutate the caller's array.
+ *
+ * Each event's title is the latest-revision overlay title (same overlay rule as the
+ * detail-page projection); each event's summary is the latest ExplanationVersion summary
+ * (same overlay rule as the deep-read adapter). The adapter receives the same grounding
+ * the daily digest renders.
+ */
+export interface LlmTrendBriefingArgs {
+  coverageDate: Date;
+  events: ReadonlyArray<{
+    hotEventId: string;
+    title: string;
+    summary: string;
+  }>;
 }

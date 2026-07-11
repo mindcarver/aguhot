@@ -66,6 +66,7 @@ import {
   STUB_DEEP_READ,
   type LLMAdapter,
   type LlmDeepReadResult,
+  type LlmTrendBriefingResult,
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
@@ -423,6 +424,9 @@ async function main(): Promise<void> {
       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
         return null;
       },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
+        return null;
+      },
     };
     let threwForbidden = false;
     try {
@@ -468,6 +472,9 @@ async function main(): Promise<void> {
           async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
             return null;
           },
+          async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
+            return null;
+          },
         };
         try {
           await generateDeepRead({
@@ -505,6 +512,9 @@ async function main(): Promise<void> {
       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
         return null;
       },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
+        return null;
+      },
     };
     let threwOverlen = false;
     try {
@@ -535,6 +545,9 @@ async function main(): Promise<void> {
         };
       },
       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
         return null;
       },
     };
@@ -585,6 +598,9 @@ async function main(): Promise<void> {
       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
         return null;
       },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
+        return null;
+      },
     };
     const rowsBefore120 = await prisma.deepRead.count({
       where: { hotEventId: candidate.id },
@@ -624,6 +640,9 @@ async function main(): Promise<void> {
         };
       },
       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+        return null;
+      },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
         return null;
       },
     };

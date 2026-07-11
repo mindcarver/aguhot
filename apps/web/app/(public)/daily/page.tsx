@@ -5,11 +5,12 @@ import { AiLabel } from "@/components/chips";
 import {
   getPrisma,
   getPublishedDailyDigest,
+  getPublishedTrendBriefing,
   listPublishedDailyDigestCoverageDates,
   listPublishedHotEvents,
   newTraceId,
 } from "@aguhot/core";
-import type { DailyDigestEntry } from "@aguhot/core";
+import type { DailyDigestEntry, PublishedTrendBriefing } from "@aguhot/core";
 
 export const metadata: Metadata = {
   title: "日报",
@@ -86,6 +87,22 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
         })
       : null;
 
+  // Read the published AI 趋势研判 (trend briefing) for the target coverageDate
+  // (Story 5.3). Null when generateTrendBriefing has not produced a briefing (V1
+  // prod: daily-digest worker resolves no llmAdapter → never produced, OR the
+  // coverageDate has no eligible events) — <DigestContent> renders the honest
+  // degraded state ("AI 趋势研判生成中。") in that case. Only fetched when a digest
+  // exists (the trend briefing renders inside <DigestContent>, so a missing digest
+  // means <DegradedContent> renders and the briefing is moot).
+  const trendBriefing =
+    coverageDate !== undefined && digest !== null
+      ? await getPublishedTrendBriefing({
+          prisma,
+          traceId: newTraceId(),
+          coverageDate,
+        })
+      : null;
+
   // For the degraded state: count the day's eligible published events
   // (latestEvidenceAt UTC day = coverageDate) so the page shows the current
   // coverage scope. Falls back to "今日" when no coverageDate is resolved.
@@ -128,7 +145,7 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
       </header>
 
       {digest !== null ? (
-        <DigestContent digest={digest} />
+        <DigestContent digest={digest} trendBriefing={trendBriefing} />
       ) : (
         <DegradedContent
           coverageDate={degradedScopeDate}
@@ -140,11 +157,22 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
 }
 
 /**
- * Render the digest: coverage date + generation time header, then one clickable
- * row per entry (already sorted by evidenceCount DESC at generation time).
+ * Render the digest: coverage date + generation time header, then the AI 趋势研判
+ * (trend briefing) block (Story 5.3), then one clickable row per entry (already
+ * sorted by evidenceCount DESC at generation time).
+ *
+ * The trend briefing renders between the coverage/generation metadata (`<dl>`) and
+ * the event list (`<ol>`) with the uniform <AiLabel/> (UX-DR8, epic-5-context :96).
+ * Its visual weight is ≤ the fact entries (text-sm text-ink-secondary, same shape as
+ * the entry conclusions) so the AI judgment never out-shouts the factual summary
+ * (epic NFR: AI 解读视觉权重须 <= 事实摘要). When no briefing exists (V1 prod: worker
+ * resolves no llmAdapter → never produced), an honest degraded line "AI 趋势研判生
+ * 成中。" renders (muted, mirroring the "日报生成中。" degraded pattern + the 5.2
+ * "AI 深读生成中。" pattern) — never blank, never fabricated.
  */
 function DigestContent({
   digest,
+  trendBriefing,
 }: {
   digest: {
     coverageDate: Date;
@@ -152,6 +180,7 @@ function DigestContent({
     source: string;
     generatedAt: Date;
   };
+  trendBriefing: PublishedTrendBriefing | null;
 }) {
   return (
     <section className="mt-10 space-y-4">
@@ -169,6 +198,25 @@ function DigestContent({
           </dd>
         </div>
       </dl>
+
+      {/* AI 趋势研判 (Story 5.3). Renders between the metadata and the event list.
+          The briefing is a single cross-event paragraph grounded in the day's
+          published events (NFR-2). AiLabel marks it as AI-generated (NFR-3). */}
+      {trendBriefing !== null ? (
+        <div className="space-y-1.5 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
+          <div className="flex items-center gap-2">
+            <AiLabel />
+            <h2 className="text-sm font-semibold text-ink-secondary">
+              AI 趋势研判
+            </h2>
+          </div>
+          <p className="text-sm text-ink-secondary">
+            {trendBriefing.briefing}
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-ink-tertiary">AI 趋势研判生成中。</p>
+      )}
 
       <ol className="mt-4 space-y-3">
         {digest.entries.map((entry) => (

@@ -1,0 +1,2373 @@
+diff --git a/apps/web/app/(public)/daily/page.tsx b/apps/web/app/(public)/daily/page.tsx
+index e0ff5fc..8332635 100644
+--- a/apps/web/app/(public)/daily/page.tsx
++++ b/apps/web/app/(public)/daily/page.tsx
+@@ -5,11 +5,12 @@ import { AiLabel } from "@/components/chips";
+ import {
+   getPrisma,
+   getPublishedDailyDigest,
++  getPublishedTrendBriefing,
+   listPublishedDailyDigestCoverageDates,
+   listPublishedHotEvents,
+   newTraceId,
+ } from "@aguhot/core";
+-import type { DailyDigestEntry } from "@aguhot/core";
++import type { DailyDigestEntry, PublishedTrendBriefing } from "@aguhot/core";
+ 
+ export const metadata: Metadata = {
+   title: "日报",
+@@ -86,6 +87,22 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
+         })
+       : null;
+ 
++  // Read the published AI 趋势研判 (trend briefing) for the target coverageDate
++  // (Story 5.3). Null when generateTrendBriefing has not produced a briefing (V1
++  // prod: daily-digest worker resolves no llmAdapter → never produced, OR the
++  // coverageDate has no eligible events) — <DigestContent> renders the honest
++  // degraded state ("AI 趋势研判生成中。") in that case. Only fetched when a digest
++  // exists (the trend briefing renders inside <DigestContent>, so a missing digest
++  // means <DegradedContent> renders and the briefing is moot).
++  const trendBriefing =
++    coverageDate !== undefined && digest !== null
++      ? await getPublishedTrendBriefing({
++          prisma,
++          traceId: newTraceId(),
++          coverageDate,
++        })
++      : null;
++
+   // For the degraded state: count the day's eligible published events
+   // (latestEvidenceAt UTC day = coverageDate) so the page shows the current
+   // coverage scope. Falls back to "今日" when no coverageDate is resolved.
+@@ -128,7 +145,7 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
+       </header>
+ 
+       {digest !== null ? (
+-        <DigestContent digest={digest} />
++        <DigestContent digest={digest} trendBriefing={trendBriefing} />
+       ) : (
+         <DegradedContent
+           coverageDate={degradedScopeDate}
+@@ -140,11 +157,22 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
+ }
+ 
+ /**
+- * Render the digest: coverage date + generation time header, then one clickable
+- * row per entry (already sorted by evidenceCount DESC at generation time).
++ * Render the digest: coverage date + generation time header, then the AI 趋势研判
++ * (trend briefing) block (Story 5.3), then one clickable row per entry (already
++ * sorted by evidenceCount DESC at generation time).
++ *
++ * The trend briefing renders between the coverage/generation metadata (`<dl>`) and
++ * the event list (`<ol>`) with the uniform <AiLabel/> (UX-DR8, epic-5-context :96).
++ * Its visual weight is ≤ the fact entries (text-sm text-ink-secondary, same shape as
++ * the entry conclusions) so the AI judgment never out-shouts the factual summary
++ * (epic NFR: AI 解读视觉权重须 <= 事实摘要). When no briefing exists (V1 prod: worker
++ * resolves no llmAdapter → never produced), an honest degraded line "AI 趋势研判生
++ * 成中。" renders (muted, mirroring the "日报生成中。" degraded pattern + the 5.2
++ * "AI 深读生成中。" pattern) — never blank, never fabricated.
+  */
+ function DigestContent({
+   digest,
++  trendBriefing,
+ }: {
+   digest: {
+     coverageDate: Date;
+@@ -152,6 +180,7 @@ function DigestContent({
+     source: string;
+     generatedAt: Date;
+   };
++  trendBriefing: PublishedTrendBriefing | null;
+ }) {
+   return (
+     <section className="mt-10 space-y-4">
+@@ -170,6 +199,25 @@ function DigestContent({
+         </div>
+       </dl>
+ 
++      {/* AI 趋势研判 (Story 5.3). Renders between the metadata and the event list.
++          The briefing is a single cross-event paragraph grounded in the day's
++          published events (NFR-2). AiLabel marks it as AI-generated (NFR-3). */}
++      {trendBriefing !== null ? (
++        <div className="space-y-1.5 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
++          <div className="flex items-center gap-2">
++            <AiLabel />
++            <h2 className="text-sm font-semibold text-ink-secondary">
++              AI 趋势研判
++            </h2>
++          </div>
++          <p className="text-sm text-ink-secondary">
++            {trendBriefing.briefing}
++          </p>
++        </div>
++      ) : (
++        <p className="text-sm text-ink-tertiary">AI 趋势研判生成中。</p>
++      )}
++
+       <ol className="mt-4 space-y-3">
+         {digest.entries.map((entry) => (
+           <li
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index ed21f6d..53b1a95 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -16,6 +16,7 @@
+     "verify:digest": "tsx src/verify-digest.ts",
+     "verify:reason": "tsx src/verify-reason.ts",
+     "verify:deepread": "tsx src/verify-deepread.ts",
++    "verify:trendbriefing": "tsx src/verify-trendbriefing.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "verify:timeline": "tsx src/verify-timeline.ts",
+diff --git a/apps/worker/src/queues/daily-digest-queue.ts b/apps/worker/src/queues/daily-digest-queue.ts
+index 27620b5..9393cca 100644
+--- a/apps/worker/src/queues/daily-digest-queue.ts
++++ b/apps/worker/src/queues/daily-digest-queue.ts
+@@ -1,10 +1,16 @@
+ /**
+- * BullMQ daily-digest queue + worker (worker runtime) — Story 2.4.
++ * BullMQ daily-digest queue + worker (worker runtime) — Story 2.4 + Story 5.3.
+  *
+  * AD-4: daily digest generation runs as a BullMQ job, off the web request path.
+  * The worker dynamically imports @aguhot/core's generateDailyDigest (the single
+  * writer of daily_digests, AD-2) and processes ONE coverageDate per job (the
+- * day's digest aggregates all eligible published events for that date).
++ * day's digest aggregates all eligible published events for that date). Story
++ * 5.3 extends this same job to also generate the cross-event AI 趋势研判
++ * (trend briefing) for the same coverageDate — epic-5-context :22/:65 "趋势研判
++ * 随日报生成 job 发布" / "趋势研判挂这里". The two share the coverageDate key and
++ * the same adapter-driven honest-degradation shape, so they belong in one job
++ * (NOT a 10th queue; the spec Design Notes explains why this differs from 5.2's
++ * separate deep-read-queue).
+  *
+  * This mirrors theme-backfill-queue.ts / market-reaction-queue.ts in structure
+  * (Story 2.1/2.3): lazy Queue singleton, enqueue helper with job-retention
+@@ -22,19 +28,27 @@
+  * appends a fresh row, AD-5 — the intended idempotent append behavior).
+  *
+  * V1 HONESTY RULE (load-bearing, mirrors theme-backfill-queue.ts): the worker
+- * runtime resolves NO adapter (real digest LLM/summarizer provider procurement
+- * is deferred). With no adapter, generateDailyDigest returns null and writes
+- * nothing, so prod degrades honestly — the /daily page shows the degraded state
+- * (AC3). StubDigestAdapter is TEST-ONLY (verify/e2e import it from core and
+- * pass it to generateDailyDigest directly); apps/worker MUST NOT import it.
++ * runtime resolves NO adapter for EITHER path (real digest LLM/summarizer AND
++ * real trend-briefing LLM provider procurement are both deferred). With no
++ * digest adapter, generateDailyDigest returns null and writes nothing; with no
++ * llmAdapter, generateTrendBriefing returns null and writes nothing. So prod
++ * degrades honestly on BOTH paths — the /daily page shows the degraded states
++ * (AC3). StubDigestAdapter + StubLlmAdapter are TEST-ONLY (verify/e2e import
++ * them from core and pass them to the generators directly); apps/worker MUST
++ * NOT import either.
+  *
+- *   // ponytail: real provider wired when procured — V1 no adapter, prod degrades
+- *   // honestly.
++ *   // ponytail: real providers wired when procured — V1 no adapters, prod
++ *   // degrades honestly on both paths.
+  *
+- * When a real provider lands, the worker will resolve that adapter here (one
+- * line), generateDailyDigest will flow conclusions through, and source will
+- * flip from "template" to the provider id. The port + append-only write table +
+- * read model + /daily page are all already in place.
++ * When real providers land, the worker will resolve those adapters here (one
++ * line each), generateDailyDigest + generateTrendBriefing will flow content
++ * through, and source will flip from "template" to the provider id. The ports +
++ * append-only write tables + read models + /daily page are all already in place.
++ *
++ * The two adapter paths are INDEPENDENT (digestAdapter + llmAdapter): either can
++ * be wired while the other stays undefined. The daily-digest generation and the
++ * trend-briefing generation do NOT block each other (spec AC: "研判与日报互不阻
++ * 塞，任一 adapter undefined 时另一路径仍可独立产出").
+  */
+ 
+ import { Queue, Worker, type Job } from "bullmq";
+@@ -96,21 +110,26 @@ export async function enqueueDailyDigest(
+ /**
+  * Register the daily-digest Worker in this process. The worker resolves the
+  * prisma client, parses the coverageDate from the job data, and calls
+- * generateDailyDigest for that coverageDate. The eligible set (published hot
+- * events whose latestEvidenceAt UTC day = coverageDate) is computed inside
+- * generateDailyDigest (JS filter on listPublishedHotEvents).
++ * generateDailyDigest + generateTrendBriefing for that coverageDate. The
++ * eligible set (published hot events whose latestEvidenceAt UTC day =
++ * coverageDate) is computed inside each generator (JS filter on
++ * listPublishedHotEvents).
+  *
+- * V1 worker runtime resolves NO adapter (procurement deferred) →
+- * generateDailyDigest returns null → the whole job skips → returns
+- * {generated:0, skipped} and prod degrades honestly. This is the intended V1
+- * behavior: the pipeline is correct (verify/e2e prove the happy path with
+- * StubDigestAdapter), but the worker cannot produce real conclusions without a
+- * real provider, so it writes nothing rather than fabricating fixture data.
++ * V1 worker runtime resolves NO adapter for EITHER path (both procurement
++ * deferred) → both generators return null → the whole job skips → returns
++ * {generated:0, skipped} and prod degrades honestly on both paths. This is the
++ * intended V1 behavior: the pipeline is correct (verify/e2e prove the happy
++ * paths with StubDigestAdapter + StubLlmAdapter), but the worker cannot produce
++ * real content without real providers, so it writes nothing rather than
++ * fabricating fixture data.
+  *
+- * When an adapter IS available, the worker calls generateDailyDigest, then
+- * refreshPublishedDailyDigest so the new digest flows into
+- * published_daily_digests immediately. try/catch isolates failures (a bad
+- * coverageDate does not abort the worker).
++ * When adapters ARE available, the worker runs each path independently inside
++ * one try/catch: (1) digestAdapter !== undefined → generateDailyDigest + then
++ * refreshPublishedDailyDigest; (2) llmAdapter !== undefined →
++ * generateTrendBriefing + (on non-null) refreshPublishedTrendBriefing. The two
++ * paths do not block each other. try/catch isolates failures (a bad
++ * coverageDate / adapter error does not crash the worker; it re-throws so
++ * BullMQ marks the job failed for operator inspection).
+  */
+ export function registerDailyDigestWorker(): Worker {
+   const worker = new Worker(
+@@ -119,51 +138,99 @@ export function registerDailyDigestWorker(): Worker {
+       const {
+         getPrisma,
+         generateDailyDigest,
++        generateTrendBriefing,
+         refreshPublishedDailyDigest,
++        refreshPublishedTrendBriefing,
+       } = await import("@aguhot/core");
+       const prisma = getPrisma();
+       const data = job.data as DailyDigestJobData;
+       const coverageDate = new Date(data.coverageDate);
+ 
+-      // V1 HONESTY RULE: no real digest LLM/summarizer provider is wired
+-      // (procurement deferred). With no adapter, generateDailyDigest cannot
+-      // run — it would return null and write nothing. We skip and report it as
+-      // skipped so the caller knows the pipeline ran but produced no digest
+-      // (honest degradation, AC3). StubDigestAdapter is test-only and is NOT
+-      // imported here.
++      // V1 HONESTY RULE (Story 2.4 digest path): no real digest LLM/summarizer
++      // provider is wired (procurement deferred). With no digestAdapter,
++      // generateDailyDigest would return null and write nothing.
++      //
++      // V1 HONESTY RULE (Story 5.3 trend-briefing path): no real trend-briefing
++      // LLM provider is wired either (procurement deferred). With no llmAdapter,
++      // generateTrendBriefing would return null and write nothing.
++      //
++      // When BOTH are undefined (V1 prod), the whole job short-circuits and
++      // reports skipped so the caller knows the pipeline ran but produced no
++      // content (honest degradation, AC3). StubDigestAdapter + StubLlmAdapter
++      // are test-only and are NOT imported here.
+       //
+-      // ponytail: real provider wired when procured — V1 no adapter, prod
+-      // degrades honestly.
+-      const adapter = undefined;
+-      if (adapter === undefined) {
++      // ponytail: real providers wired when procured — V1 no adapters, prod
++      // degrades honestly on both paths.
++      //
++      // The two adapter injection points are kept as separate consts (NOT a
++      // union) so either path can be wired independently while the other stays
++      // undefined (spec AC: 研判与日报互不阻塞).
++      const digestAdapter = undefined;
++      const llmAdapter = undefined;
++      if (digestAdapter === undefined && llmAdapter === undefined) {
+         return { generated: 0, considered: 1, skipped: 1 };
+       }
+ 
++      let generated = 0;
+       try {
+-        const result = await generateDailyDigest({
+-          prisma,
+-          traceId: data.traceId,
+-          coverageDate,
+-          adapter,
+-        });
+-        if (result !== null) {
+-          // Refresh the public projection so the new digest flows into
+-          // published_daily_digests immediately (mirrors how the theme-backfill
+-          // / market-reaction workers call refresh after a successful generate —
+-          // the trigger layer refreshes, the generator only appends).
+-          await refreshPublishedDailyDigest({
++        // --- Daily-digest path (Story 2.4) ---
++        if (digestAdapter !== undefined) {
++          const result = await generateDailyDigest({
++            prisma,
++            traceId: data.traceId,
++            coverageDate,
++            adapter: digestAdapter,
++          });
++          if (result !== null) {
++            // Refresh the public projection so the new digest flows into
++            // published_daily_digests immediately (mirrors how the theme-backfill
++            // / market-reaction workers call refresh after a successful generate —
++            // the trigger layer refreshes, the generator only appends).
++            await refreshPublishedDailyDigest({
++              prisma,
++              traceId: data.traceId,
++              coverageDate,
++            });
++            generated += 1;
++          }
++        }
++
++        // --- Trend-briefing path (Story 5.3) ---
++        // Independent of the digest path: runs whether or not the digest path
++        // produced content (spec AC: 研判与日报互不阻塞). Re-uses the same
++        // coverageDate + traceId.
++        if (llmAdapter !== undefined) {
++          const trendResult = await generateTrendBriefing({
+             prisma,
+             traceId: data.traceId,
+             coverageDate,
++            adapter: llmAdapter,
+           });
+-          return { generated: 1, considered: 1 };
++          if (trendResult !== null) {
++            // Refresh the public projection so the new briefing flows into
++            // published_trend_briefings immediately (mirrors the digest path's
++            // refresh — the trigger layer refreshes, the generator only appends).
++            await refreshPublishedTrendBriefing({
++              prisma,
++              traceId: data.traceId,
++              coverageDate,
++            });
++            generated += 1;
++          }
++        }
++
++        if (generated > 0) {
++          return { generated, considered: 1 };
+         }
+-        // No eligible events / adapter returned nothing → degrade honestly.
++        // No eligible events / both adapters returned nothing → degrade honestly.
+         return { generated: 0, considered: 1, skipped: 1 };
+       } catch (error) {
+         // Isolate failures: log and re-throw so BullMQ marks the job failed
+-        // (operator can inspect). A bad coverageDate or adapter error does not
+-        // crash the worker process.
++        // (operator can inspect). A bad coverageDate, a digest adapter error, or
++        // a trend-briefing adapter error does not crash the worker process. The
++        // failing coverageDate leaves a degraded state (missing briefing / missing
++        // digest); the next worker run naturally retries (retry-loop deferred —
++        // spec Never).
+         console.error(
+           `[daily-digest-worker] failed for coverageDate ${data.coverageDate}`,
+           error,
+diff --git a/apps/worker/src/verify-deepread.ts b/apps/worker/src/verify-deepread.ts
+index 902bb21..34ec08b 100644
+--- a/apps/worker/src/verify-deepread.ts
++++ b/apps/worker/src/verify-deepread.ts
+@@ -66,6 +66,7 @@ import {
+   STUB_DEEP_READ,
+   type LLMAdapter,
+   type LlmDeepReadResult,
++  type LlmTrendBriefingResult,
+ } from "@aguhot/core";
+ import { resetEnvCache, requireEnv } from "@aguhot/config";
+ 
+@@ -423,6 +424,9 @@ async function main(): Promise<void> {
+       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwForbidden = false;
+     try {
+@@ -468,6 +472,9 @@ async function main(): Promise<void> {
+           async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+             return null;
+           },
++          async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++            return null;
++          },
+         };
+         try {
+           await generateDeepRead({
+@@ -505,6 +512,9 @@ async function main(): Promise<void> {
+       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwOverlen = false;
+     try {
+@@ -537,6 +547,9 @@ async function main(): Promise<void> {
+       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwEmpty = false;
+     try {
+@@ -585,6 +598,9 @@ async function main(): Promise<void> {
+       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     const rowsBefore120 = await prisma.deepRead.count({
+       where: { hotEventId: candidate.id },
+@@ -626,6 +642,9 @@ async function main(): Promise<void> {
+       async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwExact121 = false;
+     try {
+diff --git a/apps/worker/src/verify-reason.ts b/apps/worker/src/verify-reason.ts
+index 2a5a79b..1a02dbf 100644
+--- a/apps/worker/src/verify-reason.ts
++++ b/apps/worker/src/verify-reason.ts
+@@ -58,6 +58,7 @@ import {
+   type LLMAdapter,
+   type LlmReasonResult,
+   type LlmDeepReadResult,
++  type LlmTrendBriefingResult,
+ } from "@aguhot/core";
+ import { resetEnvCache, requireEnv } from "@aguhot/config";
+ 
+@@ -332,10 +333,14 @@ async function main(): Promise<void> {
+         };
+       },
+       // verify-reason exercises only the reason path; deep-read is covered by
+-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
++      // LLMAdapter interface is satisfied.
+       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwForbidden = false;
+     try {
+@@ -367,10 +372,14 @@ async function main(): Promise<void> {
+           };
+         },
+         // verify-reason exercises only the reason path; deep-read is covered by
+-        // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++        // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
++        // LLMAdapter interface is satisfied.
+         async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+           return null;
+         },
++        async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++          return null;
++        },
+       };
+       try {
+         await generateRecommendationReason({
+@@ -403,10 +412,14 @@ async function main(): Promise<void> {
+         };
+       },
+       // verify-reason exercises only the reason path; deep-read is covered by
+-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
++      // LLMAdapter interface is satisfied.
+       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwOverlen = false;
+     try {
+@@ -451,10 +464,14 @@ async function main(): Promise<void> {
+         };
+       },
+       // verify-reason exercises only the reason path; deep-read is covered by
+-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
++      // LLMAdapter interface is satisfied.
+       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     const rowsBefore40 = await prisma.recommendationReason.count({
+       where: { hotEventId: candidate.id },
+@@ -492,10 +509,14 @@ async function main(): Promise<void> {
+         };
+       },
+       // verify-reason exercises only the reason path; deep-read is covered by
+-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
++      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
++      // LLMAdapter interface is satisfied.
+       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+         return null;
+       },
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return null;
++      },
+     };
+     let threwExact41 = false;
+     try {
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index a9fd842..08dd032 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -910,3 +910,72 @@ model PublishedHotEventDeepRead {
+ 
+   @@map("published_hot_event_deep_reads")
+ }
++
++// Story 5.3 — append-only AI 趋势研判 (daily-page cross-event trend briefing). Same
++// shape and ownership rules as DailyDigest above: coverageDate-keyed aggregate (the
++// briefing spans the day's events, NOT one hotEvent), rows are append-only, and the
++// chain ordered by created_at is the auditable history (NFR-7 version + provenance:
++// model_id + prompt_version + source on every row). The publish-orchestrator sibling
++// projection (refreshPublishedTrendBriefing) projects the LATEST row (created_at desc
++// first) into published_trend_briefings — publish-orchestrator stays the SOLE writer of
++// that projection (AD-2/AD-3); the worker only appends here + calls
++// refreshPublishedTrendBriefing.
++//
++// Distinct from DeepRead (per-HotEvent, 影响面/受益方/风险点) and ExplanationVersion
++// (per-HotEvent, summary/whyItMatters/uncertainties): TrendBriefing is per-coverageDate
++// (one paragraph spanning the day's events). The three independent append-only tables
++// follow the epic-5-context data-model decision (three independent tables, do not reuse
++// ExplanationVersion). The briefing is a single-paragraph string (not three segments),
++// so it does not fit DeepRead's three-column schema either.
++//
++// NO FK to hot_events (digest-module invariant: "no FK, data-only link, cross-page
++// navigation is not a module" — mirrors DailyDigest). `based_on_hot_event_ids` is a
++// data-only Json string[] carrying the set of hotEventIds the briefing was derived from
++// (satisfies the epic's `TREND_BRIEFING }o--o{ HOT_EVENT : based_on` LOGICAL relation;
++// physically a data-only link, same shape as DailyDigest.items). A hotEvent takedown does
++// NOT trigger this refresh (the briefing is a versioned point-in-time artifact; the link
++// honestly 404s, staleness recompute is deferred — same rule as the daily digest).
++//
++// `source` is "ai" in V1 (ExplanationSource.Ai value, reused — not DigestSource which has
++// no Ai variant; the column stays String and the TS side assigns ExplanationSource.Ai).
++// Only the model_id/prompt_version mark a row as stub-generated.
++model TrendBriefing {
++  id                String   @id // UUIDv7, assigned in application code (newTraceId)
++  coverageDate      DateTime @map("coverage_date")
++  briefing          String // ≤200 字 single-paragraph cross-event trend briefing; guardrail-enforced at write time
++  basedOnHotEventIds Json   @map("based_on_hot_event_ids") // string[] (hotEventIds the briefing was derived from); data-only link, NO FK
++  source            String // ExplanationSource union value ("ai" in V1)
++  modelId           String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
++  promptVersion     String   @map("prompt_version") // prompt template version (e.g. "trendbriefing-stub-v1")
++  traceId           String?  @map("trace_id")
++  createdAt         DateTime @default(now()) @map("created_at")
++
++  // NO FK to hot_events — coverageDate-keyed aggregate, data-only based_on_hot_event_ids
++  // link (mirrors DailyDigest's no-FK invariant).
++  @@index([coverageDate])
++  @@index([createdAt])
++  @@map("trend_briefings")
++}
++
++// Public read-model projection of the latest TrendBriefing row (AD-3 public projection,
++// one row per coverageDate). publish-orchestrator is the SOLE writer
++// (refreshPublishedTrendBriefing sibling function — coverageDate-keyed, mirrors
++// refreshPublishedDailyDigest); the /daily page reads it via getPublishedTrendBriefing.
++// source/generated_at come from the latest TrendBriefing row (always "ai" in V1). A row
++// may be ABSENT for a coverageDate if generateTrendBriefing has not produced a briefing
++// (V1 worker resolves no adapter → skip → never produced, OR the coverageDate has no
++// eligible published events) — the /daily page renders an honest degraded state in that
++// case (AC3, never fabricates a briefing). coverageDate is the PK (one projected briefing
++// per coverageDate). Mirrors published_daily_digests (coverageDate-keyed, no FK).
++model PublishedTrendBriefing {
++  coverageDate DateTime @id @map("coverage_date")
++  briefing     String
++  source       String // ExplanationSource union value
++  generatedAt  DateTime @map("generated_at")
++  traceId      String?  @map("trace_id")
++  updatedAt    DateTime @updatedAt @map("updated_at")
++
++  // NO FK to hot_events — coverageDate-keyed aggregate (mirrors published_daily_digests).
++
++  @@map("published_trend_briefings")
++}
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 88682d6..ba9b1a7 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -153,6 +153,8 @@ export {
+   refreshPublishedDailyDigest,
+   getPublishedDailyDigest,
+   listPublishedDailyDigestCoverageDates,
++  refreshPublishedTrendBriefing,
++  getPublishedTrendBriefing,
+ } from "./modules/publish-orchestrator/publish-service.js";
+ export {
+   refreshPublishedTimelineForEvent,
+@@ -200,6 +202,9 @@ export type {
+   GetPublishedDailyDigestOptions,
+   ListPublishedDailyDigestCoverageDatesOptions,
+   PublishedHotEventDeepRead,
++  PublishedTrendBriefing,
++  RefreshPublishedTrendBriefingOptions,
++  GetPublishedTrendBriefingOptions,
+ } from "./modules/publish-orchestrator/types.js";
+ 
+ // explanation module (Story 1.8 — deterministic three-partition generation +
+@@ -232,6 +237,7 @@ export {
+   StubLlmAdapter,
+   STUB_RECOMMENDATION_REASON,
+   STUB_DEEP_READ,
++  STUB_TREND_BRIEFING,
+ } from "./modules/explanation/index.js";
+ export {
+   ExplanationSource,
+@@ -249,6 +255,8 @@ export type {
+   LlmReasonResult,
+   LlmDeepReadResult,
+   LlmDeepReadArgs,
++  LlmTrendBriefingResult,
++  LlmTrendBriefingArgs,
+   LLMAdapter,
+   GenerateRecommendationReasonOptions,
+   GenerateRecommendationReasonResult,
+@@ -325,12 +333,20 @@ export type {
+ // digest module (Story 2.4 — DigestAdapter port AD-7 + StubDigestAdapter
+ // test-only + generateDailyDigest append-only AD-2 + noInvestAdvice / coverage
+ // helpers; coverageDate-keyed aggregate, no FK to hot_events; daily-digest
+-// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only).
++// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only.
++// Story 5.3 — generateTrendBriefing append-only AD-2 (coverageDate-keyed cross-event
++// AI 趋势研判) + TREND_BRIEFING_MAX_LENGTH + validateTrendBriefing; reuses explanation's
++// LLMAdapter port + passesRecommendationGuardrail; trend_briefings table is data-only
++// linked (no FK); daily-digest worker resolves no llmAdapter → prod degrades honestly).
+ export {
+   generateDailyDigest,
+   getLatestDigest,
+   noInvestAdvice,
+   filterByCoverageDay,
++  generateTrendBriefing,
++  getLatestTrendBriefing,
++  validateTrendBriefing,
++  TREND_BRIEFING_MAX_LENGTH,
+   StubDigestAdapter,
+   STUB_DIGEST_CONCLUSION,
+ } from "./modules/digest/index.js";
+@@ -344,6 +360,9 @@ export type {
+   GenerateDailyDigestResult,
+   GetLatestDigestOptions,
+   DigestRecord,
++  GenerateTrendBriefingOptions,
++  GenerateTrendBriefingResult,
++  TrendBriefingRecord,
+ } from "./modules/digest/index.js";
+ 
+ // search-read module (Story 3.1 — public search over published_* read models;
+diff --git a/packages/core/src/modules/digest/index.ts b/packages/core/src/modules/digest/index.ts
+index 9c24d07..c1dcf69 100644
+--- a/packages/core/src/modules/digest/index.ts
++++ b/packages/core/src/modules/digest/index.ts
+@@ -1,27 +1,37 @@
+ /**
+- * digest module barrel — Story 2.4 (daily digest generation + reading).
++ * digest module barrel — Story 2.4 (daily digest generation + reading) + Story 5.3
++ * (daily-page cross-event AI 趋势研判).
+  *
+  * Owns the daily_digests table (AD-2 append-only, one row per generation,
+- * coverageDate-keyed). Exposes the digest generator, the latest-digest read
+- * query, the DigestAdapter port, and the test-only stub. The Prisma client
+- * lives one level up and is re-exported from the package barrel.
++ * coverageDate-keyed) and, as of Story 5.3, the trend_briefings table (AD-2 append-only,
++ * coverageDate-keyed cross-event AI trend briefing). Exposes the digest generator, the
++ * trend-briefing generator, the latest-digest + latest-trend-briefing read queries, the
++ * DigestAdapter port, and the test-only stub. The Prisma client lives one level up and is
++ * re-exported from the package barrel.
+  *
+- * This module never writes published_* (publish-orchestrator owns the public
+- * projection published_daily_digests) or hot_events (event-assembly owns those).
+- * It only appends daily_digests; publish-orchestrator reads the latest at
+- * projection time and writes the public read model.
++ * This module never writes published_* (publish-orchestrator owns the public projections
++ * published_daily_digests + published_trend_briefings) or hot_events (event-assembly owns
++ * those). It only appends daily_digests + trend_briefings; publish-orchestrator reads the
++ * latest at projection time and writes the public read models.
+  *
+- * Story 2.4 adds a daily-digest worker (epic lists daily digest as a job
+- * category). The worker resolves adapter = undefined (procurement deferred) so
+- * generateDailyDigest returns null and prod degrades honestly. The worker does
+- * NOT import StubDigestAdapter; verify/e2e pass it to generateDailyDigest
+- * directly.
++ * Story 2.4 adds a daily-digest worker (epic lists daily digest as a job category). The
++ * worker resolves adapter = undefined (procurement deferred) so generateDailyDigest returns
++ * null and prod degrades honestly. The worker does NOT import StubDigestAdapter; verify/e2e
++ * pass it to generateDailyDigest directly.
+  *
+- * Unlike the other Epic-2 modules, the digest is keyed by coverageDate (not
+- * hotEventId) — it aggregates the day's eligible published events into one
+- * versioned artifact. publish-orchestrator therefore has a SIBLING function
+- * refreshPublishedDailyDigest (not a new branch in refreshPublishedReadModel)
+- * to project the coverageDate-keyed read model.
++ * Story 5.3 extends the daily-digest worker with a second adapter injection point
++ * (llmAdapter: LLMAdapter | undefined) for the trend briefing; V1 both adapters undefined
++ * → short-circuit honest degradation. The trend briefing reuses the explanation module's
++ * LLMAdapter port (epic-5-context :108 "三者共用端口") — a cross-module port-type
++ * dependency, NOT an aggregate-write dependency (digest does not write explanation
++ * aggregates). The trend briefing's 6-class wording guardrail is reused from explanation's
++ * reason-service (passesRecommendationGuardrail — generic PRD §10).
++ *
++ * Unlike the other Epic-2 modules, the digest + trend briefing are keyed by coverageDate
++ * (not hotEventId) — they aggregate the day's eligible published events into one versioned
++ * artifact. publish-orchestrator therefore has SIBLING functions refreshPublishedDailyDigest
++ * + refreshPublishedTrendBriefing (not new branches in refreshPublishedReadModel) to
++ * project the coverageDate-keyed read models.
+  */
+ 
+ export {
+@@ -30,6 +40,17 @@ export {
+   noInvestAdvice,
+   filterByCoverageDay,
+ } from "./digest-service.js";
++export {
++  generateTrendBriefing,
++  getLatestTrendBriefing,
++  validateTrendBriefing,
++  TREND_BRIEFING_MAX_LENGTH,
++} from "./trend-briefing-service.js";
++export type {
++  GenerateTrendBriefingOptions,
++  GenerateTrendBriefingResult,
++  TrendBriefingRecord,
++} from "./trend-briefing-service.js";
+ export { StubDigestAdapter, STUB_DIGEST_CONCLUSION } from "./stub-digest-adapter.js";
+ export { DigestSource } from "./types.js";
+ export type {
+diff --git a/packages/core/src/modules/explanation/index.ts b/packages/core/src/modules/explanation/index.ts
+index 0c7a02a..34d60a5 100644
+--- a/packages/core/src/modules/explanation/index.ts
++++ b/packages/core/src/modules/explanation/index.ts
+@@ -1,5 +1,5 @@
+ /**
+- * explanation module barrel — Story 1.8 + Story 5.1 + Story 5.2.
++ * explanation module barrel — Story 1.8 + Story 5.1 + Story 5.2 + Story 5.3.
+  *
+  * Owns the ExplanationVersion table (AD-5 append-only), and as of Story 5.1,
+  * the recommendation_reasons table (AD-5 append-only, the ≤40 字 AI 解读 card
+@@ -8,7 +8,11 @@
+  * deterministic three-partition generator + the latest-version read query (1.8),
+  * the LLMAdapter port + StubLlmAdapter test-only + the recommendation-reason
+  * generator + the 6-class guardrail (5.1), and the deep-read generator (5.2,
+- * reusing the same guardrail + port). The Prisma client lives one level up and is
++ * reusing the same guardrail + port). Story 5.3 adds the third LLMAdapter method
++ * generateTrendBriefing + the STUB_TREND_BRIEFING fixture + the LlmTrendBriefing*
++ * port types — the trend briefing itself lives in the digest module (coverageDate-
++ * keyed, not per-HotEvent), but its generation PORT is this module's LLMAdapter
++ * (epic-5-context :108 "三者共用端口"). The Prisma client lives one level up and is
+  * re-exported from the package barrel.
+  *
+  * This module never writes hot_events, evidence_records, or published_* tables.
+@@ -36,6 +40,7 @@ export {
+   StubLlmAdapter,
+   STUB_RECOMMENDATION_REASON,
+   STUB_DEEP_READ,
++  STUB_TREND_BRIEFING,
+ } from "./stub-llm-adapter.js";
+ export { ExplanationSource } from "./types.js";
+ export type {
+@@ -51,6 +56,8 @@ export type {
+   LlmReasonResult,
+   LlmDeepReadResult,
+   LlmDeepReadArgs,
++  LlmTrendBriefingResult,
++  LlmTrendBriefingArgs,
+   LLMAdapter,
+   GenerateRecommendationReasonOptions,
+   GenerateRecommendationReasonResult,
+diff --git a/packages/core/src/modules/explanation/stub-llm-adapter.ts b/packages/core/src/modules/explanation/stub-llm-adapter.ts
+index 1c164bd..26fe897 100644
+--- a/packages/core/src/modules/explanation/stub-llm-adapter.ts
++++ b/packages/core/src/modules/explanation/stub-llm-adapter.ts
+@@ -21,7 +21,7 @@
+  * (passesRecommendationGuardrail) — verify's self-check asserts both.
+  */
+ 
+-import type { LLMAdapter, LlmDeepReadArgs, LlmDeepReadResult, LlmReasonResult } from "./types.js";
++import type { LLMAdapter, LlmDeepReadArgs, LlmDeepReadResult, LlmReasonResult, LlmTrendBriefingArgs, LlmTrendBriefingResult } from "./types.js";
+ 
+ /**
+  * The fixed AI 解读 the stub reports for every event. Exported so verify/e2e
+@@ -57,6 +57,29 @@ export const STUB_DEEP_READ = {
+   riskPoints: "下游需求不确定性仍存。",
+ } as const;
+ 
++/**
++ * The fixed single-paragraph AI 趋势研判 the stub reports for every coverageDate.
++ * Exported so verify/e2e can assert the projected published_trend_briefings.briefing
++ * carries exactly this string (deterministic across runs). ≤200 字
++ * (TREND_BRIEFING_MAX_LENGTH) and free of the six forbidden phrase classes
++ * (action / return-prediction / manipulation-frame / recommendation-strength /
++ * timing-advice / over-certainty).
++ *
++ * The string is intentionally restrained and factual: it states the day's events cluster
++ * around industry-chain stages, that the evidence is archived, and that details remain to
++ * be confirmed — no buy/sell/price/target/timeframe wording, no over-certainty. This is
++ * the tone baseline a real provider must match (PRD §10 + epic-5-context 语气基调:
++ * 克制、可证、不煽动).
++ *
++ * NOTE: the substring "一定" (over-certainty class) is a known false-positive risk for
++ * legitimate CJK compounds (e.g. "一定延续性") — see 5.2 deferred-work. The stub wording
++ * is chosen to avoid all six forbidden substrings while staying natural; a real provider's
++ * output is subject to the same guardrail and would need similar care (or the guardrail
++ * refined when a real provider lands).
++ */
++export const STUB_TREND_BRIEFING =
++  "当日热点围绕若干产业链环节展开，相关事件在证据归档基础上呈现延续性，部分细节仍待进一步确认。";
++
+ /**
+  * The fixed provenance the stub reports. modelId + promptVersion are recorded
+  * on every appended recommendation_reasons row (NFR-7). The "stub:" prefix on
+@@ -76,6 +99,15 @@ const STUB_PROMPT_VERSION = "reason-stub-v1";
+  */
+ const STUB_DEEP_READ_PROMPT_VERSION = "deepread-stub-v1";
+ 
++/**
++ * The fixed prompt version the stub reports for trend-briefing generation. Recorded on
++ * every appended trend_briefings row (NFR-7). "trendbriefing-stub-v1" names this stub's
++ * trend-briefing prompt template version (distinct from the reason-stub-v1 +
++ * deepread-stub-v1 templates — a different generation shape gets a different prompt-
++ * version string).
++ */
++const STUB_TREND_BRIEFING_PROMPT_VERSION = "trendbriefing-stub-v1";
++
+ /**
+  * Deterministic stub LLM adapter. Returns a fixed non-null LlmReasonResult on
+  * every call — the STUB_RECOMMENDATION_REASON string + the fixed
+@@ -136,4 +168,29 @@ export class StubLlmAdapter implements LLMAdapter {
+       promptVersion: STUB_DEEP_READ_PROMPT_VERSION,
+     };
+   }
++
++  /**
++   * Deterministic stub trend-briefing generation. Returns a fixed non-null
++   * LlmTrendBriefingResult on every call — the STUB_TREND_BRIEFING single paragraph + the
++   * fixed modelId/promptVersion provenance. See the module doc for why this is test-only.
++   * Always returns a result (never null): the stub's contract is "given a coverageDate
++   * with eligible published events, produce the fixture briefing". The coverageDate's
++   * eligible-events existence is checked upstream by generateTrendBriefing (which returns
++   * null for a coverageDate with no eligible events before calling the adapter), so by the
++   * time the stub is reached the day is known to have events.
++   */
++  async generateTrendBriefing(
++    args: LlmTrendBriefingArgs,
++  ): Promise<LlmTrendBriefingResult | null> {
++    // Reference args to make the contract explicit (the stub ignores the day's events — a
++    // real adapter would use title/summary per event to ground the cross-event briefing).
++    // Avoids an unused-vars lint while documenting that the fixture is context-independent.
++    void args.coverageDate;
++    void args.events;
++    return {
++      briefing: STUB_TREND_BRIEFING,
++      modelId: STUB_MODEL_ID,
++      promptVersion: STUB_TREND_BRIEFING_PROMPT_VERSION,
++    };
++  }
+ }
+diff --git a/packages/core/src/modules/explanation/types.ts b/packages/core/src/modules/explanation/types.ts
+index 8da0365..3e98e05 100644
+--- a/packages/core/src/modules/explanation/types.ts
++++ b/packages/core/src/modules/explanation/types.ts
+@@ -235,6 +235,26 @@ export interface LLMAdapter {
+    * 模式"); the second method is added here rather than spawning a parallel port.
+    */
+   generateDeepRead(args: LlmDeepReadArgs): Promise<LlmDeepReadResult | null>;
++
++  /**
++   * Resolve the single-paragraph AI 趋势研判 (cross-event trend briefing) for the given
++   * coverageDate's daily digest page. Implementations return a NON-EMPTY briefing
++   * (≤ TREND_BRIEFING_MAX_LENGTH = 200 字, free of the six forbidden phrase classes)
++   * plus their own modelId + promptVersion. Return null when no briefing is available
++   * (the caller writes nothing and degrades honestly). The returned briefing is
++   * validated by generateTrendBriefing (non-empty, ≤200 字, passes guardrail) —
++   * violations throw at the generator, never silently truncated.
++   *
++   * The adapter receives the day's published hot events (hotEventId + title + summary
++   * per event) so the briefing is grounded in the factual evidence timeline, not
++   * fabricated (NFR-2: AI content must not fabricate sourceless conclusions; must stay
++   * consistent with the evidence timeline). Story 5.3 reuses the same LLMAdapter port
++   * 5.1/5.2 introduced (epic-5-context :108 "三者共用端口"); this third method is added
++   * here rather than spawning a parallel port.
++   */
++  generateTrendBriefing(
++    args: LlmTrendBriefingArgs,
++  ): Promise<LlmTrendBriefingResult | null>;
+ }
+ 
+ /**
+@@ -386,3 +406,50 @@ export interface DeepReadRecord {
+   promptVersion: string;
+   createdAt: Date;
+ }
++
++// --- Story 5.3: LLMAdapter.generateTrendBriefing + TrendBriefing (daily-page AI 趋势研判)
++
++/**
++ * One unit of LLMAdapter trend-briefing output — the single-paragraph cross-event AI
++ * 趋势研判 for one coverageDate's daily digest page. The adapter resolves the paragraph
++ * from the day's published hot events (title + summary per event) and returns it with its
++ * own provenance (modelId + promptVersion, recorded on the appended row for NFR-7).
++ * trend-briefing-service validates the briefing is non-empty, ≤ TREND_BRIEFING_MAX_LENGTH
++ * (200 字), and passes the 6-class wording guardrail (passesRecommendationGuardrail,
++ * reused from 5.1 — the guardrail is generic PRD §10, not reason-specific) — violations
++ * throw (fail-fast, never silently truncates/rewrites).
++ *
++ *   - briefing: NON-EMPTY single-paragraph cross-event trend briefing, ≤200 字, free of
++ *     the six forbidden phrase classes (action / return-prediction / manipulation-frame /
++ *     recommendation-strength / timing-advice / over-certainty).
++ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future real
++ *     provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the appended row.
++ *   - promptVersion: the prompt template version (e.g. "trendbriefing-stub-v1").
++ *     Recorded verbatim on the appended row.
++ */
++export interface LlmTrendBriefingResult {
++  briefing: string;
++  modelId: string;
++  promptVersion: string;
++}
++
++/**
++ * The context passed to LLMAdapter.generateTrendBriefing. Carries the coverageDate plus
++ * the day's published hot events (hotEventId + title + summary per event) so the adapter
++ * can ground the cross-event briefing in the factual evidence timeline (NFR-2: AI content
++ * must not fabricate sourceless conclusions; must stay consistent with the evidence
++ * timeline). events is a ReadonlyArray so the adapter cannot mutate the caller's array.
++ *
++ * Each event's title is the latest-revision overlay title (same overlay rule as the
++ * detail-page projection); each event's summary is the latest ExplanationVersion summary
++ * (same overlay rule as the deep-read adapter). The adapter receives the same grounding
++ * the daily digest renders.
++ */
++export interface LlmTrendBriefingArgs {
++  coverageDate: Date;
++  events: ReadonlyArray<{
++    hotEventId: string;
++    title: string;
++    summary: string;
++  }>;
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/index.ts b/packages/core/src/modules/publish-orchestrator/index.ts
+index b66fbdd..56be3d5 100644
+--- a/packages/core/src/modules/publish-orchestrator/index.ts
++++ b/packages/core/src/modules/publish-orchestrator/index.ts
+@@ -28,6 +28,8 @@ export {
+   refreshPublishedDailyDigest,
+   getPublishedDailyDigest,
+   listPublishedDailyDigestCoverageDates,
++  refreshPublishedTrendBriefing,
++  getPublishedTrendBriefing,
+ } from "./publish-service.js";
+ // Story 4.1 (AD-3b): the published_timeline read model. The per-event refresh
+ // (refreshPublishedTimelineForEvent) runs inside decideReview's $transaction;
+@@ -81,4 +83,7 @@ export type {
+   GetPublishedDailyDigestOptions,
+   ListPublishedDailyDigestCoverageDatesOptions,
+   PublishedHotEventDeepRead,
++  PublishedTrendBriefing,
++  RefreshPublishedTrendBriefingOptions,
++  GetPublishedTrendBriefingOptions,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index 0610e2a..612d706 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -70,6 +70,7 @@ import type {
+   DailyDigestEntry,
+   GetPublishedDailyDigestOptions,
+   GetPublishedHotEventDetailOptions,
++  GetPublishedTrendBriefingOptions,
+   ListPublishedAssociationsOptions,
+   ListPublishedDailyDigestCoverageDatesOptions,
+   ListPublishedHotEventExplanationsOptions,
+@@ -82,7 +83,9 @@ import type {
+   PublishedHotEventExplanationSummaryRow,
+   PublishedHotEventSummary,
+   PublishedThemeMembershipRow,
++  PublishedTrendBriefing,
+   RefreshPublishedDailyDigestOptions,
++  RefreshPublishedTrendBriefingOptions,
+   ThemeRef,
+ } from "./types.js";
+ 
+@@ -1145,3 +1148,112 @@ export async function listPublishedDailyDigestCoverageDates(
+ 
+   return rows;
+ }
++
++// --- Story 5.3: trend-briefing projection + reads -----------------------------
++
++/**
++ * Refresh the published trend-briefing read model for one coverageDate (Story 5.3). This
++ * is a SIBLING function to refreshPublishedDailyDigest AND to refreshPublishedReadModel,
++ * NOT a new branch inside either. Reason: the trend briefing is coverageDate-keyed
++ * (aggregates the day's events into one paragraph), just like the daily digest; and the
++ * hot-event projections are hotEventId-keyed. Mixing coverageDate + hotEventId keys in one
++ * function would conflate distinct aggregate contracts. Same module (publish-orchestrator,
++ * AD-3's single write-owner), coverageDate-keyed aggregate, independent sibling function
++ * mirroring refreshPublishedDailyDigest's shape.
++ *
++ * Reads the latest trend_briefings row for the coverageDate (createdAt desc, id desc
++ * tiebreaker) → upsert published_trend_briefings. If no trend_briefings row exists
++ * (generateTrendBriefing has not run / returned null / V1 prod adapter resolves none),
++ * deleteMany that coverageDate's row so the /daily page renders the honest degraded state
++ * rather than a stale prior projection. Idempotent.
++ *
++ * Unlike the hotEventId-keyed projections, the trend briefing has NO FK to hot_events —
++ * basedOnHotEventIds is a data-only Json link. A hotEvent takedown does NOT trigger this
++ * refresh (the briefing is a versioned point-in-time artifact; the link honestly 404s,
++ * staleness recompute is deferred — same rule as the daily digest).
++ *
++ * This query only reads trend_briefings and writes published_trend_briefings. It never
++ * reads hot_events / evidence_* / published_hot_event_* (AD-3: the trend-briefing read
++ * model is the sole public surface for the /daily trend-briefing block).
++ */
++export async function refreshPublishedTrendBriefing(
++  options: RefreshPublishedTrendBriefingOptions,
++): Promise<void> {
++  const { prisma, traceId, coverageDate } = options;
++
++  const latest = await prisma.trendBriefing.findFirst({
++    where: { coverageDate },
++    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids embed a
++    // monotonic timestamp) — same convention as refreshPublishedDailyDigest + the
++    // hotEventId-keyed projections.
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      briefing: true,
++      source: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) {
++    // No briefing row: clear any stale projection so the /daily page shows the degraded
++    // state (no fabricated briefing).
++    await prisma.publishedTrendBriefing.deleteMany({
++      where: { coverageDate },
++    });
++    return;
++  }
++
++  await prisma.publishedTrendBriefing.upsert({
++    where: { coverageDate },
++    create: {
++      coverageDate,
++      briefing: latest.briefing,
++      source: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++    update: {
++      briefing: latest.briefing,
++      source: latest.source,
++      generatedAt: latest.createdAt,
++      traceId,
++    },
++  });
++}
++
++/**
++ * Read the public trend briefing for one coverageDate — Story 5.3.
++ *
++ * This is the public read query the /daily page consumes (AD-3: public reads only
++ * published_* read models). It returns the projected briefing for that coverageDate, or
++ * null when no published_trend_briefings row exists (briefing not generated / llmAdapter
++ * unavailable in V1 prod / coverageDate has no eligible events) — the /daily page then
++ * renders the honest degraded state ("AI 趋势研判生成中。", AC3).
++ *
++ * This query only SELECTs published_trend_briefings. It NEVER reads trend_briefings /
++ * hot_events / evidence_* (AD-3). Row existence = a published briefing for that
++ * coverageDate (no status column).
++ */
++export async function getPublishedTrendBriefing(
++  options: GetPublishedTrendBriefingOptions,
++): Promise<PublishedTrendBriefing | null> {
++  const { prisma, coverageDate } = options;
++
++  const row = await prisma.publishedTrendBriefing.findUnique({
++    where: { coverageDate },
++    select: {
++      coverageDate: true,
++      briefing: true,
++      source: true,
++      generatedAt: true,
++    },
++  });
++
++  if (row === null) return null;
++  return {
++    coverageDate: row.coverageDate,
++    briefing: row.briefing,
++    source: row.source,
++    generatedAt: row.generatedAt,
++  };
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/types.ts b/packages/core/src/modules/publish-orchestrator/types.ts
+index 2c47b74..bece789 100644
+--- a/packages/core/src/modules/publish-orchestrator/types.ts
++++ b/packages/core/src/modules/publish-orchestrator/types.ts
+@@ -488,6 +488,55 @@ export interface ListPublishedDailyDigestCoverageDatesOptions {
+   traceId: string;
+ }
+ 
++// --- Story 5.3: public trend-briefing (AI 趋势研判) read types -------------------
++
++/**
++ * The projected public AI 趋势研判 (cross-event trend briefing) for one coverageDate
++ * (Story 5.3). Mirrors published_trend_briefings. The single briefing paragraph is
++ * ≤ TREND_BRIEFING_MAX_LENGTH (200 字) and passes the 6-class wording guardrail, enforced
++ * at trend-briefing write time (fail-fast). The /daily page renders it between the
++ * coverage/generation metadata and the event list with the uniform <AiLabel>.
++ *
++ * Row existence = a currently-published trend briefing for that coverageDate (no status
++ * column). Absent when generateTrendBriefing has not produced a briefing (V1 prod:
++ * daily-digest worker resolves no llmAdapter → skip → never produced, OR the coverageDate
++ * has no eligible published events) — the /daily page shows the "AI 趋势研判生成中。"
++ * degraded state (AC3). Absent does NOT block the existing daily-digest rendering.
++ *
++ * Mirrors PublishedDailyDigest (coverageDate-keyed, no FK to hot_events).
++ */
++export interface PublishedTrendBriefing {
++  coverageDate: Date;
++  briefing: string;
++  source: string;
++  generatedAt: Date;
++}
++
++/**
++ * Options for refreshPublishedTrendBriefing. `{ prisma, traceId, coverageDate }` —
++ * coverageDate-keyed (NOT hotEventId-keyed like refreshPublishedReadModel). This is a
++ * SIBLING function to refreshPublishedReadModel AND to refreshPublishedDailyDigest, not a
++ * new branch: the trend briefing is a coverageDate-keyed aggregate (one paragraph
++ * spanning the day's events), so its projection key differs from the hotEventId-keyed
++ * published_hot_event_* projections. Mirrors refreshPublishedDailyDigest's sibling shape.
++ */
++export interface RefreshPublishedTrendBriefingOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++}
++
++/**
++ * Options for getPublishedTrendBriefing. `{ prisma, traceId, coverageDate }` — returns
++ * the published trend briefing for that coverageDate, or null when none exists (the
++ * /daily page degrades honestly).
++ */
++export interface GetPublishedTrendBriefingOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++}
++
+ // --- Story 4.1: published_timeline read model (AD-3b) ------------------------
+ 
+ /**
+
+diff --git a/apps/worker/src/verify-trendbriefing.ts b/apps/worker/src/verify-trendbriefing.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/worker/src/verify-trendbriefing.ts
++/**
++ * Deterministic integration verification for the trend-briefing (AI 趋势研判)
++ * generation pipeline + projection — Story 5.3.
++ *
++ * Run with: pnpm --filter worker verify:trendbriefing (tsx src/verify-trendbriefing.ts).
++ *
++ * It exercises generateTrendBriefing with the StubLlmAdapter (test-only, imported from
++ * core — NOT wired in the worker/prod runtime: the daily-digest worker resolves
++ * llmAdapter = undefined so prod degrades honestly) against real local PostgreSQL (NO
++ * Redis needed — generateTrendBriefing is pure logic + a DB append, no BullMQ queue at
++ * the generator level, same convention as verify-digest / verify-deepread calling the
++ * generators directly), then asserts the DB state — surface-anchored, not mock-based. It
++ * prints PASS/FAIL and exits non-zero iff any assertion fails.
++ *
++ * Flow:
++ *   resetState → seed one source + 2 archived records (same UTC day) → clusterEvents
++ *   (candidates) → generateExplanation → decideReview(approve) → published →
++ *   generateTrendBriefing({coverageDate, adapter: StubLlmAdapter}) → assert row appended
++ *   → refreshPublishedTrendBriefing(coverageDate) → assert projection non-null →
++ *   getPublishedTrendBriefing non-null →
++ *
++ * Assertions (mirrors verify-deepread's shape, adapted for the single-paragraph trend
++ * briefing + the published_trend_briefings projection + refreshPublishedTrendBriefing):
++ *   1. generateTrendBriefing appends one trend_briefings row (source="ai", briefing,
++ *      modelId, promptVersion, createdAt, traceId all present), briefing = STUB_TREND_
++ *      BRIEFING, basedOnHotEventIds contains the day's eligible event id.
++ *   2. After refreshPublishedTrendBriefing, published_trend_briefings is non-null and
++ *      carries the briefing; getPublishedTrendBriefing (the /daily read query) returns
++ *      non-null too (pins the read-assembly surface the page consumes, mirroring the 5.2
++ *      review triage patch that caught a read-assembly regression).
++ *   3. AD-5 append-only: a second call appends a SECOND row; the projection reflects the
++ *      latest.
++ *   4. Self-heal: refreshPublishedTrendBriefing re-run keeps the projection alive
++ *      (idempotent re-derivation from the latest row).
++ *   5. adapter missing → generateTrendBriefing returns null, writes nothing (V1 prod
++ *      honest-degradation path).
++ *   6. AC fail-fast: an adapter briefing that hits the guardrail (forbidden phrase)
++ *      → generateTrendBriefing THROWS (never silently truncates).
++ *   6b. Every forbidden phrase across all 6 classes is rejected (a class list that is
++ *      empty by accident cannot slip a phrase through).
++ *   7. AC fail-fast: an adapter briefing >200 字 → THROWS.
++ *   7b. AC fail-fast: an empty briefing → THROWS.
++ *   8. Fail-fast throws wrote no extra rows (still count=2 from gen1+gen2).
++ *   9. Pin the ≤200 字 boundary: exactly-200 accepted, exactly-201 rejected.
++ *  10. coverageDate with NO eligible published events → null, no write.
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateExplanation,
++  generateTrendBriefing,
++  getPrisma,
++  getPublishedTrendBriefing,
++  getLatestTrendBriefing,
++  listPendingCandidates,
++  newTraceId,
++  TREND_BRIEFING_MAX_LENGTH,
++  passesRecommendationGuardrail,
++  RECOMMENDATION_FORBIDDEN_PHRASES,
++  refreshPublishedTrendBriefing,
++  resetPrisma,
++  StubLlmAdapter,
++  STUB_TREND_BRIEFING,
++  type LLMAdapter,
++  type LlmTrendBriefingResult,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++interface Assertion {
++  name: string;
++  ok: boolean;
++  detail?: string;
++}
++
++// Fixed base time so all seeded records land on the same UTC day
++// deterministically. The coverageDate is derived from this day.
++const BASE_MS = Date.UTC(2024, 0, 1); // 2024-01-01 UTC
++const HOUR = 60 * 60 * 1000;
++
++async function main(): Promise<void> {
++  // Resolve infra (Block-If: PG must be reachable). No Redis needed — the
++  // derivation is pure logic + a DB append. The daily-digest worker hosts the
++  // trend-briefing path (Epic-5 job category) but this verify calls
++  // generateTrendBriefing directly.
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  const assertions: Assertion[] = [];
++
++  try {
++    await resetState(prisma);
++
++    // --- Seed: one source + 2 archived records → clusterEvents → 1 candidate →
++    // approve it so it's published + has an ExplanationVersion (the summary
++    // context the trend-briefing adapter reads). ---
++    const source = await prisma.evidenceSource.create({
++      data: {
++        id: newTraceId(),
++        name: "verify-trendbriefing-source",
++        kind: "rss",
++        feedUrl: "file:///unused",
++        enabled: true,
++      },
++    });
++
++    // Coverage date = the UTC day of BASE_MS (2024-01-01).
++    const coverageDate = new Date(BASE_MS);
++
++    // Two overlapping-title records so they merge into ONE candidate via
++    // overlap-coefficient. Both publishedAt on BASE_MS day → latestEvidenceAt
++    // lands on that UTC day → the event is eligible for coverageDate.
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺",
++      summary: "全球芯片供应链短缺",
++      url: "https://verify.test/芯片-1",
++      publishedAt: new Date(BASE_MS),
++    });
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺持续蔓延",
++      summary: "芯片供应链紧张覆盖多个行业",
++      url: "https://verify.test/芯片-2",
++      publishedAt: new Date(BASE_MS + 2 * HOUR),
++    });
++
++    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
++    assertions.push({
++      name: "seed: cluster produced 1 candidate from 2 overlapping records",
++      ok: clusterResult.newCandidates === 1,
++      detail: `newCandidates=${clusterResult.newCandidates}`,
++    });
++
++    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++    if (pending.length !== 1) {
++      throw new Error(
++        `[verify-trendbriefing] expected 1 candidate, got ${pending.length}`,
++      );
++    }
++    const candidate = pending[0]!;
++
++    // Generate the deterministic explanation (provides summary context) + publish
++    // so the event is eligible for the coverageDate (latestEvidenceAt UTC day =
++    // coverageDate). Published status is the digest/trend-briefing eligibility gate.
++    await generateExplanation({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++    });
++    await decideReview({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      outcome: "approve",
++      reviewer: "verify-trendbriefing",
++      note: "publish for trend-briefing verify",
++    });
++
++    // --- 1: generateTrendBriefing appends one row, briefing = stub ---
++    const adapter = new StubLlmAdapter();
++    const genTrace = newTraceId();
++    const gen1 = await generateTrendBriefing({
++      prisma,
++      traceId: genTrace,
++      coverageDate,
++      adapter,
++    });
++    assertions.push({
++      name: "generateTrendBriefing returns non-null",
++      ok: gen1 !== null,
++      detail: gen1 === null ? "(null result)" : "(non-null)",
++    });
++
++    if (gen1 !== null) {
++      assertions.push({
++        name: "result briefing = STUB_TREND_BRIEFING (deterministic)",
++        ok: gen1.briefing === STUB_TREND_BRIEFING,
++        detail: `briefing=${gen1.briefing.slice(0, 24)}…`,
++      });
++      assertions.push({
++        name: "result carries source=ai + modelId + promptVersion + traceId",
++        ok:
++          gen1.source === "ai" &&
++          gen1.modelId.trim() !== "" &&
++          gen1.promptVersion.trim() !== "" &&
++          gen1.traceId === genTrace,
++        detail: `source=${gen1.source} modelId=${gen1.modelId} promptVersion=${gen1.promptVersion}`,
++      });
++      assertions.push({
++        name: "result briefing ≤ TREND_BRIEFING_MAX_LENGTH + passes guardrail",
++        ok:
++          [...gen1.briefing].length <= TREND_BRIEFING_MAX_LENGTH &&
++          passesRecommendationGuardrail(gen1.briefing),
++        detail: `len=${[...gen1.briefing].length}`,
++      });
++      assertions.push({
++        name: "result basedOnHotEventIds contains the day's eligible event id",
++        ok:
++          gen1.basedOnHotEventIds.includes(candidate.id) &&
++          gen1.basedOnHotEventIds.length >= 1,
++        detail: `ids=${gen1.basedOnHotEventIds.length}`,
++      });
++    }
++
++    const rowsAfter1 = await prisma.trendBriefing.count({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "trend_briefings row appended (count=1)",
++      ok: rowsAfter1 === 1,
++      detail: `count=${rowsAfter1}`,
++    });
++
++    const row1 = await prisma.trendBriefing.findFirst({
++      where: { coverageDate },
++      orderBy: { createdAt: "asc" },
++    });
++    assertions.push({
++      name: "appended row: source=ai, modelId/promptVersion/traceId carried, basedOnHotEventIds has candidate",
++      ok:
++        row1 !== null &&
++        row1!.source === "ai" &&
++        row1!.modelId.trim() !== "" &&
++        row1!.promptVersion.trim() !== "" &&
++        row1!.traceId === genTrace &&
++        (row1!.basedOnHotEventIds as unknown as string[]).includes(candidate.id),
++    });
++
++    // --- 2: projection derives published_trend_briefings from the latest row
++    // (publish-orchestrator is the sole writer of that projection). The worker
++    // path calls refreshPublishedTrendBriefing after a successful generate. ---
++    await refreshPublishedTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    const trendRow = await prisma.publishedTrendBriefing.findUnique({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "projection: published_trend_briefings briefing non-null = appended briefing",
++      ok:
++        trendRow !== null &&
++        trendRow!.briefing === STUB_TREND_BRIEFING &&
++        trendRow!.source === "ai",
++      detail:
++        trendRow === null
++          ? "(no projection row)"
++          : `briefing=${trendRow!.briefing.slice(0, 24)}…`,
++    });
++
++    // --- 2b: the PUBLIC read query (the hop the /daily page actually calls)
++    // assembles the briefing from the projection. Asserting the projection table
++    // row (above) is not enough — a regression in getPublishedTrendBriefing's
++    // select/mapping would ship undetected. This pins the read-assembly surface
++    // (mirrors the 5.2 review triage patch that added the same guard for
++    // getPublishedHotEventDetail.deepRead). ---
++    const published = await getPublishedTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    assertions.push({
++      name: "read-model: getPublishedTrendBriefing carries the projected briefing",
++      ok:
++        published !== null &&
++        published.briefing === STUB_TREND_BRIEFING &&
++        published.source === "ai" &&
++        published.coverageDate.getTime() === coverageDate.getTime(),
++      detail:
++        published === null
++          ? "(null)"
++          : `briefing=${published.briefing.slice(0, 24)}…`,
++    });
++
++    // --- 3: AD-5 append-only — calling AGAIN appends a SECOND row; projection
++    // reflects the latest. ---
++    await sleep(20);
++    const gen2 = await generateTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++      adapter,
++    });
++    const rowsAfter2 = await prisma.trendBriefing.count({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "AD-5 append-only: second call appends a second row (first untouched)",
++      ok: rowsAfter2 === 2 && gen2 !== null,
++      detail: `count=${rowsAfter2}`,
++    });
++
++    await refreshPublishedTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    const latestViaRead = await getLatestTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    const projectionAfterGen2 = await prisma.publishedTrendBriefing.findUnique({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "refresh projects the LATEST trend briefing (getLatestTrendBriefing + projection agree)",
++      ok:
++        latestViaRead !== null &&
++        projectionAfterGen2 !== null &&
++        projectionAfterGen2!.briefing === latestViaRead!.briefing,
++      detail:
++        latestViaRead === null || projectionAfterGen2 === null
++          ? "(read or projection null)"
++          : `projected.briefing=${projectionAfterGen2!.briefing.slice(0, 24)}…`,
++    });
++
++    // --- 4: self-heal — refreshPublishedTrendBriefing re-run keeps the projection
++    // alive (idempotent re-derivation from the latest row). This is the safety-net
++    // path the spec relies on for eventual consistency. ---
++    await refreshPublishedTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate,
++    });
++    const projectionAfterSelfHeal = await prisma.publishedTrendBriefing.findUnique({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "self-heal (refresh re-run) keeps the latest briefing on the projection",
++      ok:
++        projectionAfterSelfHeal !== null &&
++        projectionAfterSelfHeal!.briefing === STUB_TREND_BRIEFING,
++      detail:
++        projectionAfterSelfHeal === null
++          ? "(no projection row)"
++          : `briefing=${projectionAfterSelfHeal!.briefing.slice(0, 24)}…`,
++    });
++
++    // --- 5: adapter missing → returns null, writes nothing ---
++    // Use a coverageDate with no existing briefing to keep counts clean.
++    const emptyCoverageDate = new Date(BASE_MS + 30 * 24 * 60 * 60 * 1000); // ~a month later
++    const rowsBeforeNoAdapter = await prisma.trendBriefing.count({
++      where: { coverageDate: emptyCoverageDate },
++    });
++    const noAdapter = await generateTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate: emptyCoverageDate,
++      // adapter omitted → V1 prod path (daily-digest worker resolves none) → returns
++      // null.
++    });
++    assertions.push({
++      name: "adapter missing: generateTrendBriefing returns null",
++      ok: noAdapter === null,
++    });
++    const rowsAfterNoAdapter = await prisma.trendBriefing.count({
++      where: { coverageDate: emptyCoverageDate },
++    });
++    assertions.push({
++      name: "adapter missing: no trend_briefings row written",
++      ok: rowsAfterNoAdapter === rowsBeforeNoAdapter,
++      detail: `before=${rowsBeforeNoAdapter} after=${rowsAfterNoAdapter}`,
++    });
++
++    // --- 6: AC fail-fast — forbidden-phrase briefing → THROWS (hits ACTION class 买入) ---
++    const forbiddenAdapter: LLMAdapter = {
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return {
++          briefing: "建议买入相关概念股，事件影响扩散。",
++          modelId: "stub:forbidden",
++          promptVersion: "trendbriefing-stub-v1",
++        };
++      },
++      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
++        return null;
++      },
++      async generateDeepRead(): Promise<null> {
++        return null;
++      },
++    };
++    let threwForbidden = false;
++    try {
++      await generateTrendBriefing({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: forbiddenAdapter,
++      });
++    } catch {
++      threwForbidden = true;
++    }
++    assertions.push({
++      name: "AC: forbidden-phrase briefing → generateTrendBriefing throws (fail-fast)",
++      ok: threwForbidden,
++    });
++
++    // --- 6b: every forbidden phrase across all 6 classes is rejected (a regression
++    // where a class list is empty by accident cannot slip a phrase through). ---
++    const allForbidden = Object.values(RECOMMENDATION_FORBIDDEN_PHRASES).flat();
++    let allForbiddenRejected = true;
++    for (const phrase of allForbidden) {
++      const localAdapter: LLMAdapter = {
++        async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++          return {
++            // Inject the forbidden phrase into the briefing paragraph.
++            briefing: `当日事件涉及${phrase}，后续仍需观察确认。`,
++            modelId: "stub:forbidden",
++            promptVersion: "trendbriefing-stub-v1",
++          };
++        },
++        async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
++          return null;
++        },
++        async generateDeepRead(): Promise<null> {
++          return null;
++        },
++      };
++      try {
++        await generateTrendBriefing({
++          prisma,
++          traceId: newTraceId(),
++          coverageDate,
++          adapter: localAdapter,
++        });
++        allForbiddenRejected = false;
++      } catch {
++        // expected
++      }
++    }
++    assertions.push({
++      name: "AC: all 6 classes × all phrases rejected by guardrail",
++      ok: allForbiddenRejected,
++      detail: `phrases=${allForbidden.length}`,
++    });
++
++    // --- 7: AC fail-fast — over-length (>200 字) briefing → THROWS ---
++    // Built deliberately long (300 字) from a safe repeated char so the length is
++    // unambiguous (no natural-language miscount).
++    const overlength = "适".repeat(300);
++    const overlenAdapter: LLMAdapter = {
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return {
++          briefing: overlength,
++          modelId: "stub:overlen",
++          promptVersion: "trendbriefing-stub-v1",
++        };
++      },
++      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
++        return null;
++      },
++      async generateDeepRead(): Promise<null> {
++        return null;
++      },
++    };
++    let threwOverlen = false;
++    try {
++      await generateTrendBriefing({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: overlenAdapter,
++      });
++    } catch {
++      threwOverlen = true;
++    }
++    assertions.push({
++      name: "AC: >200 字 briefing → generateTrendBriefing throws (fail-fast)",
++      ok: threwOverlen && [...overlength].length > TREND_BRIEFING_MAX_LENGTH,
++      detail: `len=${[...overlength].length}`,
++    });
++
++    // --- 7b: AC fail-fast — empty briefing → THROWS ---
++    const emptyAdapter: LLMAdapter = {
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return {
++          briefing: "   ", // whitespace-only → trims to empty
++          modelId: "stub:empty",
++          promptVersion: "trendbriefing-stub-v1",
++        };
++      },
++      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
++        return null;
++      },
++      async generateDeepRead(): Promise<null> {
++        return null;
++      },
++    };
++    let threwEmpty = false;
++    try {
++      await generateTrendBriefing({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: emptyAdapter,
++      });
++    } catch {
++      threwEmpty = true;
++    }
++    assertions.push({
++      name: "AC: empty briefing → generateTrendBriefing throws (fail-fast)",
++      ok: threwEmpty,
++    });
++
++    // --- 8: forbidden / over-length / empty throws did NOT write rows ---
++    // (fail-fast means no append, not just a throw). Still count=2 from gen1+gen2.
++    const rowsAfterFailFast = await prisma.trendBriefing.count({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "AC: fail-fast throws wrote no extra rows (still count=2 from gen1+gen2)",
++      ok: rowsAfterFailFast === 2,
++      detail: `count=${rowsAfterFailFast}`,
++    });
++
++    // --- 9: pin the ≤200 字 boundary exactly. A 200-字 briefing is ACCEPTED
++    // (appended); a 201-字 briefing is REJECTED (throws). Built from a safe repeated
++    // char so the off-by-one at the cap is unambiguous (a 300-字 overlength test
++    // alone cannot distinguish `> 200` from `>= 200` or `> 201`). ---
++    const exact200 = "适".repeat(200);
++    const exact201 = "适".repeat(201);
++    const exact200Adapter: LLMAdapter = {
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return {
++          briefing: exact200,
++          modelId: "stub:boundary",
++          promptVersion: "trendbriefing-stub-v1",
++        };
++      },
++      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
++        return null;
++      },
++      async generateDeepRead(): Promise<null> {
++        return null;
++      },
++    };
++    const rowsBefore200 = await prisma.trendBriefing.count({
++      where: { coverageDate },
++    });
++    let exact200Appended = false;
++    try {
++      const r = await generateTrendBriefing({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: exact200Adapter,
++      });
++      exact200Appended = r !== null;
++    } catch {
++      exact200Appended = false;
++    }
++    const rowsAfter200 = await prisma.trendBriefing.count({
++      where: { coverageDate },
++    });
++    assertions.push({
++      name: "AC: exactly-200 字 briefing is ACCEPTED (boundary, not off-by-one)",
++      ok:
++        exact200Appended &&
++        [...exact200].length === 200 &&
++        rowsAfter200 === rowsBefore200 + 1,
++      detail: `appended=${exact200Appended} len=${[...exact200].length}`,
++    });
++
++    const exact201Adapter: LLMAdapter = {
++      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
++        return {
++          briefing: exact201,
++          modelId: "stub:boundary",
++          promptVersion: "trendbriefing-stub-v1",
++        };
++      },
++      async generateReason(): Promise<{ reason: string; modelId: string; promptVersion: string } | null> {
++        return null;
++      },
++      async generateDeepRead(): Promise<null> {
++        return null;
++      },
++    };
++    let threwExact201 = false;
++    try {
++      await generateTrendBriefing({
++        prisma,
++        traceId: newTraceId(),
++        coverageDate,
++        adapter: exact201Adapter,
++      });
++    } catch {
++      threwExact201 = true;
++    }
++    assertions.push({
++      name: "AC: exactly-201 字 briefing is REJECTED (boundary, not off-by-one)",
++      ok: threwExact201 && [...exact201].length === 201,
++      detail: `threw=${threwExact201} len=${[...exact201].length}`,
++    });
++
++    // --- 10: coverageDate with NO eligible published events → null, no write ---
++    // emptyCoverageDate has no published events on that day. Already asserted
++    // no rows written in step 5 (adapter missing); now assert it also returns
++    // null WITH an adapter (no eligible events → no briefing).
++    const noEligible = await generateTrendBriefing({
++      prisma,
++      traceId: newTraceId(),
++      coverageDate: emptyCoverageDate,
++      adapter,
++    });
++    assertions.push({
++      name: "coverageDate with no eligible events: returns null (no contextless briefing)",
++      ok: noEligible === null,
++    });
++    const noEligibleRows = await prisma.trendBriefing.count({
++      where: { coverageDate: emptyCoverageDate },
++    });
++    assertions.push({
++      name: "coverageDate with no eligible events: no trend_briefings row written",
++      ok: noEligibleRows === 0,
++      detail: `count=${noEligibleRows}`,
++    });
++  } finally {
++    await cleanup(prisma);
++    resetPrisma();
++  }
++
++  report(assertions);
++}
++
++// --- helpers -----------------------------------------------------------------
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((resolve) => setTimeout(resolve, ms));
++}
++
++async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  // Order matters for FK constraints. The 5.3 tables (trend_briefings +
++  // published_trend_briefings) have NO FK to hot_events (the briefing is
++  // coverageDate-keyed, basedOnHotEventIds is a data-only link — mirrors the 2.4
++  // daily_digests invariant), so they are independent of the hot_events clear order —
++  // but we clear them at the top to keep the reset ordering uniform with
++  // verify-digest/verify-deepread. The other published_* + write tables reference
++  // hot_events (Cascade FKs) but we clear them explicitly before hot_events to keep
++  // reset ordering uniform.
++  await prisma.publishedTrendBriefing.deleteMany({});
++  await prisma.trendBriefing.deleteMany({});
++  await prisma.publishedTimelineEntry.deleteMany({});
++  await prisma.recommendationReason.deleteMany({});
++  await prisma.publishedHotEventDeepRead.deleteMany({});
++  await prisma.deepRead.deleteMany({});
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  await resetState(prisma);
++}
++
++// --- reporting ---------------------------------------------------------------
++
++function report(assertions: Assertion[]): void {
++  console.log("");
++  console.log("=== trend-briefing verification ===");
++  for (const a of assertions) {
++    const mark = a.ok ? "PASS" : "FAIL";
++    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
++  }
++  const failed = assertions.filter((a) => !a.ok);
++  console.log("");
++  if (failed.length === 0) {
++    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
++    process.exit(0);
++  } else {
++    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
++    process.exit(1);
++  }
++}
++
++void main().catch((error) => {
++  console.error("[verify-trendbriefing] fatal", error);
++  process.exit(1);
++});
+
+diff --git a/packages/core/prisma/migrations/20260712000002_add_trend_briefing/migration.sql b/packages/core/prisma/migrations/20260712000002_add_trend_briefing/migration.sql
+new file mode 100644
+--- /dev/null
++++ b/packages/core/prisma/migrations/20260712000002_add_trend_briefing/migration.sql
++-- Story 5.3: trend_briefings append-only truth table (AD-5) + published_trend_briefings
++-- projection table (AD-3). One trend_briefings row per generation of the single-paragraph
++-- cross-event AI 趋势研判 for a coverageDate. The digest module is the sole writer of
++-- trend_briefings. publish-orchestrator projects the LATEST row (created_at desc first,
++-- id desc tiebreaker) into published_trend_briefings via the sibling
++-- refreshPublishedTrendBriefing (the sole writer of that projection stays publish-
++-- orchestrator, AD-2/AD-3); the worker only appends here + calls
++-- refreshPublishedTrendBriefing. Every row carries source + model_id + prompt_version for
++-- NFR-7 version + provenance audit.
++--
++-- NO FK to hot_events — coverageDate-keyed aggregate, data-only based_on_hot_event_ids
++-- link (mirrors daily_digests' no-FK invariant: "cross-page navigation is not a module").
++-- based_on_hot_event_ids is a Json string[] carrying the set of hotEventIds the briefing
++-- was derived from (satisfies the epic's `TREND_BRIEFING }o--o{ HOT_EVENT : based_on`
++-- LOGICAL relation; physically a data-only link, same shape as daily_digests.items).
++-- Distinct from DeepRead (per-HotEvent three-segment) and DailyDigest (per-coverageDate
++-- event-item list); see the TrendBriefing model comment in schema.prisma for the
++-- independent-table rationale.
++
++-- CreateTable: trend_briefings (truth table, AD-5 append-only; coverageDate-keyed)
++CREATE TABLE "trend_briefings" (
++    "id" TEXT NOT NULL,
++    "coverage_date" TIMESTAMP(3) NOT NULL,
++    "briefing" TEXT NOT NULL,
++    "based_on_hot_event_ids" JSONB NOT NULL,
++    "source" TEXT NOT NULL,
++    "model_id" TEXT NOT NULL,
++    "prompt_version" TEXT NOT NULL,
++    "trace_id" TEXT,
++    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "trend_briefings_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex: coverage_date backs the publish-orchestrator latest-row projection lookup
++-- (where coverageDate orderBy createdAt desc) and getLatestTrendBriefing.
++CREATE INDEX "trend_briefings_coverage_date_idx" ON "trend_briefings"("coverage_date");
++
++-- CreateIndex: created_at backs the createdAt desc + id desc tiebreaker ordering used
++-- to resolve the latest row for the projection.
++CREATE INDEX "trend_briefings_created_at_idx" ON "trend_briefings"("created_at");
++
++-- CreateTable: published_trend_briefings (projection, AD-3; 1:1 per coverageDate)
++CREATE TABLE "published_trend_briefings" (
++    "coverage_date" TIMESTAMP(3) NOT NULL,
++    "briefing" TEXT NOT NULL,
++    "source" TEXT NOT NULL,
++    "generated_at" TIMESTAMP(3) NOT NULL,
++    "trace_id" TEXT,
++    "updated_at" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "published_trend_briefings_pkey" PRIMARY KEY ("coverage_date")
++);
+
+diff --git a/packages/core/src/modules/digest/trend-briefing-service.ts b/packages/core/src/modules/digest/trend-briefing-service.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/core/src/modules/digest/trend-briefing-service.ts
++/**
++ * trend-briefing-service — generate the single-paragraph cross-event AI 趋势研判 (trend
++ * briefing) for a coverageDate's daily digest page from an LLMAdapter's output and append
++ * a trend_briefings row (AD-5 append-only).
++ *
++ * Story 5.3. This module owns the trend_briefings table (AD-2 append-only, coverageDate-
++ * keyed — mirrors DailyDigest's ownership shape). It derives one trend briefing for a
++ * coverageDate from:
++ *   1. the day's eligible published hot events (latestEvidenceAt UTC day = coverageDate,
++ *      JS-filtered from listPublishedHotEvents — same window-filter pattern as
++ *      generateDailyDigest);
++ *   2. an LLMAdapter's trend-briefing output (single paragraph + its provenance).
++ *
++ *   - generateTrendBriefing: select eligible events (empty → null) → no adapter → null
++ *     (V1 prod: daily-digest worker resolves none) → load each event's title + summary
++ *     (latest revision + latest ExplanationVersion overlay, same overlay rule as
++ *     deep-read) → bound to top 12 by evidenceCount desc (bound prompt) → call adapter →
++ *     validate (non-empty, ≤ TREND_BRIEFING_MAX_LENGTH (200 字),
++ *     passesRecommendationGuardrail; throw on violation — fail-fast, never silently
++ *     truncate) → APPEND one trend_briefings row (source="ai", basedOnHotEventIds =
++ *     day's event ids as data-only Json link). Returns null when the adapter is missing,
++ *     the coverageDate has no eligible events, or the adapter returns null.
++ *
++ * This module NEVER writes published_trend_briefings (publish-orchestrator owns that
++ * projection — the sole writer of it, AD-2/AD-3). It only appends trend_briefings;
++ * publish-orchestrator reads the latest at projection time (refreshPublishedTrendBriefing
++ * derives the projection from the latest row). The worker triggers that projection by
++ * calling refreshPublishedTrendBriefing after a successful append (mirrors the daily-
++ * digest worker calling refreshPublishedDailyDigest after generateDailyDigest).
++ *
++ * The 6-class wording guardrail (passesRecommendationGuardrail) is REUSED from 5.1's
++ * reason-service unchanged. The constant is named "recommendation..." but carries the
++ * generic PRD §10 six classes (the epic AC applies to ALL AI content, not just card
++ * reasons). 5.2 deep-read already reuses it per-segment; 5.3 reuses it for the single
++ * briefing paragraph.
++ *
++ * The derivation is pure logic + a DB append (no BullMQ, no SDK), so verify/seed scripts
++ * can call it directly without Redis — same convention as generateDailyDigest /
++ * generateDeepRead / generateRecommendationReason. The daily-digest worker calls this with
++ * adapter = undefined in V1 prod (procurement deferred) → honest degradation.
++ *
++ * NFR-2/NFR-3/NFR-7: every appended row carries source="ai" + modelId + promptVersion +
++ * createdAt + basedOnHotEventIds for audit + version tracing. The 6-class wording
++ * guardrail is enforced at write time on the briefing so a forbidden phrase can never
++ * reach the /daily page.
++ *
++ * NO FK to hot_events (digest-module invariant: "no FK, data-only link"). basedOnHotEventIds
++ * is a data-only Json string[] — the physical form of the epic's `TREND_BRIEFING }o--o{
++ * HOT_EVENT : based_on` LOGICAL relation (same shape as DailyDigest.items).
++ */
++
++import type { Prisma } from "../../../generated/client.js";
++import type { PrismaClient } from "../../../generated/client.js";
++import { newTraceId } from "../../shared/ids.js";
++import { passesRecommendationGuardrail } from "../explanation/reason-service.js";
++import { ExplanationSource } from "../explanation/types.js";
++import type { LLMAdapter, LlmTrendBriefingResult } from "../explanation/types.js";
++import {
++  listPublishedHotEvents,
++} from "../publish-orchestrator/publish-service.js";
++import type { PublishedHotEventSummary } from "../publish-orchestrator/types.js";
++import { filterByCoverageDay } from "./digest-service.js";
++
++/**
++ * The max length of the trend briefing paragraph in codepoints (字). PRD SM-C3 says
++ * "研判有上限" without giving a number; 200 字 is the story-time default (a one-line edit
++ * to adjust). Checked at write time so an over-length adapter output can never reach the
++ * /daily page. Mirrors 5.1's RECOMMENDATION_REASON_MAX_LENGTH (40 字) and 5.2's
++ * DEEP_READ_SEGMENT_MAX_LENGTH (120 字 per segment) precedents.
++ */
++export const TREND_BRIEFING_MAX_LENGTH = 200;
++
++/**
++ * The bound on how many day-events are passed to the adapter as grounding context.
++ * Without a bound, a heavy-evidence day could overflow a real provider's prompt context.
++ * Top 12 by evidenceCount desc (strongest-signal first) mirrors the daily-digest
++ * evidenceCount-desc ordering precedent and is a generous cap (the /daily page itself
++ * renders all entries; this bound only shapes the adapter's grounding context, not the
++ * page). A one-line edit to adjust.
++ */
++const TREND_BRIEFING_MAX_EVENTS = 12;
++
++/**
++ * Options for generateTrendBriefing. `{ prisma, traceId, coverageDate, adapter? }` mirrors
++ * generateDailyDigest's command pattern (coverageDate-keyed) plus an optional LLMAdapter.
++ * When adapter is omitted (or the coverageDate has no eligible published events), the
++ * function returns null and writes nothing (honest degradation — never fabricates a
++ * briefing). Otherwise it loads the day's events, calls the adapter, validates the result
++ * (non-empty, ≤200 字, passesRecommendationGuardrail; modelId + promptVersion non-empty),
++ * and APPENDS one trend_briefings row (source="ai").
++ */
++export interface GenerateTrendBriefingOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  coverageDate: Date;
++  adapter?: LLMAdapter;
++}
++
++/**
++ * The result of a successful generation: the newly-appended briefing row's id + the
++ * coverageDate + the briefing text + provenance + createdAt. Callers (the worker's
++ * projection refresh, verify/seed) consume the briefing directly.
++ */
++export interface GenerateTrendBriefingResult {
++  trendBriefingId: string;
++  coverageDate: Date;
++  briefing: string;
++  basedOnHotEventIds: string[];
++  source: string;
++  modelId: string;
++  promptVersion: string;
++  createdAt: Date;
++  traceId: string;
++}
++
++/**
++ * Generate the single-paragraph AI 趋势研判 for a coverageDate from the adapter's output,
++ * then APPEND one trend_briefings row (source="ai"). Returns null and writes nothing when:
++ *   - the coverageDate has NO eligible published events (no event whose
++ *     latestEvidenceAt UTC day = coverageDate) — never writes an empty-context briefing, OR
++ *   - adapter is undefined (V1 prod: daily-digest worker resolves none).
++ *
++ * Honest degradation (NFR: never fake data): no eligible events / no adapter → no briefing
++ * → the public /daily page shows the degraded state (AC3). Never fabricates a briefing
++ * from nothing.
++ *
++ * Fail-fast validation: every adapter-returned briefing MUST be non-empty AND ≤200 字 AND
++ * free of the six forbidden phrase classes. A briefing violating any of these is rejected
++ * — generateTrendBriefing THROWS (the worker's try/catch isolates it so that coverageDate
++ * stays at null without aborting the whole daily-digest job). It never silently
++ * truncates/rewrites a briefing, because that would make the NFR "never advisory / never
++ * over-certain" decorative.
++ *
++ * Append-only (AD-5): every successful call inserts a NEW row. Prior rows are never
++ * updated or deleted — the full briefing history for a coverageDate is the version series.
++ * publish-orchestrator projects the LATEST row (createdAt desc, id desc tiebreaker) into
++ * published_trend_briefings.
++ */
++export async function generateTrendBriefing(
++  options: GenerateTrendBriefingOptions,
++): Promise<GenerateTrendBriefingResult | null> {
++  const { prisma, traceId, coverageDate, adapter } = options;
++
++  // 1. No adapter → honest degradation (V1 prod: daily-digest worker resolves none).
++  // Checked FIRST (mirrors generateDeepRead) so an adapter-less prod never hits the DB to
++  // load day-events. Never fabricate.
++  if (adapter === undefined) return null;
++
++  // 2. Select eligible events: published hot events whose latestEvidenceAt UTC day =
++  // coverageDate UTC day. JS filter on listPublishedHotEvents output (same window-filter
++  // pattern as generateDailyDigest). listPublishedHotEvents stays filter-free.
++  const allPublished = await listPublishedHotEvents({ prisma, traceId });
++  const eligible = filterByCoverageDay(allPublished, coverageDate);
++
++  // No eligible events → no briefing (never fabricate a contextless cross-event briefing).
++  if (eligible.length === 0) return null;
++
++  // 3. Bound the adapter grounding context to top TREND_BRIEFING_MAX_EVENTS by
++  // evidenceCount desc (strongest-signal first), mirroring the daily-digest evidenceCount-
++  // desc ordering precedent. Then load each event's title + summary (latest revision +
++  // latest ExplanationVersion overlay — same overlay rule deep-read uses). The adapter
++  // receives title + summary per event so the briefing is grounded in the evidence
++  // timeline (NFR-2).
++  const topEligible = rankAndBound(eligible, TREND_BRIEFING_MAX_EVENTS);
++  const eventsForAdapter = await loadEventContext(prisma, topEligible);
++
++  // 4. Call the adapter with the coverageDate + the day's event context.
++  const raw = await adapter.generateTrendBriefing({
++    coverageDate,
++    events: eventsForAdapter,
++  });
++  if (raw === null) return null;
++
++  // 5. Validate + normalize the briefing (non-empty, ≤200 字, guardrail). Throw on any
++  // violation (fail-fast, never silently truncate). The worker's try/catch isolates the
++  // throw so one bad briefing stays at null without aborting the whole daily-digest job.
++  // validateTrendBriefing returns the TRIMMED briefing so the stored row (and the
++  // projected text) never carries leading/trailing whitespace.
++  const briefing = validateTrendBriefing(raw);
++
++  // basedOnHotEventIds is the data-only link to the day's events (NO FK — digest-module
++  // invariant). Carries the FULL eligible set (not just the top-N bounded adapter input)
++  // so the audit records every event the briefing was derived from, even if the adapter
++  // only saw the top-N strongest signals.
++  const basedOnHotEventIds = eligible.map((e) => e.hotEventId);
++
++  // 6. APPEND a new trend_briefings row (source="ai"). Never update or delete prior rows
++  // (AD-5). modelId + promptVersion are carried verbatim from the adapter so the audit
++  // chain records which provider + prompt produced each row (NFR-7). basedOnHotEventIds
++  // is stored as a Json string[] via a cast to Prisma.InputJsonValue (Prisma's Json
++  // envelope does not infer the element type; the cast is the documented boundary — same
++  // role as in digest-service.ts / theme-service.ts).
++  const created = await prisma.trendBriefing.create({
++    data: {
++      id: newTraceId(),
++      coverageDate,
++      briefing,
++      basedOnHotEventIds:
++        basedOnHotEventIds as unknown as Prisma.InputJsonValue,
++      source: ExplanationSource.Ai,
++      modelId: raw.modelId,
++      promptVersion: raw.promptVersion,
++      traceId,
++    },
++    select: {
++      id: true,
++      coverageDate: true,
++      briefing: true,
++      basedOnHotEventIds: true,
++      source: true,
++      modelId: true,
++      promptVersion: true,
++      createdAt: true,
++    },
++  });
++
++  return {
++    trendBriefingId: created.id,
++    coverageDate: created.coverageDate,
++    briefing: created.briefing,
++    basedOnHotEventIds: created.basedOnHotEventIds as unknown as string[],
++    source: created.source,
++    modelId: created.modelId,
++    promptVersion: created.promptVersion,
++    createdAt: created.createdAt,
++    traceId,
++  };
++}
++
++/**
++ * Return the latest trend_briefings row for a coverageDate (createdAt desc, id desc
++ * tiebreaker — UUIDv7 ids embed a monotonic timestamp so two briefings sharing the same
++ * createdAt millisecond resolve deterministically to the newer one), or null if none exist.
++ * publish-orchestrator's trend-briefing projection (refreshPublishedTrendBriefing) reads
++ * the latest at projection time; this read helper is exposed for verify/seed + operator
++ * audit.
++ */
++export interface TrendBriefingRecord {
++  id: string;
++  coverageDate: Date;
++  briefing: string;
++  basedOnHotEventIds: string[];
++  source: string;
++  modelId: string;
++  promptVersion: string;
++  createdAt: Date;
++}
++
++export async function getLatestTrendBriefing(
++  options: {
++    prisma: PrismaClient;
++    traceId: string;
++    coverageDate: Date;
++  },
++): Promise<TrendBriefingRecord | null> {
++  const { prisma, coverageDate } = options;
++
++  const latest = await prisma.trendBriefing.findFirst({
++    where: { coverageDate },
++    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++    select: {
++      id: true,
++      coverageDate: true,
++      briefing: true,
++      basedOnHotEventIds: true,
++      source: true,
++      modelId: true,
++      promptVersion: true,
++      createdAt: true,
++    },
++  });
++
++  if (latest === null) return null;
++  return {
++    id: latest.id,
++    coverageDate: latest.coverageDate,
++    briefing: latest.briefing,
++    basedOnHotEventIds: latest.basedOnHotEventIds as unknown as string[],
++    source: latest.source,
++    modelId: latest.modelId,
++    promptVersion: latest.promptVersion,
++    createdAt: latest.createdAt,
++  };
++}
++
++// --- deterministic helpers ----------------------------------------------------
++
++/**
++ * Rank the eligible events by evidenceCount DESC (strongest signal first) with a
++ * hotEventId DESC tiebreaker for stable ordering, then take the top N. Mirrors the daily-
++ * digest assembleEntries sort. Pure function (same input → identical output).
++ */
++function rankAndBound(
++  events: PublishedHotEventSummary[],
++  limit: number,
++): PublishedHotEventSummary[] {
++  const ranked = [...events].sort((a, b) => {
++    const byCount = b.evidenceCount - a.evidenceCount;
++    if (byCount !== 0) return byCount;
++    return a.hotEventId < b.hotEventId ? 1 : a.hotEventId > b.hotEventId ? -1 : 0;
++  });
++  return ranked.slice(0, limit);
++}
++
++/**
++ * Load each event's title + summary (latest revision title overlay + latest
++ * ExplanationVersion summary overlay — same overlay rule deep-read uses). Returns one
++ * entry per event in the same order. Events missing a revision fall back to the baseline
++ * HotEvent.title; events missing an ExplanationVersion fall back to "" (empty summary).
++ *
++ * One prisma.findUnique per event (V1 scale is tiny — the day's eligible set is small and
++ * bounded by TREND_BRIEFING_MAX_EVENTS). A future batched read is a one-line change if
++ * scale demands it.
++ */
++async function loadEventContext(
++  prisma: PrismaClient,
++  events: PublishedHotEventSummary[],
++): Promise<{ hotEventId: string; title: string; summary: string }[]> {
++  const out: { hotEventId: string; title: string; summary: string }[] = [];
++  for (const e of events) {
++    const event = await prisma.hotEvent.findUnique({
++      where: { id: e.hotEventId },
++      select: {
++        id: true,
++        title: true,
++        revisions: {
++          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++          take: 1,
++          select: { title: true },
++        },
++        explanationVersions: {
++          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++          take: 1,
++          select: { summary: true },
++        },
++      },
++    });
++    // A published event should always exist (it has a published_hot_events row); guard
++    // anyway so a takedown race never crashes the briefing generation.
++    if (event === null) {
++      out.push({ hotEventId: e.hotEventId, title: e.title, summary: "" });
++      continue;
++    }
++    const latestRevision = event.revisions[0] ?? null;
++    const effectiveTitle =
++      latestRevision !== null ? latestRevision.title : event.title;
++    const latestExplanation = event.explanationVersions[0] ?? null;
++    const effectiveSummary =
++      latestExplanation !== null ? latestExplanation.summary : "";
++    out.push({
++      hotEventId: event.id,
++      title: effectiveTitle,
++      summary: effectiveSummary,
++    });
++  }
++  return out;
++}
++
++/**
++ * Validate + normalize an adapter-returned trend briefing: non-empty, ≤
++ * TREND_BRIEFING_MAX_LENGTH (200 字), and passes the 6-class wording guardrail. Throw on
++ * any violation (fail-fast). Returns the TRIMMED briefing so the caller stores the
++ * normalized value. Pure function (same input → identical result/throw), testable without
++ * DB.
++ *
++ * Length is measured in Unicode CODEPOINTS (`[...s].length`) — the right unit for the CJK
++ * "字" contract — NOT UTF-16 code units (`s.length`), which double-count surrogate pairs
++ * (emoji etc.) and would drift the cap. Whitespace is trimmed once up front so it neither
++ * counts toward the cap nor reaches the /daily page. Mirrors 5.1 validateReason's + 5.2
++ * validateSegment's trim + codepoint approach, applied to the single briefing paragraph.
++ *
++ * The 6-class guardrail (passesRecommendationGuardrail) is REUSED from reason-service —
++ * the constant is named "recommendation..." but carries the generic PRD §10 six classes
++ * (epic AC applies to all AI content). 5.2 deep-read reuses it per-segment; 5.3 reuses it
++ * for the briefing paragraph.
++ */
++export function validateTrendBriefing(result: LlmTrendBriefingResult): string {
++  // Provenance must be present (NFR-7 audit). modelId + promptVersion are the version-
++  // tracing pair; an empty value would break the audit chain. Checked here so a throw
++  // lands in the same fail-fast path as the briefing checks (a throw on provenance never
++  // reaches the create() call).
++  if (result.modelId.trim() === "" || result.promptVersion.trim() === "") {
++    throw new Error(
++      "[trend-briefing] adapter returned an empty modelId or promptVersion; NFR-7 requires both for audit tracing",
++    );
++  }
++  // Non-empty (guard against a non-string slipping through the type boundary).
++  if (
++    typeof result.briefing !== "string" ||
++    result.briefing.trim() === ""
++  ) {
++    throw new Error(
++      "[trend-briefing] adapter returned an empty briefing; AC requires a non-empty ≤200 字 briefing",
++    );
++  }
++  const trimmed = result.briefing.trim();
++  // ≤200 字 (codepoints — the right measure for CJK 字).
++  const codepoints = [...trimmed].length;
++  if (codepoints > TREND_BRIEFING_MAX_LENGTH) {
++    throw new Error(
++      `[trend-briefing] adapter returned a briefing of ${codepoints} 字 (> ${TREND_BRIEFING_MAX_LENGTH}); AC requires ≤${TREND_BRIEFING_MAX_LENGTH} 字`,
++    );
++  }
++  // 6-class wording guardrail (PRD §10), evaluated on the trimmed value. Reuses the
++  // generic guardrail from reason-service (the name says "recommendation" but the six
++  // classes are generic — epic AC applies to all AI content).
++  if (!passesRecommendationGuardrail(trimmed)) {
++    throw new Error(
++      "[trend-briefing] adapter returned a briefing containing a forbidden phrase (action / return-prediction / manipulation-frame / recommendation-strength / timing-advice / over-certainty); PRD §10 forbids these",
++    );
++  }
++  return trimmed;
++}

@@ -58,6 +58,7 @@ import {
   type LLMAdapter,
   type LlmReasonResult,
   type LlmDeepReadResult,
+  type LlmTrendBriefingResult,
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
@@ -332,8 +333,12 @@ async function main(): Promise<void> {
         };
       },
       // verify-reason exercises only the reason path; deep-read is covered by
-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
+      // LLMAdapter interface is satisfied.
       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
+      },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
         return null;
       },
     };
@@ -367,8 +372,12 @@ async function main(): Promise<void> {
           };
         },
         // verify-reason exercises only the reason path; deep-read is covered by
-        // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+        // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
+        // LLMAdapter interface is satisfied.
         async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+          return null;
+        },
+        async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
           return null;
         },
       };
@@ -403,8 +412,12 @@ async function main(): Promise<void> {
         };
       },
       // verify-reason exercises only the reason path; deep-read is covered by
-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
+      // LLMAdapter interface is satisfied.
       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
+      },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
         return null;
       },
     };
@@ -451,8 +464,12 @@ async function main(): Promise<void> {
         };
       },
       // verify-reason exercises only the reason path; deep-read is covered by
-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
+      // LLMAdapter interface is satisfied.
       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
+      },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
         return null;
       },
     };
@@ -492,8 +509,12 @@ async function main(): Promise<void> {
         };
       },
       // verify-reason exercises only the reason path; deep-read is covered by
-      // verify-deepread. Return null so the LLMAdapter interface is satisfied.
+      // verify-deepread, trend-briefing by verify-trendbriefing. Return null so the
+      // LLMAdapter interface is satisfied.
       async generateDeepRead(): Promise<LlmDeepReadResult | null> {
+        return null;
+      },
+      async generateTrendBriefing(): Promise<LlmTrendBriefingResult | null> {
         return null;
       },
     };

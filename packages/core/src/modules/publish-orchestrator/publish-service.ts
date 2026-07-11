@@ -70,6 +70,7 @@ import type {
   DailyDigestEntry,
   GetPublishedDailyDigestOptions,
   GetPublishedHotEventDetailOptions,
+  GetPublishedTrendBriefingOptions,
   ListPublishedAssociationsOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
   ListPublishedHotEventExplanationsOptions,
@@ -82,7 +83,9 @@ import type {
   PublishedHotEventExplanationSummaryRow,
   PublishedHotEventSummary,
   PublishedThemeMembershipRow,
+  PublishedTrendBriefing,
   RefreshPublishedDailyDigestOptions,
+  RefreshPublishedTrendBriefingOptions,
   ThemeRef,
 } from "./types.js";
 
@@ -1144,4 +1147,113 @@ export async function listPublishedDailyDigestCoverageDates(
   });
 
   return rows;
+}
+
+// --- Story 5.3: trend-briefing projection + reads -----------------------------
+
+/**
+ * Refresh the published trend-briefing read model for one coverageDate (Story 5.3). This
+ * is a SIBLING function to refreshPublishedDailyDigest AND to refreshPublishedReadModel,
+ * NOT a new branch inside either. Reason: the trend briefing is coverageDate-keyed
+ * (aggregates the day's events into one paragraph), just like the daily digest; and the
+ * hot-event projections are hotEventId-keyed. Mixing coverageDate + hotEventId keys in one
+ * function would conflate distinct aggregate contracts. Same module (publish-orchestrator,
+ * AD-3's single write-owner), coverageDate-keyed aggregate, independent sibling function
+ * mirroring refreshPublishedDailyDigest's shape.
+ *
+ * Reads the latest trend_briefings row for the coverageDate (createdAt desc, id desc
+ * tiebreaker) → upsert published_trend_briefings. If no trend_briefings row exists
+ * (generateTrendBriefing has not run / returned null / V1 prod adapter resolves none),
+ * deleteMany that coverageDate's row so the /daily page renders the honest degraded state
+ * rather than a stale prior projection. Idempotent.
+ *
+ * Unlike the hotEventId-keyed projections, the trend briefing has NO FK to hot_events —
+ * basedOnHotEventIds is a data-only Json link. A hotEvent takedown does NOT trigger this
+ * refresh (the briefing is a versioned point-in-time artifact; the link honestly 404s,
+ * staleness recompute is deferred — same rule as the daily digest).
+ *
+ * This query only reads trend_briefings and writes published_trend_briefings. It never
+ * reads hot_events / evidence_* / published_hot_event_* (AD-3: the trend-briefing read
+ * model is the sole public surface for the /daily trend-briefing block).
+ */
+export async function refreshPublishedTrendBriefing(
+  options: RefreshPublishedTrendBriefingOptions,
+): Promise<void> {
+  const { prisma, traceId, coverageDate } = options;
+
+  const latest = await prisma.trendBriefing.findFirst({
+    where: { coverageDate },
+    // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids embed a
+    // monotonic timestamp) — same convention as refreshPublishedDailyDigest + the
+    // hotEventId-keyed projections.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      briefing: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    // No briefing row: clear any stale projection so the /daily page shows the degraded
+    // state (no fabricated briefing).
+    await prisma.publishedTrendBriefing.deleteMany({
+      where: { coverageDate },
+    });
+    return;
+  }
+
+  await prisma.publishedTrendBriefing.upsert({
+    where: { coverageDate },
+    create: {
+      coverageDate,
+      briefing: latest.briefing,
+      source: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      briefing: latest.briefing,
+      source: latest.source,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
+ * Read the public trend briefing for one coverageDate — Story 5.3.
+ *
+ * This is the public read query the /daily page consumes (AD-3: public reads only
+ * published_* read models). It returns the projected briefing for that coverageDate, or
+ * null when no published_trend_briefings row exists (briefing not generated / llmAdapter
+ * unavailable in V1 prod / coverageDate has no eligible events) — the /daily page then
+ * renders the honest degraded state ("AI 趋势研判生成中。", AC3).
+ *
+ * This query only SELECTs published_trend_briefings. It NEVER reads trend_briefings /
+ * hot_events / evidence_* (AD-3). Row existence = a published briefing for that
+ * coverageDate (no status column).
+ */
+export async function getPublishedTrendBriefing(
+  options: GetPublishedTrendBriefingOptions,
+): Promise<PublishedTrendBriefing | null> {
+  const { prisma, coverageDate } = options;
+
+  const row = await prisma.publishedTrendBriefing.findUnique({
+    where: { coverageDate },
+    select: {
+      coverageDate: true,
+      briefing: true,
+      source: true,
+      generatedAt: true,
+    },
+  });
+
+  if (row === null) return null;
+  return {
+    coverageDate: row.coverageDate,
+    briefing: row.briefing,
+    source: row.source,
+    generatedAt: row.generatedAt,
+  };
 }

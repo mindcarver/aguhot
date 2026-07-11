@@ -1018,3 +1018,15 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
   summary: deep-read adapter grounding 的 evidence 无 orderBy，adapter 收到非确定顺序（NFR-2 漂移）
   evidence: `generateDeepRead` 加载 `event.evidence` 传给 adapter 作 grounding，relation select 未加 `orderBy`（如 publishedAt asc）。NFR-2 要求深读与证据时间线一致；非确定顺序可能影响真实 provider 的 grounding。V1 Stub 忽略全部上下文不触发；真实 provider 接入时显现。修法：select 加 `orderBy: { publishedAt: "asc" }`（或与 published 投影的 position 顺序对齐）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: daily-digest worker 共享 try/catch，trend 路径 throw 会标记整 job 失败、digest 重跑 append 重复行；post-V1 接真实双 adapter 后改为 per-path try/catch 上报部分成功
+  evidence: `apps/worker/src/queues/daily-digest-queue.ts` 的 handler 用单个 try/catch 包住 digest 与 trend 两条 `if (adapter !== undefined)` 路径；若 digest 成功（generated=1、refresh 已 commit）后 trend 路径 throw，catch re-throw → BullMQ 标记 job 失败，重跑时 digest 路径再 append 一条 daily_digests 行。spec AC（「任一 adapter undefined 时另一路径独立产出」）指 undefined 情形，code 的独立 `if` 块已满足；throw 情形 benign（append-only latest-wins、投影取最新、V1 无 retry、返回值无人消费），故 V1 不修。真实双 adapter 接入 + retry 启用后，改为 digest/trend 各自 try/catch、分别上报 {digestFailed, trendFailed} 以正确反映部分成功并避免重跑重复 append。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: /daily 页 trend-briefing fetch gate `digest !== null`，post-V1 双 adapter 且 digest adapter 失败时研判被隐藏
+  evidence: `apps/web/app/(public)/daily/page.tsx` 的 `trendBriefing` 三元式以 `digest !== null` 为前置条件，研判段渲染于 `<DigestContent>` 内（spec Code Map/Tasks 明示此放置，dev 照做）。日报与研判共用 `filterByCoverageDay` 发现当日事件，正常操作下 digest-null ⟺ 无当日事件 ⟺ briefing-null，故无丢失。仅 post-V1 两 adapter 都接入、且 digest adapter 返回 null/[] 而 llmAdapter 产出有效研判的窄边沿下，页面显示 `<DegradedContent>` 而隐藏已存在的 briefing。修法（届时）：`coverageDate !== undefined` 即并发 `Promise.all` 取两个投影，研判在 `<DegradedContent>` 与 `<DigestContent>` 均可渲染（或提到 digest 分支之上）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: trend-briefing-service `loadEventContext` 逐事件 findUnique（N+1，bounded ≤12）；改 batch findMany
+  evidence: `packages/core/src/modules/digest/trend-briefing-service.ts` 的 `loadEventContext` 对 top-12 事件逐个 `prisma.hotEvent.findUnique`（最多 12 次往返）。注释已标注「V1 scale is tiny…a future batched read is a one-line change」。无正确性问题、bounded；规模上行后改 `prisma.hotEvent.findMany({ where: { id: { in: ids } }, select: { revisions, explanationVersions } })` 一次取齐。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: 6 类子串黑名单对合法金融词汇（持仓/增持/主力/一定 等）的 false-positive——研判现为其第 3 个消费者（reason/deepread/trendbriefing），真实 provider 接入时统一调
+  evidence: `passesRecommendationGuardrail` 为原始子串匹配（`reason-service.ts`），无 CJK 词界。研判段落更易触发（如「存在一定的不确定性」命中「一定」）。V1 Stub 文案已避开（dev 将示例「一定延续性」改为「延续性」）；5.2 deferred 已登记同类。3 个 AI 内容表面（reason/deepread/trendbriefing）共用此 guardrail，真实 provider 接入时需统一调（提升到 shared + 改名 + 词界感知，或按表面差异化白名单）。

@@ -910,3 +910,72 @@ model PublishedHotEventDeepRead {
 
   @@map("published_hot_event_deep_reads")
 }
+
+// Story 5.3 — append-only AI 趋势研判 (daily-page cross-event trend briefing). Same
+// shape and ownership rules as DailyDigest above: coverageDate-keyed aggregate (the
+// briefing spans the day's events, NOT one hotEvent), rows are append-only, and the
+// chain ordered by created_at is the auditable history (NFR-7 version + provenance:
+// model_id + prompt_version + source on every row). The publish-orchestrator sibling
+// projection (refreshPublishedTrendBriefing) projects the LATEST row (created_at desc
+// first) into published_trend_briefings — publish-orchestrator stays the SOLE writer of
+// that projection (AD-2/AD-3); the worker only appends here + calls
+// refreshPublishedTrendBriefing.
+//
+// Distinct from DeepRead (per-HotEvent, 影响面/受益方/风险点) and ExplanationVersion
+// (per-HotEvent, summary/whyItMatters/uncertainties): TrendBriefing is per-coverageDate
+// (one paragraph spanning the day's events). The three independent append-only tables
+// follow the epic-5-context data-model decision (three independent tables, do not reuse
+// ExplanationVersion). The briefing is a single-paragraph string (not three segments),
+// so it does not fit DeepRead's three-column schema either.
+//
+// NO FK to hot_events (digest-module invariant: "no FK, data-only link, cross-page
+// navigation is not a module" — mirrors DailyDigest). `based_on_hot_event_ids` is a
+// data-only Json string[] carrying the set of hotEventIds the briefing was derived from
+// (satisfies the epic's `TREND_BRIEFING }o--o{ HOT_EVENT : based_on` LOGICAL relation;
+// physically a data-only link, same shape as DailyDigest.items). A hotEvent takedown does
+// NOT trigger this refresh (the briefing is a versioned point-in-time artifact; the link
+// honestly 404s, staleness recompute is deferred — same rule as the daily digest).
+//
+// `source` is "ai" in V1 (ExplanationSource.Ai value, reused — not DigestSource which has
+// no Ai variant; the column stays String and the TS side assigns ExplanationSource.Ai).
+// Only the model_id/prompt_version mark a row as stub-generated.
+model TrendBriefing {
+  id                String   @id // UUIDv7, assigned in application code (newTraceId)
+  coverageDate      DateTime @map("coverage_date")
+  briefing          String // ≤200 字 single-paragraph cross-event trend briefing; guardrail-enforced at write time
+  basedOnHotEventIds Json   @map("based_on_hot_event_ids") // string[] (hotEventIds the briefing was derived from); data-only link, NO FK
+  source            String // ExplanationSource union value ("ai" in V1)
+  modelId           String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+  promptVersion     String   @map("prompt_version") // prompt template version (e.g. "trendbriefing-stub-v1")
+  traceId           String?  @map("trace_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // NO FK to hot_events — coverageDate-keyed aggregate, data-only based_on_hot_event_ids
+  // link (mirrors DailyDigest's no-FK invariant).
+  @@index([coverageDate])
+  @@index([createdAt])
+  @@map("trend_briefings")
+}
+
+// Public read-model projection of the latest TrendBriefing row (AD-3 public projection,
+// one row per coverageDate). publish-orchestrator is the SOLE writer
+// (refreshPublishedTrendBriefing sibling function — coverageDate-keyed, mirrors
+// refreshPublishedDailyDigest); the /daily page reads it via getPublishedTrendBriefing.
+// source/generated_at come from the latest TrendBriefing row (always "ai" in V1). A row
+// may be ABSENT for a coverageDate if generateTrendBriefing has not produced a briefing
+// (V1 worker resolves no adapter → skip → never produced, OR the coverageDate has no
+// eligible published events) — the /daily page renders an honest degraded state in that
+// case (AC3, never fabricates a briefing). coverageDate is the PK (one projected briefing
+// per coverageDate). Mirrors published_daily_digests (coverageDate-keyed, no FK).
+model PublishedTrendBriefing {
+  coverageDate DateTime @id @map("coverage_date")
+  briefing     String
+  source       String // ExplanationSource union value
+  generatedAt  DateTime @map("generated_at")
+  traceId      String?  @map("trace_id")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // NO FK to hot_events — coverageDate-keyed aggregate (mirrors published_daily_digests).
+
+  @@map("published_trend_briefings")
+}

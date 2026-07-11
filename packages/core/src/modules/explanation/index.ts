@@ -1,5 +1,5 @@
 /**
- * explanation module barrel — Story 1.8 + Story 5.1 + Story 5.2.
+ * explanation module barrel — Story 1.8 + Story 5.1 + Story 5.2 + Story 5.3.
  *
  * Owns the ExplanationVersion table (AD-5 append-only), and as of Story 5.1,
  * the recommendation_reasons table (AD-5 append-only, the ≤40 字 AI 解读 card
@@ -8,7 +8,11 @@
  * deterministic three-partition generator + the latest-version read query (1.8),
  * the LLMAdapter port + StubLlmAdapter test-only + the recommendation-reason
  * generator + the 6-class guardrail (5.1), and the deep-read generator (5.2,
- * reusing the same guardrail + port). The Prisma client lives one level up and is
+ * reusing the same guardrail + port). Story 5.3 adds the third LLMAdapter method
+ * generateTrendBriefing + the STUB_TREND_BRIEFING fixture + the LlmTrendBriefing*
+ * port types — the trend briefing itself lives in the digest module (coverageDate-
+ * keyed, not per-HotEvent), but its generation PORT is this module's LLMAdapter
+ * (epic-5-context :108 "三者共用端口"). The Prisma client lives one level up and is
  * re-exported from the package barrel.
  *
  * This module never writes hot_events, evidence_records, or published_* tables.
@@ -36,6 +40,7 @@ export {
   StubLlmAdapter,
   STUB_RECOMMENDATION_REASON,
   STUB_DEEP_READ,
+  STUB_TREND_BRIEFING,
 } from "./stub-llm-adapter.js";
 export { ExplanationSource } from "./types.js";
 export type {
@@ -51,6 +56,8 @@ export type {
   LlmReasonResult,
   LlmDeepReadResult,
   LlmDeepReadArgs,
+  LlmTrendBriefingResult,
+  LlmTrendBriefingArgs,
   LLMAdapter,
   GenerateRecommendationReasonOptions,
   GenerateRecommendationReasonResult,

@@ -153,6 +153,8 @@ export {
   refreshPublishedDailyDigest,
   getPublishedDailyDigest,
   listPublishedDailyDigestCoverageDates,
+  refreshPublishedTrendBriefing,
+  getPublishedTrendBriefing,
 } from "./modules/publish-orchestrator/publish-service.js";
 export {
   refreshPublishedTimelineForEvent,
@@ -200,6 +202,9 @@ export type {
   GetPublishedDailyDigestOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
   PublishedHotEventDeepRead,
+  PublishedTrendBriefing,
+  RefreshPublishedTrendBriefingOptions,
+  GetPublishedTrendBriefingOptions,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
@@ -232,6 +237,7 @@ export {
   StubLlmAdapter,
   STUB_RECOMMENDATION_REASON,
   STUB_DEEP_READ,
+  STUB_TREND_BRIEFING,
 } from "./modules/explanation/index.js";
 export {
   ExplanationSource,
@@ -249,6 +255,8 @@ export type {
   LlmReasonResult,
   LlmDeepReadResult,
   LlmDeepReadArgs,
+  LlmTrendBriefingResult,
+  LlmTrendBriefingArgs,
   LLMAdapter,
   GenerateRecommendationReasonOptions,
   GenerateRecommendationReasonResult,
@@ -325,12 +333,20 @@ export type {
 // digest module (Story 2.4 — DigestAdapter port AD-7 + StubDigestAdapter
 // test-only + generateDailyDigest append-only AD-2 + noInvestAdvice / coverage
 // helpers; coverageDate-keyed aggregate, no FK to hot_events; daily-digest
-// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only).
+// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only.
+// Story 5.3 — generateTrendBriefing append-only AD-2 (coverageDate-keyed cross-event
+// AI 趋势研判) + TREND_BRIEFING_MAX_LENGTH + validateTrendBriefing; reuses explanation's
+// LLMAdapter port + passesRecommendationGuardrail; trend_briefings table is data-only
+// linked (no FK); daily-digest worker resolves no llmAdapter → prod degrades honestly).
 export {
   generateDailyDigest,
   getLatestDigest,
   noInvestAdvice,
   filterByCoverageDay,
+  generateTrendBriefing,
+  getLatestTrendBriefing,
+  validateTrendBriefing,
+  TREND_BRIEFING_MAX_LENGTH,
   StubDigestAdapter,
   STUB_DIGEST_CONCLUSION,
 } from "./modules/digest/index.js";
@@ -344,6 +360,9 @@ export type {
   GenerateDailyDigestResult,
   GetLatestDigestOptions,
   DigestRecord,
+  GenerateTrendBriefingOptions,
+  GenerateTrendBriefingResult,
+  TrendBriefingRecord,
 } from "./modules/digest/index.js";
 
 // search-read module (Story 3.1 — public search over published_* read models;
