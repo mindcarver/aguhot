@@ -1,0 +1,1209 @@
+diff --git a/apps/web/app/(public)/page.tsx b/apps/web/app/(public)/page.tsx
+index f397e06..e306f6b 100644
+--- a/apps/web/app/(public)/page.tsx
++++ b/apps/web/app/(public)/page.tsx
+@@ -1,215 +1,151 @@
+ import type { Metadata } from "next";
+-import Link from "next/link";
+ 
+ import {
+-  FollowTargetKind,
+   getPrisma,
+-  listFollowedTargetIds,
+-  listPublishedAssociations,
+   listPublishedHotEvents,
++  listPublishedTimeline,
+   newTraceId,
+-  type AssociationItem,
++  type PublishedHotEventSummary,
++  type PublishedTimelineEntry,
+ } from "@aguhot/core";
+ 
+-import { readSession } from "@/lib/session";
+-
+-import { EventCard } from "./_components/event-card";
+-import {
+-  FeedFilters,
+-  parseAssociationFilter,
+-  parseFeedWindow,
+-  type FeedWindow,
+-} from "./_components/feed-filters";
++import { MainLineBand } from "./_components/main-line-band";
++import { TimelineCard } from "./_components/timeline-card";
+ 
+ export const metadata: Metadata = {
+   title: "首页",
+ };
+ 
+ /**
+- * Public hot-event feed homepage — Story 1.7.
++ * Public timeline feed homepage — Story 4.2 (Epic 4 时间流首页).
++ *
++ * This is the Epic 4 pivot: the home body changed from the V1 priority-sorted
++ * `listPublishedHotEvents` feed (Story 1.7) to a minute-level chronological
++ * `时间流` reading the new `published_timeline` read model (Story 4.1, AD-3b).
++ * The page now reads TWO published read models:
++ *   - `listPublishedTimeline` (default = latest trade_date, ordered
++ *     `occurredAt DESC`) → the timeline cards (minute-level dynamics).
++ *   - `listPublishedHotEvents` (ordered `evidenceCount DESC + latestEvidenceAt
++ *     DESC`) → the top-N `main-line-band` ("今日重点 / 市场主线"). The band
++ *     reuses the existing saliency read because `published_timeline` has no
++ *     saliency/pin field (it is a pure time-order projection). Two read models
++ *     coexist: the band answers "what is the market trading", the timeline
++ *     answers "minute-level dynamics" (spec Design Notes).
+  *
+- * This is the first public route to READ the published_hot_events read model
+- * (AD-3: public reads only published_* read models). It is the public
+- * consumption half of the "viewable + trustworthy" loop that 1.6's publish gate
+- * made possible.
++ * Masthead (H1「AGUHOT」+ subtitle「可信热点发布闭环」) is preserved byte-for-
++ * byte from 1.1 so `home.spec.ts` stays green. `(public)/layout.tsx` public
++ * shell is unchanged.
+  *
+- * Why force-dynamic + @aguhot/core import is safe for the build:
++ * Why force-dynamic + @aguhot/core import is safe for the build (unchanged
++ * rationale from 1.7):
+  *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
+  *     evaluates it at REQUEST time, not BUILD time. getPrisma() reads
+  *     DATABASE_URL at runtime; that call is never reached during `next build`.
+- *     This keeps the public web build DATABASE_URL-free — the same mechanism the
+- *     (operator)/console route uses. The (public)/layout.tsx and /design route
+- *     stay static (they never import core); the /daily /topics /favorites routes
+- *     are also force-dynamic for the same reason.
++ *     This keeps the public web build DATABASE_URL-free.
+  *
+- * Why URL-driven filtering:
+- *   - The date window (?window=today|7d|30d|all, default all) is read from
+- *     searchParams (a Promise in Next 16) and rendered via `<Link>` pills in
+- *     FeedFilters. The filter state lives in the URL: server-rendered, shareable,
+- *     back/forward works, refresh keeps the filter, zero client JS / useState.
+- *     "全部" is the always-visible clear control.
++ * Honest states (NFR-2: never fake data):
++ *   - `published_timeline` empty (no rows at all) → "暂无公开展示的时间流" empty
++ *     state + the page's render time as "最近更新". No skeleton, no cards, no
++ *     fabricated content. masthead still visible, no /login redirect (AD-8).
++ *   - `listPublishedTimeline` returns `[]` (not an error) → same empty state.
++ *   - `listPublishedHotEvents` empty → the band does NOT render (no fabricated
++ *     "今日重点" copy). The timeline empty state is independent: either read
++ *     model can be empty without affecting the other.
++ *   - getPrisma throws when DATABASE_URL is missing at runtime → loud failure
++ *     (the error propagates to a route error), NOT a silent empty state. DB is
++ *     core infra; its absence is an incident, not graceful degradation.
+  *
+- * Honest states (NFR: never fake data):
+- *   - No published rows at all → "暂无公开展示的热点事件" empty state (no skeleton cards).
+- *   - Rows exist but the window filters to zero → "当前筛选条件下无热点事件" + clear link.
+- *   - getPrisma throws when DATABASE_URL is missing at runtime → loud failure (the
+- *     error propagates to a route error), NOT a silent empty state. DB is core
+- *     infra; its absence is an incident, not graceful degradation.
+- *
+- * Masthead (H1 「AGUHOT」 + subtitle 「可信热点发布闭环」) is preserved from 1.1 so
+- * home.spec.ts stays green.
++ * Removed (4.2): the V1 priority-feed filter UI (`FeedFilters`, the `?window=`
++ * /`?concept=`/`?industry=`/`?stock=` searchParams, the association-dimension
++ * in-memory join, the FollowButton-on-card follow-state read). Per spec Code
++ * Map: the home no longer imports `FeedFilters` (4.3 will own the new session/
++ * category filter UI; the file is kept for 4.3 to possibly reuse, per spec
++ * Never: do not delete feed-filters.tsx). The timeline card has no follow-on-
++ * card in 4.2 scope; follow remains on the detail page.
+  */
+ export const dynamic = "force-dynamic";
+ 
+-interface PageProps {
+-  searchParams: Promise<{
+-    window?: string;
+-    concept?: string;
+-    industry?: string;
+-    stock?: string;
+-  }>;
+-}
+-
+-export default async function PublicHomePage({ searchParams }: PageProps) {
+-  const params = await searchParams;
+-  const window = parseFeedWindow(params.window);
+-  // Story 2.2: the association-dimension filter. At most one of concept/
+-  // industry/stock is honored (V1 single-dimension, per spec Never: no
+-  // explicit "clear all" control for multi-dimension). parseAssociationFilter
+-  // resolves to {kind,label} | null.
+-  const association = parseAssociationFilter(params);
+-
++export default async function PublicHomePage() {
+   // Request-time DB read. getPrisma() throws loudly if DATABASE_URL is missing —
+   // that is intentional (DB is core infra, not graceful-degradation territory).
+   const prisma = getPrisma();
+   const traceId = newTraceId();
+-  const all = await listPublishedHotEvents({ prisma, traceId });
+ 
+-  // Story 2.2: when an association dimension is active, build a hotEventId→items
+-  // map from listPublishedAssociations and filter the published list in JS
+-  // (mirroring the 1.7 filterByWindow pattern). listPublishedHotEvents stays
+-  // filter-free (no signature change). V1 published volume is tiny, so a second
+-  // read + in-memory join is the ponytail choice over a SQL join (deferred as a
+-  // scale ceiling).
+-  let associationByEvent: Map<string, AssociationItem[]> | null = null;
+-  if (association !== null) {
+-    const rows = await listPublishedAssociations({ prisma, traceId });
+-    associationByEvent = new Map(rows.map((r) => [r.hotEventId, r.items]));
+-  }
++  // Two parallel published-read-model reads. Both are read-only (AD-3/AD-3b);
++  // neither triggers a synchronous refresh or external call (AD-4). The page
++  // issues them concurrently so the request latency is the max, not the sum.
++  const [hotEvents, timelineEntries] = await Promise.all([
++    listPublishedHotEvents({ prisma, traceId }),
++    listPublishedTimeline({ prisma, traceId }),
++  ]);
+ 
+-  const totalExists = all.length > 0;
+   const now = new Date();
+-  // Story 3.2: read the session (if any) and batch-fetch the viewer's followed
+-  // hot-event ids for the feed cards. Anonymous → no extra DB read (the
+-  // followedIds Set stays empty and FollowButton renders 「收藏」 + the
+-  // deferred-login dialog). Logged-in → one listFollowedTargetIds read feeds
+-  // every EventCard's initial state (no N+1 per card).
+-  const session = await readSession();
+-  const followedIds =
+-    session !== null
+-      ? await listFollowedTargetIds({
+-          prisma,
+-          traceId,
+-          userAccountId: session.accountId,
+-          kind: FollowTargetKind.HotEvent,
+-        })
+-      : new Set<string>();
+-  const isLoggedIn = session !== null;
+-  // Apply the window filter, then the association filter (AND). The association
+-  // filter keeps an event iff its projected items include one matching the
+-  // active dimension's {kind, label}. Events with no projection row are
+-  // excluded (no matching association).
+-  const windowed = totalExists ? filterByWindow(all, window, now) : [];
+-  const visible =
+-    association === null
+-      ? windowed
+-      : windowed.filter((e) => {
+-          const items = associationByEvent?.get(e.hotEventId);
+-          if (items === undefined) return false;
+-          return items.some(
+-            (it) => it.kind === association.kind && it.label === association.label,
+-          );
+-        });
+-  const hasFilter = window !== "all" || association !== null;
+ 
+   return (
+     <div className="mx-auto max-w-3xl px-6 py-12">
++      {/*
++        Masthead — preserved byte-for-byte from 1.1 so home.spec.ts stays green
++        (it asserts H1「AGUHOT」+「可信热点发布闭环」subtitle). The (public)/layout.tsx
++        public shell is unchanged.
++      */}
+       <header className="space-y-4">
+         <h1 className="text-4xl font-bold tracking-tight">AGUHOT</h1>
+         <p className="text-lg text-ink-secondary">可信热点发布闭环</p>
+       </header>
+ 
+-      {totalExists ? (
+-        <>
+-          <section className="mt-8">
+-            <FeedFilters
+-              window={window}
+-              association={association}
+-              searchParams={params}
+-            />
+-          </section>
++      {/*
++        Main-line band — "今日重点 / 市场主线". Rendered ONLY when the hot-events
++        read model has data; the band component itself also guards against an
++        empty list (defensive — NFR-2: no fabricated copy). Sits above the
++        timeline so the home proactively answers "what is the market trading"
++        before the minute-level scan.
++      */}
++      {hotEvents.length > 0 ? (
++        <section className="mt-8">
++          <MainLineBand events={hotEvents as PublishedHotEventSummary[]} now={now} />
++        </section>
++      ) : null}
+ 
+-          {visible.length > 0 ? (
+-            <ul role="list" className="mt-8 space-y-3">
+-              {visible.map((e) => (
+-                <EventCard
+-                  key={e.hotEventId}
+-                  hotEventId={e.hotEventId}
+-                  title={e.title}
+-                  evidenceCount={e.evidenceCount}
+-                  latestEvidenceAt={e.latestEvidenceAt}
+-                  publishedAt={e.publishedAt}
+-                  now={now}
+-                  isFollowing={followedIds.has(e.hotEventId)}
+-                  isLoggedIn={isLoggedIn}
+-                />
+-              ))}
+-            </ul>
+-          ) : (
+-            <div className="mt-12 space-y-3">
+-              <p className="text-ink-secondary">当前筛选条件下无热点事件。</p>
+-              {hasFilter ? (
+-                <Link
+-                  href="/"
+-                  className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
+-                >
+-                  查看全部
+-                </Link>
+-              ) : null}
+-            </div>
+-          )}
+-        </>
+-      ) : (
+-        <p className="mt-12 text-ink-secondary">暂无公开展示的热点事件。</p>
+-      )}
++      {/*
++        Timeline feed — the minute-level chronological list. Each entry renders
++        as a TimelineCard (fixed reading order, fold disclosure, AI 解读 slot
++        only when non-null). The list is rendered ONLY when the timeline read
++        model has entries; the empty state below handles the no-data case.
++      */}
++      <section className="mt-8" aria-label="时间流">
++        {timelineEntries.length > 0 ? (
++          <ul role="list" className="space-y-3">
++            {timelineEntries.map((entry: PublishedTimelineEntry) => (
++              <TimelineCard key={entry.id} entry={entry} />
++            ))}
++          </ul>
++        ) : (
++          <div className="space-y-3">
++            <p className="text-ink-secondary">暂无公开展示的时间流。</p>
++            {/*
++              Last-updated time — NFR-2: the empty state shows an explicit "最近
++              更新" time so the reader knows the page is live, not broken. Uses
++              the page's render time (now) since an empty read model has no row-
++              level timestamp to cite; this is the honest "this page was last
++              rendered at" anchor, not a fabricated content timestamp.
++            */}
++            <p className="font-mono text-xs text-ink-tertiary">
++              最近更新：{formatDateTime(now)}
++            </p>
++          </div>
++        )}
++      </section>
+     </div>
+   );
+ }
+ 
+ /**
+- * Apply the date window to the published list (JS filter). The query already
+- * returns rows ordered by evidenceCount DESC + latestEvidenceAt DESC; windowing
+- * preserves that order. `now` is injected so card reason logic and window logic
+- * share one clock.
++ * Locale-stable UTC format (mirrors event-card.tsx / timeline-card.tsx). Avoids
++ * locale-dependent toLocaleString so the timestamp stays consistent across
++ * build-time TZ and runtime TZ. YYYY-MM-DD HH:mm UTC is enough for the empty-
++ * state "最近更新" line.
+  */
+-function filterByWindow<T extends { latestEvidenceAt: Date }>(
+-  rows: T[],
+-  window: FeedWindow,
+-  now: Date,
+-): T[] {
+-  if (window === "all") return rows;
+-  const cutoffMs = windowCutoffMs(window, now);
+-  return rows.filter((r) => r.latestEvidenceAt.getTime() >= cutoffMs);
+-}
+-
+-function windowCutoffMs(window: Exclude<FeedWindow, "all">, now: Date): number {
+-  const DAY = 24 * 60 * 60 * 1000;
+-  const nowMs = now.getTime();
+-  if (window === "today") {
+-    // "今日" = since the start of the current UTC day (midnight UTC).
+-    const startOfDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+-    return startOfDay;
+-  }
+-  if (window === "7d") return nowMs - 7 * DAY;
+-  return nowMs - 30 * DAY; // "30d"
++function formatDateTime(d: Date): string {
++  const iso = d.toISOString();
++  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+ }
+diff --git a/apps/web/package.json b/apps/web/package.json
+index a378636..3a7f3d7 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -13,7 +13,7 @@
+     "verify:session-cookie": "tsx lib/session-cookie-signer.selfcheck.ts",
+     "verify:watchlist": "tsx lib/watchlist.selfcheck.ts",
+     "verify:operator-auth": "tsx lib/operator-auth.selfcheck.ts",
+-    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return\"",
++    "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@feed|@detail|@revision|@merge-split|@market-reaction|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return|@timeline\"",
+     "e2e:a11y": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @a11y",
+     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-operator-e2e-secret-32chars playwright test --grep @console",
+     "e2e:feed": "tsx e2e/seed-feed.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @feed",
+@@ -29,6 +29,7 @@
+     "e2e:search-return": "tsx e2e/seed-search.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @search-return",
+     "e2e:follow": "tsx e2e/seed-follow.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-follow-e2e-secret-32chars playwright test --grep @follow",
+     "e2e:watchlist": "tsx e2e/seed-watchlist.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-watchlist-e2e-secret-32chars playwright test --grep @watchlist",
++    "e2e:timeline": "tsx e2e/seed-timeline.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @timeline",
+     "seed:console": "tsx e2e/seed-console.ts",
+     "seed:feed": "tsx e2e/seed-feed.ts",
+     "seed:detail": "tsx e2e/seed-detail.ts",
+@@ -41,7 +42,8 @@
+     "seed:loop": "tsx e2e/seed-loop.ts",
+     "seed:search": "tsx e2e/seed-search.ts",
+     "seed:follow": "tsx e2e/seed-follow.ts",
+-    "seed:watchlist": "tsx e2e/seed-watchlist.ts"
++    "seed:watchlist": "tsx e2e/seed-watchlist.ts",
++    "seed:timeline": "tsx e2e/seed-timeline.ts"
+   },
+   "dependencies": {
+     "@aguhot/config": "workspace:*",
+=== NEW FILE: apps/web/app/(public)/_components/timeline-card.tsx ===
+import Link from "next/link";
+
+import {
+  TIMELINE_FOLD_THRESHOLD,
+  type PublishedTimelineEntry,
+  type TimelineSessionTagType,
+} from "@aguhot/core";
+
+import { AiLabel } from "@/components/chips";
+import { cn } from "@/lib/utils";
+
+/**
+ * Timeline feed card — Story 4.2 (Epic 4 时间流首页).
+ *
+ * Renders one `PublishedTimelineEntry` (the per-HotEvent folded projection from
+ * the 4.1 `published_timeline` read model) as a minute-level timeline card on
+ * the public home feed. This card is DISTINCT from `event-card` (the V1
+ * priority-feed card): the timeline answers "分钟级动态", event-card answered
+ * "priority-sorted saliency" (the latter now lives only in `main-line-band`).
+ *
+ * Fixed reading order (DESIGN `timeline-card`, UX-DR4b):
+ *   timestamp + session tag → source → title → one-line summary →
+ *   `AI 解读` slot (only when non-null) → evidence count.
+ * Timestamp is visually de-emphasized via `ink-tertiary` + `font-mono` (DESIGN:
+ * the numeric/meta layer). The whole card is a `<Link>` to the detail page
+ * (`/events/{hotEventId}`) — the 1.8-deferred whole-card-click pattern, applied
+ * to the timeline card.
+ *
+ * `AI 解读` slot (DESIGN `ai-label` + the entry's `recommendationReason`):
+ *   - Per spec Never: 4.2 does NOT generate `AI 解读`. The
+ *     `published_timeline.recommendation_reason` field is a NULL slot reserved
+ *     for Story 5.1. When it is null (the 4.2 default), the slot AND the
+ *     AiLabel are NOT rendered — never an empty marketing placeholder.
+ *   - When non-null (5.1+), the AiLabel renders adjacent to the reason copy,
+ *     visually separated from the factual summary (DESIGN: AI label expresses
+ *     "information source nature", not "superior").
+ *   - Visual weight ≤ factual title/summary (PRD §10): the reason renders in
+ *     `body-sm` ink-secondary, never bolder than the title/summary above it.
+ *
+ * Folding (FR-3 revised, "同事件精选"):
+ *   - When `foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD` (default
+ *     2, owned by event-assembly per AD-2), the card shows the「同事件精选」tag
+ *     and a native `<details>` that discloses "精选自 N 条证据源（代表来源：
+ *     {sourceName}）· 查看完整证据时间线 →". Per spec Never: the card does NOT
+ *     fabricate a per-source name/time list — `published_timeline` carries only
+ *     `evidenceCount` + `foldedEvidenceRecordIds` (ids only) + a representative
+ *     `sourceName`; the full per-source timeline is the detail page's
+ *     `证据时间线` job (1.8). The `<details>` is a static disclosure with zero
+ *     client JS (UX-DR4b "展开列出每条证据源的时间" is partially met — count +
+ *     representative source here, full list on the detail page).
+ *   - Single-source entries (length < 2) render independently with NO fold tag
+ *     and NO reason tag (FR-3 revised: reason labels only appear when an entry
+ *     deviates from pure time order).
+ *
+ * Whole-card link + fold coexistence (Design Notes):
+ *   The whole card body is wrapped in a `<Link>`. The `<details>`/`<summary>`
+ *   (the「同事件精选」tag) lives INSIDE the Link. `<summary>` is not a button/
+ *   form, so nesting it in an `<a>` is valid HTML and does not block the card
+ *   click; expanding the `<details>` only reveals static copy (no client JS),
+ *   so there is no competing interaction. (Contrast with event-card's
+ *   FollowButton, which MUST be a sibling of its Link because a `<button>`
+ *   inside an `<a>` is invalid.)
+ *
+ * Honest states (NFR-2):
+ *   - Empty summary (`""`) → the summary slot renders nothing (the
+ *     `published_timeline` projection stores `""` when no ExplanationVersion
+ *     exists; honest degraded state, not a fabricated summary).
+ *   - The card is only rendered when the read model has a row; the empty-read-
+ *     model empty state is the page's responsibility (not the card's).
+ *
+ * Tokens: reuses only real @theme tokens (bg-surface-raised /
+ * border-border-hairline / rounded-lg / ink-* / bg-surface-muted / font-mono /
+ * bg-accent-warm via AiLabel). No shadcn/ui (project doesn't install it). No
+ * undefined tokens.
+ */
+
+/**
+ * The Chinese label for each A-share session tag, folded into the timestamp
+ * meta line (e.g.「盘前 · 09:25 UTC」). Per spec Design Notes: `sessionTag` is
+ * NOT a filter UI (4.3 owns filters) — it is a low-cost visual meta folded into
+ * the timestamp row, `font-mono` + `ink-tertiary`. Defined here (not in core)
+ * because this is a pure display concern of the timeline card; core's
+ * TimelineSessionTag is the value authority, this map is the label authority.
+ */
+const SESSION_TAG_LABEL: Record<TimelineSessionTagType, string> = {
+  pre_open: "盘前",
+  intraday: "盘中",
+  post_close: "盘后",
+  non_trading: "非交易",
+};
+
+export interface TimelineCardProps {
+  entry: PublishedTimelineEntry;
+}
+
+export function TimelineCard({ entry }: TimelineCardProps) {
+  const { hotEventId, occurredAt, sessionTag, sourceName, title, summary } = entry;
+
+  // Fold decision: pure >= check against the event-assembly-owned threshold.
+  // The read model stores the full folded id set; the THRESHOLD only controls
+  // the「同事件精选」TAG display here (publish-orchestrator does not read it).
+  const isFolded = entry.foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD;
+
+  // AI 解读 slot: render ONLY when recommendationReason is non-null (5.1+).
+  // Pre-5.1 default is null → no slot, no AiLabel, no empty marketing placeholder.
+  const recommendationReason = entry.recommendationReason;
+  const hasRecommendation = recommendationReason !== null && recommendationReason !== "";
+
+  return (
+    <li className="rounded-lg border border-border-hairline bg-surface-raised">
+      {/*
+        Whole-card link (1.8 pattern applied to the timeline card). The entire
+        card body is wrapped in a Link so the card is one click target to the
+        detail page. block + padding keeps the hit area the full card;
+        hover:bg-surface-muted gives a subtle hover affordance. The `<details>`
+        below lives inside this Link — `<summary>` is not a button/form, so
+        nesting is valid HTML and does not block the card click.
+      */}
+      <Link
+        href={`/events/${hotEventId}`}
+        className="block rounded-lg px-5 py-4 hover:bg-surface-muted"
+      >
+        {/*
+          Meta line: session tag + timestamp, visually de-emphasized
+          (ink-tertiary + font-mono). Session tag folds in as a prefix
+          (「盘前 · 09:25 UTC」). Reading order puts this FIRST per DESIGN
+          `timeline-card` (timestamp → source → title → summary → AI → count).
+        */}
+        <div className="font-mono text-xs text-ink-tertiary">
+          {SESSION_TAG_LABEL[sessionTag]} · {formatDateTime(occurredAt)}
+        </div>
+
+        {/*
+          Source line: representative source name. ink-secondary so it sits
+          below the timestamp meta but above the title. Kept on its own line so
+          the scan order (time → source → title) is unambiguous.
+        */}
+        <div className="mt-1 text-sm text-ink-secondary">{sourceName}</div>
+
+        {/*
+          Title: the factual anchor (effective HotEvent title). ink-primary +
+          semibold so it carries the most visual weight on the card (DESIGN:
+          factual title dominates; AI/explanation must not outweigh it).
+        */}
+        <h2 className="mt-1 text-lg font-semibold text-ink-primary">{title}</h2>
+
+        {/*
+          Summary: one-line explanation (latest ExplanationVersion.summary ?? "").
+          Only rendered when non-empty — the read model stores "" when no
+          ExplanationVersion exists (honest degraded state, not fabricated).
+          ink-secondary body-sm so it stays subordinate to the title.
+        */}
+        {summary !== "" ? (
+          <p className="mt-1 text-sm text-ink-secondary">{summary}</p>
+        ) : null}
+
+        {/*
+          AI 解读 slot (PRD §10 / NFR-3). Rendered ONLY when
+          recommendationReason is non-null AND non-empty. Pre-5.1 default is
+          null → no slot, no AiLabel, no empty marketing placeholder (spec
+          Never). Visual weight ≤ factual title/summary: body-sm +
+          ink-secondary, never bolder than the title above. The AiLabel is
+          adjacent (DESIGN: visually separated from the factual summary,
+          expresses "information source nature", not "superior").
+        */}
+        {hasRecommendation ? (
+          <div className="mt-2 flex items-start gap-2">
+            <AiLabel className="mt-0.5 shrink-0" />
+            <p className="text-sm text-ink-secondary">{recommendationReason}</p>
+          </div>
+        ) : null}
+
+        {/*
+          Fold disclosure (FR-3 revised,「同事件精选」). Only rendered when the
+          entry folds >= TIMELINE_FOLD_THRESHOLD sources. Native `<details>`:
+          zero client JS (public pages are server components + force-dynamic,
+          no useState / loading skeleton per spec Never). The `<summary>` carries
+          the「同事件精选」tag (DESIGN `timeline-card.foldTag*` tokens —
+          bg-surface-muted / ink-secondary). Per spec Never: the disclosure does
+          NOT fabricate a per-source name/time list — `published_timeline`
+          carries only evidenceCount + foldedEvidenceRecordIds (ids) + a
+          representative sourceName; the full per-source timeline is the detail
+          page's `证据时间线` job (1.8). The expanded body states the count +
+          representative source + a guide to the detail page.
+
+          Nesting: the `<details>` and its `<summary>` are inside the `<Link>`.
+          `<summary>` is not a button/form, so this is valid HTML and does not
+          block the card click. Expanding only reveals static copy (no client
+          JS), so there is no competing interaction. Per spec Design Notes this
+          is the explicit pattern.
+        */}
+        {isFolded ? (
+          <details className="mt-2">
+            <summary
+              className={cn(
+                "inline-flex cursor-pointer items-center rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-ink-secondary",
+                "list-none [&::-webkit-details-marker]:hidden",
+              )}
+            >
+              同事件精选
+            </summary>
+            {/*
+              Expanded disclosure: count + representative source + a guide to
+              the detail page for the full per-source timeline. No fabricated
+              per-source name/time list (spec Never). Clicking the card still
+              navigates to the detail page (the summary toggles, the body is
+              static copy inside the Link hit area).
+            */}
+            <p className="mt-2 text-xs text-ink-tertiary">
+              精选自 {entry.evidenceCount} 条证据源（代表来源：{sourceName}）·
+              查看完整证据时间线 →
+            </p>
+          </details>
+        ) : null}
+
+        {/*
+          Evidence count: the last item in the reading order. font-mono +
+          ink-tertiary matches the timestamp meta layer (DESIGN: numeric layer).
+          Kept visually quiet so it reads as supporting meta, not a headline.
+        */}
+        <dl className="mt-2 font-mono text-xs text-ink-tertiary">
+          <div>
+            <dt className="inline">证据源 </dt>
+            <dd className="inline">{entry.evidenceCount}</dd>
+          </div>
+        </dl>
+      </Link>
+    </li>
+  );
+}
+
+/**
+ * Locale-stable UTC format (mirrors event-card.tsx's formatDateTime). Avoids
+ * locale-dependent toLocaleString so the timestamp stays consistent across
+ * build-time TZ and runtime TZ. YYYY-MM-DD HH:mm UTC is enough for the timeline
+ * card meta line. Per spec Design Notes: each card can自带 formatDateTime
+ * (consistent with event-card); kept as a local helper rather than a shared
+ * util to avoid coupling the two card components' formatting independently.
+ */
+function formatDateTime(d: Date): string {
+  const iso = d.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+=== NEW FILE: apps/web/app/(public)/_components/main-line-band.tsx ===
+import Link from "next/link";
+
+import type { PublishedHotEventSummary } from "@aguhot/core";
+
+import { cn } from "@/lib/utils";
+
+/**
+ * Main-line top band — Story 4.2 (Epic 4 时间流首页).
+ *
+ * Persistent, lightweight "今日重点 / 市场主线" band that sits above the
+ * timeline feed. It proactively answers "what is the market trading" so the
+ * home does not degenerate into a pure scan surface (PRD §1 Vision; DESIGN
+ * `main-line-band`). Reuses the existing `listPublishedHotEvents` saliency
+ * ordering (`evidenceCount DESC + latestEvidenceAt DESC`) and takes the top-N
+ * (V1 = 3) — the band's data source decision per spec Design Notes:
+ * `published_timeline` has no saliency/pin field (it is a pure time-order
+ * projection), so the band reads `listPublishedHotEvents` instead. This is the
+ * honest, zero-new-read-path choice: two read models coexist — the band answers
+ * "市场在交易什么", the timeline answers "分钟级动态".
+ *
+ * Honest ranking reason (FR-3 revised): each band item carries the same
+ * ranking-reason logic as `event-card` ("近期升温" / "多源覆盖"). Reason labels
+ * only appear when a real signal exists (recency / multi-source); when neither
+ * signal is present, NO tag is rendered (NFR: never fabricate a reason). The
+ * pure-timeline entries (single-source, not pinned) carry NO reason tag — only
+ * band items do, because band items are the ones deviating from pure time order
+ * (FR-3 revised: reason labels only appear when an entry deviates from pure
+ * time order).
+ *
+ * Each band item is a `<Link>` to the detail page (1.8 whole-card-click
+ * pattern). When hot-events is empty, the band does NOT render at all (no
+ * fabricated copy — NFR-2 honest state). The band is independent from the
+ * timeline empty state: either can be empty without affecting the other.
+ *
+ * Server component: no client JS, no useState. Public path stays read-only
+ * (AD-3/AD-3b/AD-6). Tokens: reuses only real @theme tokens
+ * (bg-surface-muted / border-border-hairline / rounded-lg / ink-* / bg-brand /
+ * font-mono). No shadcn/ui.
+ */
+
+const SEVENTY_TWO_HOURS_MS = 72 * 60 * 60 * 1000;
+const MULTI_SOURCE_THRESHOLD = 3;
+
+/**
+ * V1 top-N: 3. The band surfaces the three most salient published events so the
+ * reader gets a fast "what is the market trading" answer without scanning the
+ * full timeline. Tuning this number is a future-iteration concern.
+ */
+const MAIN_LINE_BAND_TOP_N = 3;
+
+/**
+ * Decide whether a ranking-reason tag should render on a band item, and which
+ * reason. Returns null when no honest signal exists (never fabricates a reason).
+ *
+ * Mirrors event-card.tsx's `rankingReason` exactly so the band and the (now
+ * band-only) saliency reasoning stay consistent. Kept as a local helper rather
+ * than a shared util — the two components are deliberately independent (the
+ * event-card is no longer on the home feed after 4.2; the band is its sole
+ * saliency surface now) and duplicating three lines is cheaper than coupling
+ * them.
+ *
+ *   - "近期升温" (recent heating): latestEvidenceAt within 72h.
+ *   - "多源覆盖" (multi-source coverage): evidenceCount >= 3.
+ *   If both apply, recency wins (more time-sensitive, surfaces first).
+ */
+function rankingReason(
+  evidenceCount: number,
+  latestEvidenceAt: Date,
+  now: Date,
+): { label: string; tone: "recent" | "multi-source" } | null {
+  const isRecent = now.getTime() - latestEvidenceAt.getTime() <= SEVENTY_TWO_HOURS_MS;
+  if (isRecent) {
+    return { label: "近期升温", tone: "recent" };
+  }
+  if (evidenceCount >= MULTI_SOURCE_THRESHOLD) {
+    return { label: "多源覆盖", tone: "multi-source" };
+  }
+  return null;
+}
+
+export interface MainLineBandProps {
+  /**
+   * The published hot-events saliency list (already ordered by
+   * `evidenceCount DESC + latestEvidenceAt DESC` — the contract of
+   * listPublishedHotEvents). The band slices the top-N itself so the page can
+   * pass the full list without a second slice call. Empty array → the band
+   * does not render (NFR-2 honest empty state, no fabricated copy).
+   */
+  events: PublishedHotEventSummary[];
+  /**
+   * Injected clock so band reason logic shares one clock with the page and the
+   * rest of the feed (mirrors event-card's `now` pattern).
+   */
+  now: Date;
+}
+
+export function MainLineBand({ events, now }: MainLineBandProps) {
+  // NFR-2 honest state: an empty hot-events read model → the band does NOT
+  // render (no fabricated "今日重点" copy). The page renders the band only when
+  // there is data; this guard is defensive in case the component is reused.
+  if (events.length === 0) {
+    return null;
+  }
+
+  const top = events.slice(0, MAIN_LINE_BAND_TOP_N);
+
+  return (
+    <section
+      aria-label="今日重点 / 市场主线"
+      className="rounded-lg border border-border-hairline bg-surface-muted px-5 py-4"
+    >
+      <h2 className="text-sm font-semibold tracking-wide text-ink-secondary">
+        今日重点 / 市场主线
+      </h2>
+      <ul role="list" className="mt-3 space-y-2">
+        {top.map((e) => {
+          const reason = rankingReason(e.evidenceCount, e.latestEvidenceAt, now);
+          return (
+            <li key={e.hotEventId}>
+              {/*
+                Each band item is a Link to the detail page (1.8 whole-card-click
+                pattern). The item shows the title + an honest ranking-reason tag
+                (only when a real signal exists) + the evidence count as quiet
+                meta. Tokens mirror event-card so the band reads as a sibling
+                saliency surface.
+              */}
+              <Link
+                href={`/events/${e.hotEventId}`}
+                className="flex items-baseline justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-surface-raised"
+              >
+                <span className="flex items-baseline gap-2 min-w-0">
+                  <span className="truncate text-sm font-medium text-ink-primary">
+                    {e.title}
+                  </span>
+                  {reason !== null ? (
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full px-2 py-0.5 text-xs",
+                        reason.tone === "recent"
+                          ? "bg-brand text-brand-foreground"
+                          : "bg-surface-raised text-ink-secondary",
+                      )}
+                    >
+                      {reason.label}
+                    </span>
+                  ) : null}
+                </span>
+                {/*
+                  Evidence count as quiet meta. font-mono + ink-tertiary matches
+                  the DESIGN numeric layer so the count reads as supporting meta,
+                  not a headline.
+                */}
+                <span className="shrink-0 font-mono text-xs text-ink-tertiary">
+                  {e.evidenceCount} 源
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+=== NEW FILE: apps/web/e2e/timeline.spec.ts ===
+import { expect, test } from "@playwright/test";
+
+import { seedTimelineFeed, type SeededTimeline } from "./seed-timeline";
+
+/**
+ * Public timeline feed surface e2e — Story 4.2 (Epic 4 时间流首页).
+ *
+ * Surface-anchored structure + empty-state assertions for the post-pivot home
+ * page. NO seed step required (per spec Code Map): the assertions target the
+ * always-present shell + the regions that render regardless of whether the read
+ * model has rows. This mirrors home.spec.ts's strategy (assert the surface, not
+ * the content) so the test holds whether the local PG is empty or holds prior-
+ * seed data.
+ *
+ * The homepage is `force-dynamic` and reads `published_timeline` +
+ * `published_hot_events` via getPrisma at request time (AD-3 / AD-3b evolution).
+ * Like home.spec.ts, this test needs request-time DATABASE_URL — the dev/CI
+ * environment runs local PG, so `goto("/")` resolves. An unreachable DB surfaces
+ * as a loud route error (NFR-2: DB is core infra, not graceful-degradation
+ * territory); the test does NOT assert that error path.
+ *
+ * Covers (per spec Acceptance Criteria):
+ *   - Masthead non-regression: H1「AGUHOT」+「可信热点发布闭环」still render
+ *     (home.spec.ts's contract preserved — the 4.2 rewrite keeps the header
+ *     byte-for-byte).
+ *   - AD-8: anonymous GET / returns 200, no /login redirect.
+ *   - Timeline region structure: the `<section aria-label="时间流">` region is
+ *     present on every render (empty or populated).
+ *   - Empty-state surface: when the read model is empty, the empty-state copy
+ *     「暂无公开展示的时间流。」 renders (NFR-2 honest state — the page never
+ *     fakes content). The "最近更新" timestamp line renders alongside it.
+ *   - No residual priority-filter UI: the V1 `FeedFilters` (`<nav
+ *     aria-label="筛选">`) was removed in 4.2 (4.3 owns the new session/category
+ *     filter UI). The old priority filter pills (今日 / 近7天 / 近30天 / 全部)
+ *     must NOT render on the home anymore.
+ *
+ * NOT covered here (out of 4.2 e2e scope):
+ *   - Populated timeline cards / fold disclosure / AI 解读 slot — these need a
+ *     seed (DB-backed @timeline tag is a future concern; 4.2 ships surface-
+ *     anchored only per spec Code Map).
+ *   - The main-line-band's rendered items (need a hot-events seed); the band's
+ *     region is asserted indirectly via its aria-label WHEN it renders, but the
+ *     empty-DB path renders no band (NFR-2 honest state).
+ */
+
+test.describe("时间流首页 (Story 4.2)", () => {
+  test("匿名访问 / 仍渲染 masthead 且不触发 /login 重定向 (AD-8, masthead 不回归)", async ({
+    page,
+  }) => {
+    const response = await page.goto("/");
+
+    // 1. HTTP 200, no /login redirect (AD-8: public paths stay anonymous).
+    expect(response, "homepage should respond").not.toBeNull();
+    expect(response!.status(), "homepage status should be 200").toBe(200);
+    expect(response!.url(), "should remain on public homepage").toMatch(/\/$/);
+
+    // 2. Masthead preserved byte-for-byte from 1.1 (home.spec.ts contract).
+    await expect(
+      page.getByRole("heading", { level: 1, name: "AGUHOT" }),
+    ).toBeVisible();
+    await expect(page.getByText("可信热点发布闭环")).toBeVisible();
+  });
+
+  test("时间流区块结构存在 (section[aria-label=时间流] 始终渲染)", async ({ page }) => {
+    await page.goto("/");
+
+    // The timeline region is present on every render (empty or populated).
+    // This is the structural anchor for the post-pivot home body.
+    await expect(
+      page.getByRole("region", { name: "时间流" }).or(
+        page.locator("section[aria-label='时间流']"),
+      ),
+    ).toBeVisible();
+  });
+
+  test("空态面：读模型无数据时渲染诚实空态文案 + 最近更新时间 (NFR-2)", async ({ page }) => {
+    await page.goto("/");
+
+    // The timeline region either renders cards (populated) or the empty-state
+    // copy (empty read model). Both states are honest (NFR-2: never fake data).
+    // When the read model is empty, the empty-state copy + the "最近更新"
+    // timestamp render inside the timeline section. This assertion uses
+    // .or() so it holds on a populated local DB too (cards present) — the
+    // load-bearing check is that the page renders ONE of the two honest
+    // states, never a broken/empty region with no copy.
+    const timelineSection = page.locator("section[aria-label='时间流']");
+    await expect(timelineSection).toBeVisible();
+
+    // Empty-state copy (only present when the read model is empty).
+    const emptyStateCopy = page.getByText("暂无公开展示的时间流。");
+    // Last-updated timestamp (only present alongside the empty-state copy).
+    const lastUpdated = page.getByText(/最近更新：/);
+
+    // Assert at least one honest state is present: either cards rendered, or
+    // the empty-state copy rendered. Both passing means the page is honest.
+    const cardsPresent = await page.locator("section[aria-label='时间流'] li").count();
+    if (cardsPresent === 0) {
+      await expect(emptyStateCopy, "empty read model renders honest empty copy").toBeVisible();
+      await expect(lastUpdated, "empty state cites a last-updated time").toBeVisible();
+    }
+  });
+
+  test("无残留优先级 filter pill (V1 FeedFilters 已从首页移除)", async ({ page }) => {
+    await page.goto("/");
+
+    // The V1 priority-feed filter UI (FeedFilters, `<nav aria-label="筛选">`)
+    // was removed in 4.2. The old window pills (今日 / 近7天 / 近30天 / 全部)
+    // must NOT render on the home anymore — 4.3 owns the new session/category
+    // filter UI. Asserting the filter nav is absent pins this removal.
+    await expect(
+      page.locator("nav[aria-label='筛选']"),
+      "V1 priority filter nav should be removed from the home",
+    ).toHaveCount(0);
+  });
+});
+
+/**
+ * Populated-feed e2e — Story 4.2 (Epic 4 时间流首页) @timeline.
+ *
+ * Tagged @timeline so it runs only under `pnpm --filter web e2e:timeline` (DB-
+ * backed + seed) and is excluded from the public `pnpm --filter web e2e` run
+ * (whose --grep-invert list now includes @timeline). The beforeAll seeds TWO
+ * published events via the real publish pipeline (seed-timeline.ts):
+ *   - folded: 半导体 event with 2 member evidence records → evidenceCount 2 →
+ *     foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD(2) → 「同事件精选」.
+ *   - single: 稀土 event with 1 member evidence record → single-source card.
+ *
+ * This block covers the I/O & Edge-Case Matrix rows the surface-anchored tests
+ * above cannot (they need a populated read model):
+ *   - 时间流默认视图 (cards render in the fixed reading order)
+ *   - 折叠条目 (fold tag + disclosure of N sources)
+ *   - 单源条目 (no fold tag, no reason tag — FR-3 revised)
+ *   - main-line-band 置顶项 (top-N saliency band renders + links)
+ *   - AI 解读槽 null (recommendationReason stays NULL pre-5.1 → no AiLabel)
+ *
+ * Requires request-time DATABASE_URL (the home is force-dynamic). The seed
+ * clears the full table set so re-runs are deterministic.
+ */
+test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let seeded: SeededTimeline;
+
+  test.beforeAll(async () => {
+    seeded = await seedTimelineFeed();
+  });
+
+  test("main-line-band 渲染 top-N saliency 且每项可点进详情", async ({ page }) => {
+    await page.goto("/");
+
+    const band = page.locator("section[aria-label='今日重点 / 市场主线']");
+    await expect(band, "main-line band renders when hot-events has data").toBeVisible();
+    // Both seeded events surface as band links (saliency read returns both).
+    await expect(band.getByRole("link", { name: /半导体/ })).toBeVisible();
+    await expect(band.getByRole("link", { name: /稀土/ })).toBeVisible();
+  });
+
+  test("时间流卡按固定阅读顺序渲染 + 整卡可点进详情（折叠卡）", async ({ page }) => {
+    await page.goto("/");
+
+    const timeline = page.locator("section[aria-label='时间流']");
+    const foldedCard = timeline.locator("li", { hasText: "半导体" }).first();
+
+    await expect(foldedCard, "folded timeline card renders").toBeVisible();
+    // Fixed reading order: timestamp meta (UTC) → source → title (h2) →
+    // summary → (AI slot) → evidence count.
+    await expect(foldedCard.getByText(/UTC$/), "timestamp meta renders").toBeVisible();
+    // The representative source name appears in the source line AND (for folded
+    // cards) inside the fold disclosure, so assert presence via text content.
+    await expect(
+      foldedCard,
+      "representative source name renders",
+    ).toContainText("timeline-e2e-半导体源");
+    await expect(
+      foldedCard.getByRole("heading", { level: 2 }),
+      "title heading renders",
+    ).toBeVisible();
+    await expect(
+      foldedCard,
+      "evidence count meta renders (证据源 N)",
+    ).toContainText(/证据源\s+2/);
+    // Whole-card click → detail page (1.8 pattern applied to the timeline card).
+    await expect(foldedCard.getByRole("link")).toHaveAttribute(
+      "href",
+      `/events/${seeded.folded.hotEventId}`,
+    );
+  });
+
+  test("折叠卡显示「同事件精选」标签并披露 N 源 (FR-3 revised)", async ({ page }) => {
+    await page.goto("/");
+
+    const foldedCard = page
+      .locator("section[aria-label='时间流'] li", { hasText: "半导体" })
+      .first();
+
+    // The fold tag is always visible (it is the <summary>).
+    await expect(foldedCard.getByText("同事件精选")).toBeVisible();
+    // The disclosure body cites the count + representative source (text is in
+    // the DOM regardless of open/closed state; not fabricated per-source list).
+    await expect(foldedCard.locator("details")).toContainText(/精选自 2 条证据源/);
+    await expect(foldedCard.locator("details")).toContainText(/timeline-e2e-半导体源/);
+  });
+
+  test("单源卡不带「同事件精选」标签 (FR-3 revised: 纯时间序无理由标签)", async ({ page }) => {
+    await page.goto("/");
+
+    const singleCard = page
+      .locator("section[aria-label='时间流'] li", { hasText: "稀土" })
+      .first();
+
+    await expect(singleCard, "single-source timeline card renders").toBeVisible();
+    await expect(
+      singleCard.getByText("同事件精选"),
+      "single-source card has no fold tag",
+    ).toHaveCount(0);
+  });
+
+  test("5.1 前 AI 解读槽不渲染（recommendationReason=null → 无 AiLabel）", async ({ page }) => {
+    await page.goto("/");
+
+    const timeline = page.locator("section[aria-label='时间流']");
+    // AiLabel renders the exact uppercase text "AI"; pre-5.1 the slot is null on
+    // every card, so no "AI" text node and no "AI 解读" copy render in the feed.
+    await expect(
+      timeline.getByText("AI", { exact: true }),
+      "no AiLabel renders while recommendationReason is null",
+    ).toHaveCount(0);
+  });
+});
+=== NEW FILE: apps/web/e2e/seed-timeline.ts ===
+/**
+ * Seed script for the @timeline e2e — Story 4.2 (Epic 4 时间流首页).
+ *
+ * Run with: pnpm --filter web e2e:timeline
+ *           (tsx e2e/seed-timeline.ts && playwright test --grep @timeline)
+ *
+ * Self-contained: produces TWO published hot events via the real publish pipeline
+ * (cluster → generateExplanation → decideReview approve) so the timeline e2e can
+ * assert the populated-card behavior the surface-anchored timeline.spec.ts cannot:
+ *   - Event A「半导体设备」: 2 member EvidenceRecords (merged into one candidate,
+ *     overlap-coefficient = 1.0) → `evidenceCount = 2` → `foldedEvidenceRecordIds
+ *     .length = 2 >= TIMELINE_FOLD_THRESHOLD(2)` → the card renders the
+ *     「同事件精选」fold tag + the `<details>` disclosure.
+ *   - Event B「稀土出口」: 1 member EvidenceRecord → `evidenceCount = 1` → single-
+ *     source card, NO fold tag, NO reason tag (FR-3 revised).
+ *
+ * Both events go through `decideReview` approve, which calls
+ * `refreshPublishedTimelineForEvent` inside the same `$transaction` (4.1, AD-3b
+ * method A) — so the `published_timeline_entries` rows exist for the home feed.
+ * `recommendationReason` stays NULL (the 5.1 AI 解读 slot) so the e2e can assert
+ * the AI 解读 slot + AiLabel do NOT render pre-5.1.
+ *
+ * Requires DATABASE_URL pointing at local PG. Clears the full table set
+ * (including published_timeline_entries, which seed-revision does not touch) so
+ * re-runs are deterministic. Does NOT touch seed-console/feed/detail/revision.
+ */
+
+import {
+  clusterEvents,
+  decideReview,
+  generateExplanation,
+  getPrisma,
+  listPendingCandidates,
+  newTraceId,
+  resetPrisma,
+} from "@aguhot/core";
+import { resetEnvCache, requireEnv } from "@aguhot/config";
+
+const HOUR = 60 * 60 * 1000;
+
+export interface SeededTimeline {
+  folded: { hotEventId: string; title: string; sourceName: string; evidenceCount: number };
+  single: { hotEventId: string; title: string; sourceName: string };
+}
+
+export async function seedTimelineFeed(): Promise<SeededTimeline> {
+  resetEnvCache();
+  requireEnv("DATABASE_URL");
+
+  const prisma = getPrisma();
+
+  // Clean the full table set (superset of seed-detail/seed-revision, order
+  // respects FK constraints, plus the 4.1 published_timeline_entries). Deterministic
+  // re-runs; does NOT touch seed-console/feed/detail/revision.
+  await prisma.publishedTimelineEntry.deleteMany({});
+  await prisma.publishedHotEventEvidence.deleteMany({});
+  await prisma.publishedHotEventExplanation.deleteMany({});
+  await prisma.publishedHotEvent.deleteMany({});
+  await prisma.hotEventRevision.deleteMany({});
+  await prisma.explanationVersion.deleteMany({});
+  await prisma.publicationDecision.deleteMany({});
+  await prisma.reviewDecision.deleteMany({});
+  await prisma.hotEventEvidence.deleteMany({});
+  await prisma.hotEvent.deleteMany({});
+  await prisma.evidenceRecord.deleteMany({});
+  await prisma.evidenceSource.deleteMany({});
+
+  const sourceSemi = await prisma.evidenceSource.create({
+    data: {
+      id: newTraceId(),
+      name: "timeline-e2e-半导体源",
+      kind: "rss",
+      feedUrl: "file:///unused",
+      enabled: true,
+    },
+  });
+  const sourceRare = await prisma.evidenceSource.create({
+    data: {
+      id: newTraceId(),
+      name: "timeline-e2e-稀土源",
+      kind: "rss",
+      feedUrl: "file:///unused",
+      enabled: true,
+    },
+  });
+
+  // Event A: two records with near-identical titles (overlap → one candidate,
+  // evidenceCount = 2 → folded). Distinct publishedAt so the representative
+  // source + occurredAt are deterministic.
+  const recentAgo = new Date(Date.now() - 2 * HOUR);
+  const earlier = new Date(Date.now() - 4 * HOUR);
+  await seedRecord(prisma, sourceSemi.id, {
+    title: "半导体设备国产化提速",
+    summary: "国产半导体设备出货量显著增长",
+    url: "https://verify.test/timeline-半导体-1",
+    publishedAt: earlier,
+  });
+  await seedRecord(prisma, sourceSemi.id, {
+    title: "半导体设备国产化再提速",
+    summary: "刻蚀与薄膜设备订单同比大增",
+    url: "https://verify.test/timeline-半导体-2",
+    publishedAt: recentAgo,
+  });
+
+  // Event B: one record, a clearly distinct topic so it does NOT merge with A.
+  await seedRecord(prisma, sourceRare.id, {
+    title: "稀土出口配额例行调整",
+    summary: "稀土年度出口配额按计划修订",
+    url: "https://verify.test/timeline-稀土-1",
+    publishedAt: recentAgo,
+  });
+
+  await clusterEvents({ prisma, traceId: newTraceId() });
+
+  const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
+  if (pending.length < 2) {
+    throw new Error(`[seed-timeline] expected >= 2 candidates after cluster, got ${pending.length}`);
+  }
+
+  const foldedCandidate = pending.find((c) => c.title.includes("半导体"));
+  const singleCandidate = pending.find((c) => c.title.includes("稀土"));
+  if (foldedCandidate === undefined || singleCandidate === undefined) {
+    throw new Error(
+      `[seed-timeline] expected 半导体 + 稀土 candidates, got: ${pending.map((p) => p.title).join(" / ")}`,
+    );
+  }
+  if (foldedCandidate.evidenceCount < 2) {
+    throw new Error(
+      `[seed-timeline] 半导体 candidate should fold (>=2 evidence), got ${foldedCandidate.evidenceCount}`,
+    );
+  }
+
+  // Template explanation before approve so the published projection surfaces a
+  // non-empty summary (the card's summary slot). recommendationReason stays NULL.
+  await generateExplanation({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: foldedCandidate.id,
+  });
+  await generateExplanation({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: singleCandidate.id,
+  });
+
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: foldedCandidate.id,
+    outcome: "approve",
+    reviewer: "timeline-e2e-seeder",
+    note: "seed published (folded) for timeline e2e",
+  });
+  await decideReview({
+    prisma,
+    traceId: newTraceId(),
+    hotEventId: singleCandidate.id,
+    outcome: "approve",
+    reviewer: "timeline-e2e-seeder",
+    note: "seed published (single) for timeline e2e",
+  });
+
+  resetPrisma();
+
+  return {
+    folded: {
+      hotEventId: foldedCandidate.id,
+      title: foldedCandidate.title,
+      sourceName: sourceSemi.name,
+      evidenceCount: foldedCandidate.evidenceCount,
+    },
+    single: {
+      hotEventId: singleCandidate.id,
+      title: singleCandidate.title,
+      sourceName: sourceRare.name,
+    },
+  };
+}
+
+async function seedRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  sourceId: string,
+  data: { title: string; summary: string; url: string | null; publishedAt: Date },
+): Promise<void> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const salt = randomUUID();
+  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
+  const contentHash = createHash("sha256").update(material).digest("hex");
+  await prisma.evidenceRecord.create({
+    data: {
+      id: newTraceId(),
+      sourceId,
+      url: data.url,
+      title: data.title,
+      summary: data.summary,
+      publishedAt: data.publishedAt,
+      ingestedAt: new Date(),
+      contentHash,
+      status: "archived",
+      failureReason: null,
+      rawPayload: { seeded: true, salt },
+      traceId: newTraceId(),
+    },
+  });
+}
+
+// Run directly (tsx e2e/seed-timeline.ts) — but NOT when imported by the e2e
+// spec (which calls seedTimelineFeed() itself in a beforeAll to capture ids).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const result = await seedTimelineFeed();
+  console.log(
+    `[seed-timeline] folded: ${result.folded.hotEventId} (${result.folded.title}, ${result.folded.evidenceCount} evidence) | single: ${result.single.hotEventId} (${result.single.title}, 1 evidence)`,
+  );
+  process.exit(0);
+}

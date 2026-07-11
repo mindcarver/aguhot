@@ -1,215 +1,150 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 
 import {
-  FollowTargetKind,
   getPrisma,
-  listFollowedTargetIds,
-  listPublishedAssociations,
   listPublishedHotEvents,
+  listPublishedTimeline,
   newTraceId,
-  type AssociationItem,
+  type PublishedTimelineEntry,
 } from "@aguhot/core";
 
-import { readSession } from "@/lib/session";
-
-import { EventCard } from "./_components/event-card";
-import {
-  FeedFilters,
-  parseAssociationFilter,
-  parseFeedWindow,
-  type FeedWindow,
-} from "./_components/feed-filters";
+import { MainLineBand } from "./_components/main-line-band";
+import { TimelineCard } from "./_components/timeline-card";
 
 export const metadata: Metadata = {
   title: "首页",
 };
 
 /**
- * Public hot-event feed homepage — Story 1.7.
+ * Public timeline feed homepage — Story 4.2 (Epic 4 时间流首页).
  *
- * This is the first public route to READ the published_hot_events read model
- * (AD-3: public reads only published_* read models). It is the public
- * consumption half of the "viewable + trustworthy" loop that 1.6's publish gate
- * made possible.
+ * This is the Epic 4 pivot: the home body changed from the V1 priority-sorted
+ * `listPublishedHotEvents` feed (Story 1.7) to a minute-level chronological
+ * `时间流` reading the new `published_timeline` read model (Story 4.1, AD-3b).
+ * The page now reads TWO published read models:
+ *   - `listPublishedTimeline` (default = latest trade_date, ordered
+ *     `occurredAt DESC`) → the timeline cards (minute-level dynamics).
+ *   - `listPublishedHotEvents` (ordered `evidenceCount DESC + latestEvidenceAt
+ *     DESC`) → the top-N `main-line-band` ("今日重点 / 市场主线"). The band
+ *     reuses the existing saliency read because `published_timeline` has no
+ *     saliency/pin field (it is a pure time-order projection). Two read models
+ *     coexist: the band answers "what is the market trading", the timeline
+ *     answers "minute-level dynamics" (spec Design Notes).
  *
- * Why force-dynamic + @aguhot/core import is safe for the build:
+ * Masthead (H1「AGUHOT」+ subtitle「可信热点发布闭环」) is preserved byte-for-
+ * byte from 1.1 so `home.spec.ts` stays green. `(public)/layout.tsx` public
+ * shell is unchanged.
+ *
+ * Why force-dynamic + @aguhot/core import is safe for the build (unchanged
+ * rationale from 1.7):
  *   - `export const dynamic = "force-dynamic"` marks the route dynamic so Next
  *     evaluates it at REQUEST time, not BUILD time. getPrisma() reads
  *     DATABASE_URL at runtime; that call is never reached during `next build`.
- *     This keeps the public web build DATABASE_URL-free — the same mechanism the
- *     (operator)/console route uses. The (public)/layout.tsx and /design route
- *     stay static (they never import core); the /daily /topics /favorites routes
- *     are also force-dynamic for the same reason.
+ *     This keeps the public web build DATABASE_URL-free.
  *
- * Why URL-driven filtering:
- *   - The date window (?window=today|7d|30d|all, default all) is read from
- *     searchParams (a Promise in Next 16) and rendered via `<Link>` pills in
- *     FeedFilters. The filter state lives in the URL: server-rendered, shareable,
- *     back/forward works, refresh keeps the filter, zero client JS / useState.
- *     "全部" is the always-visible clear control.
+ * Honest states (NFR-2: never fake data):
+ *   - `published_timeline` empty (no rows at all) → "暂无公开展示的时间流" empty
+ *     state + the page's render time as "最近更新". No skeleton, no cards, no
+ *     fabricated content. masthead still visible, no /login redirect (AD-8).
+ *   - `listPublishedTimeline` returns `[]` (not an error) → same empty state.
+ *   - `listPublishedHotEvents` empty → the band does NOT render (no fabricated
+ *     "今日重点" copy). The timeline empty state is independent: either read
+ *     model can be empty without affecting the other.
+ *   - getPrisma throws when DATABASE_URL is missing at runtime → loud failure
+ *     (the error propagates to a route error), NOT a silent empty state. DB is
+ *     core infra; its absence is an incident, not graceful degradation.
  *
- * Honest states (NFR: never fake data):
- *   - No published rows at all → "暂无公开展示的热点事件" empty state (no skeleton cards).
- *   - Rows exist but the window filters to zero → "当前筛选条件下无热点事件" + clear link.
- *   - getPrisma throws when DATABASE_URL is missing at runtime → loud failure (the
- *     error propagates to a route error), NOT a silent empty state. DB is core
- *     infra; its absence is an incident, not graceful degradation.
- *
- * Masthead (H1 「AGUHOT」 + subtitle 「可信热点发布闭环」) is preserved from 1.1 so
- * home.spec.ts stays green.
+ * Removed (4.2): the V1 priority-feed filter UI (`FeedFilters`, the `?window=`
+ * /`?concept=`/`?industry=`/`?stock=` searchParams, the association-dimension
+ * in-memory join, the FollowButton-on-card follow-state read). Per spec Code
+ * Map: the home no longer imports `FeedFilters` (4.3 will own the new session/
+ * category filter UI; the file is kept for 4.3 to possibly reuse, per spec
+ * Never: do not delete feed-filters.tsx). The timeline card has no follow-on-
+ * card in 4.2 scope; follow remains on the detail page.
  */
 export const dynamic = "force-dynamic";
 
-interface PageProps {
-  searchParams: Promise<{
-    window?: string;
-    concept?: string;
-    industry?: string;
-    stock?: string;
-  }>;
-}
-
-export default async function PublicHomePage({ searchParams }: PageProps) {
-  const params = await searchParams;
-  const window = parseFeedWindow(params.window);
-  // Story 2.2: the association-dimension filter. At most one of concept/
-  // industry/stock is honored (V1 single-dimension, per spec Never: no
-  // explicit "clear all" control for multi-dimension). parseAssociationFilter
-  // resolves to {kind,label} | null.
-  const association = parseAssociationFilter(params);
-
+export default async function PublicHomePage() {
   // Request-time DB read. getPrisma() throws loudly if DATABASE_URL is missing —
   // that is intentional (DB is core infra, not graceful-degradation territory).
   const prisma = getPrisma();
   const traceId = newTraceId();
-  const all = await listPublishedHotEvents({ prisma, traceId });
 
-  // Story 2.2: when an association dimension is active, build a hotEventId→items
-  // map from listPublishedAssociations and filter the published list in JS
-  // (mirroring the 1.7 filterByWindow pattern). listPublishedHotEvents stays
-  // filter-free (no signature change). V1 published volume is tiny, so a second
-  // read + in-memory join is the ponytail choice over a SQL join (deferred as a
-  // scale ceiling).
-  let associationByEvent: Map<string, AssociationItem[]> | null = null;
-  if (association !== null) {
-    const rows = await listPublishedAssociations({ prisma, traceId });
-    associationByEvent = new Map(rows.map((r) => [r.hotEventId, r.items]));
-  }
+  // Two parallel published-read-model reads. Both are read-only (AD-3/AD-3b);
+  // neither triggers a synchronous refresh or external call (AD-4). The page
+  // issues them concurrently so the request latency is the max, not the sum.
+  const [hotEvents, timelineEntries] = await Promise.all([
+    listPublishedHotEvents({ prisma, traceId }),
+    listPublishedTimeline({ prisma, traceId }),
+  ]);
 
-  const totalExists = all.length > 0;
   const now = new Date();
-  // Story 3.2: read the session (if any) and batch-fetch the viewer's followed
-  // hot-event ids for the feed cards. Anonymous → no extra DB read (the
-  // followedIds Set stays empty and FollowButton renders 「收藏」 + the
-  // deferred-login dialog). Logged-in → one listFollowedTargetIds read feeds
-  // every EventCard's initial state (no N+1 per card).
-  const session = await readSession();
-  const followedIds =
-    session !== null
-      ? await listFollowedTargetIds({
-          prisma,
-          traceId,
-          userAccountId: session.accountId,
-          kind: FollowTargetKind.HotEvent,
-        })
-      : new Set<string>();
-  const isLoggedIn = session !== null;
-  // Apply the window filter, then the association filter (AND). The association
-  // filter keeps an event iff its projected items include one matching the
-  // active dimension's {kind, label}. Events with no projection row are
-  // excluded (no matching association).
-  const windowed = totalExists ? filterByWindow(all, window, now) : [];
-  const visible =
-    association === null
-      ? windowed
-      : windowed.filter((e) => {
-          const items = associationByEvent?.get(e.hotEventId);
-          if (items === undefined) return false;
-          return items.some(
-            (it) => it.kind === association.kind && it.label === association.label,
-          );
-        });
-  const hasFilter = window !== "all" || association !== null;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
+      {/*
+        Masthead — preserved byte-for-byte from 1.1 so home.spec.ts stays green
+        (it asserts H1「AGUHOT」+「可信热点发布闭环」subtitle). The (public)/layout.tsx
+        public shell is unchanged.
+      */}
       <header className="space-y-4">
         <h1 className="text-4xl font-bold tracking-tight">AGUHOT</h1>
         <p className="text-lg text-ink-secondary">可信热点发布闭环</p>
       </header>
 
-      {totalExists ? (
-        <>
-          <section className="mt-8">
-            <FeedFilters
-              window={window}
-              association={association}
-              searchParams={params}
-            />
-          </section>
+      {/*
+        Main-line band — "今日重点 / 市场主线". Rendered ONLY when the hot-events
+        read model has data; the band component itself also guards against an
+        empty list (defensive — NFR-2: no fabricated copy). Sits above the
+        timeline so the home proactively answers "what is the market trading"
+        before the minute-level scan.
+      */}
+      {hotEvents.length > 0 ? (
+        <section className="mt-8">
+          <MainLineBand events={hotEvents} now={now} />
+        </section>
+      ) : null}
 
-          {visible.length > 0 ? (
-            <ul role="list" className="mt-8 space-y-3">
-              {visible.map((e) => (
-                <EventCard
-                  key={e.hotEventId}
-                  hotEventId={e.hotEventId}
-                  title={e.title}
-                  evidenceCount={e.evidenceCount}
-                  latestEvidenceAt={e.latestEvidenceAt}
-                  publishedAt={e.publishedAt}
-                  now={now}
-                  isFollowing={followedIds.has(e.hotEventId)}
-                  isLoggedIn={isLoggedIn}
-                />
-              ))}
-            </ul>
-          ) : (
-            <div className="mt-12 space-y-3">
-              <p className="text-ink-secondary">当前筛选条件下无热点事件。</p>
-              {hasFilter ? (
-                <Link
-                  href="/"
-                  className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
-                >
-                  查看全部
-                </Link>
-              ) : null}
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="mt-12 text-ink-secondary">暂无公开展示的热点事件。</p>
-      )}
+      {/*
+        Timeline feed — the minute-level chronological list. Each entry renders
+        as a TimelineCard (fixed reading order, fold disclosure, AI 解读 slot
+        only when non-null). The list is rendered ONLY when the timeline read
+        model has entries; the empty state below handles the no-data case.
+      */}
+      <section className="mt-8" aria-label="时间流">
+        {timelineEntries.length > 0 ? (
+          <ul role="list" className="space-y-3">
+            {timelineEntries.map((entry: PublishedTimelineEntry) => (
+              <TimelineCard key={entry.id} entry={entry} />
+            ))}
+          </ul>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-ink-secondary">暂无公开展示的时间流。</p>
+            {/*
+              Last-updated time — NFR-2: the empty state shows an explicit "最近
+              更新" time so the reader knows the page is live, not broken. Uses
+              the page's render time (now) since an empty read model has no row-
+              level timestamp to cite; this is the honest "this page was last
+              rendered at" anchor, not a fabricated content timestamp.
+            */}
+            <p className="font-mono text-xs text-ink-tertiary">
+              最近更新：{formatDateTime(now)}
+            </p>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
 
 /**
- * Apply the date window to the published list (JS filter). The query already
- * returns rows ordered by evidenceCount DESC + latestEvidenceAt DESC; windowing
- * preserves that order. `now` is injected so card reason logic and window logic
- * share one clock.
+ * Locale-stable UTC format (mirrors event-card.tsx / timeline-card.tsx). Avoids
+ * locale-dependent toLocaleString so the timestamp stays consistent across
+ * build-time TZ and runtime TZ. YYYY-MM-DD HH:mm UTC is enough for the empty-
+ * state "最近更新" line.
  */
-function filterByWindow<T extends { latestEvidenceAt: Date }>(
-  rows: T[],
-  window: FeedWindow,
-  now: Date,
-): T[] {
-  if (window === "all") return rows;
-  const cutoffMs = windowCutoffMs(window, now);
-  return rows.filter((r) => r.latestEvidenceAt.getTime() >= cutoffMs);
-}
-
-function windowCutoffMs(window: Exclude<FeedWindow, "all">, now: Date): number {
-  const DAY = 24 * 60 * 60 * 1000;
-  const nowMs = now.getTime();
-  if (window === "today") {
-    // "今日" = since the start of the current UTC day (midnight UTC).
-    const startOfDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    return startOfDay;
-  }
-  if (window === "7d") return nowMs - 7 * DAY;
-  return nowMs - 30 * DAY; // "30d"
+function formatDateTime(d: Date): string {
+  const iso = d.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }

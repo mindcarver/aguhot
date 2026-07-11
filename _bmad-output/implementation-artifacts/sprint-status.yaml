@@ -77,7 +77,7 @@ development_status:
   epic-3-retrospective: optional
   epic-4: backlog
   4-1-timeline-read-model-and-publish-refresh: done
-  4-2-timeline-home-and-card-component: backlog
+  4-2-timeline-home-and-card-component: done
   4-3-session-and-category-filters: backlog
   4-4-timeline-search-integration: backlog
   epic-4-retrospective: optional
