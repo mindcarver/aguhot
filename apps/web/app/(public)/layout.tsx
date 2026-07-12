@@ -3,20 +3,19 @@ import { ListContextMemory } from "./_components/list-context-memory";
 import { PublicNav } from "./_components/public-nav";
 
 /**
- * Responsive public shell — Story 1.2.
+ * Public shell — Story 6.1 (Epic 6 视觉对齐参考站).
  *
  * Group-level layout for the `(public)` route group. The root `layout.tsx`
- * owns `<html>/<body>`; this layout wraps every `(public)` route in the
- * responsive shell (desktop left-rail nav + main area; mobile top bar +
- * drawer). It deliberately does NOT wrap `(operator)/console`, which stays a
+ * owns `<html>/<body>`; this layout wraps every `(public)` route in the public
+ * shell. It deliberately does NOT wrap `(operator)/console`, which stays a
  * bare placeholder until Story 1.6.
  *
- * Desktop (>=768px, `md:`): flex row — `<PublicNav>` renders the sticky
- * left-rail `<aside>`, and `<main>` takes the remaining width with
- * `min-w-0` so long content cannot push the rail off-screen.
- *
- * Mobile (<768px): block flow — `<PublicNav>` renders the sticky top
- * `<header>` (and the conditionally-rendered drawer); `<main>` stacks below.
+ * Story 6.1: the V1 `md:flex` row (desktop left-rail `<aside>` + main) is
+ * removed. The shell is now a simple column — `<PublicNav>` (a sticky top-bar
+ * `<header>` at ALL widths, UX-DR3 2026-07-12 rewrite) + `<main>`. Content
+ * centering (`max-w-3xl mx-auto`) is owned by each page body + the nav's own
+ * inner container, so `<main>` needs no flex/centering wrapper. Mobile drawer
+ * is rendered by `<PublicNav>` (1.2 behavior preserved).
  *
  * Story 2.5: `<ListContextMemory/>` is mounted once inside `<main>`. It renders
  * `null` (zero UI/layout impact) and provides the UX-DR12 reading-context
@@ -30,9 +29,9 @@ import { PublicNav } from "./_components/public-nav";
  * primitives. The skip-link is the first focusable element in the `(public)`
  * route tree: it is visually hidden (`sr-only`) until `:focus`, when it
  * becomes visible (branded, absolutely-positioned). `tabIndex={-1}` on
- * `<main>` makes the skip target programmatically focusable, so activating
- * the skip-link moves focus INTO `<main>` instead of the browser jumping to
- * the first link inside it — keyboard readers can bypass the entire nav.
+ * `<main>` makes the skip target programmatically focusable, so activating the
+ * skip-link moves focus INTO `<main>` instead of the browser jumping to the
+ * first link inside it — keyboard readers can bypass the entire nav.
  * `<ListContextMemory/>` / children are unchanged: `id` / `tabIndex` are
  * static attributes that do not affect subtree behavior or the 2.5 scroll
  * restore. This layout is still a server component — the skip-link is a plain
@@ -41,7 +40,7 @@ import { PublicNav } from "./_components/public-nav";
  */
 export default function PublicLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <div className="min-h-screen md:flex">
+    <div className="min-h-screen">
       {/*
         Story 3.5 — skip-to-content link. First focusable element in the
         (public) tree so a single Tab reaches it; `sr-only` until `:focus`,
@@ -57,7 +56,7 @@ export default function PublicLayout({ children }: Readonly<{ children: ReactNod
         跳至主要内容
       </a>
       <PublicNav />
-      <main id="main" tabIndex={-1} className="min-w-0 flex-1">
+      <main id="main" tabIndex={-1}>
         <ListContextMemory />
         {children}
       </main>

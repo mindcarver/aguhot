@@ -50,20 +50,32 @@ export interface SearchBoxProps {
   defaultValue?: string;
   /**
    * Optional extra classes appended to the `<form>` (merged via `cn` after the
-   * base `space-y-1`). Used by callers that need form-level layout tweaks without
+   * base layout). Used by callers that need form-level layout tweaks without
    * forking the component. Omit for the default spacing.
    */
   className?: string;
+  /**
+   * Layout variant (Story 6.1 review-followup):
+   *   - "stacked" (default): input over button, each `block w-full`. Used in the
+   *     mobile drawer + /search page where vertical space is ample.
+   *   - "compact": input + button on ONE row (`flex items-center`), input
+   *     `w-40`, button `shrink-0`. Used in the desktop top bar (`h-14` = 56px),
+   *     where the stacked form's two `min-h-11` (88px) rows would overflow the
+   *     56px bar (Codex P1). Both controls keep `min-h-11` (44px ≤ 56px) so the
+   *     touch-target + a11y INPUT-reachability invariants hold.
+   */
+  variant?: "stacked" | "compact";
 }
 
-export function SearchBox({ defaultValue, className }: SearchBoxProps) {
+export function SearchBox({ defaultValue, className, variant = "stacked" }: SearchBoxProps) {
+  const compact = variant === "compact";
   return (
     <form
       role="search"
       method="get"
       action="/search"
       aria-label="搜索热点与主题"
-      className={cn("space-y-1", className)}
+      className={cn(compact ? "flex items-center gap-2" : "space-y-1", className)}
     >
       {/*
         Accessible name via aria-label on the input (id-free). No <label>:
@@ -85,13 +97,15 @@ export function SearchBox({ defaultValue, className }: SearchBoxProps) {
         required
         maxLength={128}
         className={cn(
-          "block min-h-11 w-full rounded-md border border-border-hairline bg-surface-raised px-3 py-2 text-base text-ink-primary placeholder:text-ink-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+          "min-h-11 rounded-md border border-border-hairline bg-surface-raised px-3 py-2 text-base text-ink-primary placeholder:text-ink-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+          compact ? "w-40" : "block w-full",
         )}
       />
       <button
         type="submit"
         className={cn(
-          "block min-h-11 w-full rounded-md bg-brand px-3 py-2 text-base font-semibold text-brand-foreground hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+          "min-h-11 rounded-md bg-brand px-3 py-2 text-base font-semibold text-brand-foreground hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+          compact ? "shrink-0" : "block w-full",
         )}
       >
         搜索

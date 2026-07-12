@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AGUHOT — 视觉对齐 demo</title>
+<style>
+  :root{
+    --canvas:#F5F1E8; --surface-base:#FBF8F2; --surface-raised:#FFFFFF; --surface-muted:#EEE6D8;
+    --ink-1:#151A22; --ink-2:#5D6470; --ink-3:#8A909A;
+    --hairline:#DDD4C4; --brand:#213B63; --brand-fg:#FFFFFF;
+    --accent-warm:#B86633; --accent-warm-fg:#FFF8F1;
+    --mkt-up:#C43C32; --mkt-up-soft:#F8E0DD;
+    --mkt-down:#0E8B5B; --mkt-down-soft:#DDF2E9;
+    --mkt-flat:#8E7759; --mkt-flat-soft:#EFE7DA;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--canvas); color:var(--ink-1);
+    font-family:"Source Han Sans SC","Noto Sans SC","PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif;
+    font-size:16px; line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+  .serif{font-family:"Source Han Serif SC","Noto Serif SC",ui-serif,Georgia,serif}
+
+  /* ── 顶部窄条极简导航 (UX-DR3 改写) ── */
+  .topnav{
+    position:sticky; top:0; z-index:10;
+    background:rgba(245,241,232,0.92); backdrop-filter:saturate(140%) blur(8px);
+    border-bottom:1px solid var(--hairline);
+  }
+  .topnav-inner{
+    max-width:760px; margin:0 auto; padding:14px 24px;
+    display:flex; align-items:baseline; gap:28px;
+  }
+  .brand{font-family:"Source Han Serif SC",ui-serif,serif; font-size:20px; font-weight:600; letter-spacing:.04em; color:var(--ink-1); text-decoration:none}
+  .brand .dot{color:var(--accent-warm)}
+  .nav-links{display:flex; gap:20px; margin-left:auto}
+  .nav-links a{color:var(--ink-2); text-decoration:none; font-size:14px; padding:4px 2px; border-bottom:2px solid transparent}
+  .nav-links a.active{color:var(--ink-1); border-bottom-color:var(--brand)}
+  .nav-links a:hover{color:var(--ink-1)}
+
+  /* ── 主容器：居中窄栏 (UX-DR16) ── */
+  main{max-width:760px; margin:0 auto; padding:32px 24px 120px}
+
+  /* ── 编号式「当前热点」排行 (替换 MainLineBand) ── */
+  .hot-head{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px}
+  .hot-head h2{font-family:"Source Han Serif SC",ui-serif,serif; font-size:24px; font-weight:600; margin:0; letter-spacing:.01em}
+  .hot-head .sub{color:var(--ink-3); font-size:13px}
+  .hot-list{list-style:none; margin:0 0 8px; padding:0; counter-reset:hot}
+  .hot-list li{
+    counter-increment:hot; display:flex; align-items:baseline; gap:12px;
+    padding:11px 0; border-bottom:1px solid var(--hairline);
+  }
+  .hot-list li:last-child{border-bottom:0}
+  .hot-list li::before{
+    content:counter(hot); font-family:"IBM Plex Mono",monospace; font-size:13px; font-weight:500;
+    color:var(--ink-3); min-width:18px;
+  }
+  .hot-list .ht{color:var(--ink-1); font-size:16px; font-weight:600; text-decoration:none; flex:1}
+  .hot-list .ht:hover{color:var(--brand)}
+  .hot-list .src{color:var(--ink-3); font-size:12px}
+  .hot-list .when{color:var(--ink-3); font-size:12px; min-width:64px; text-align:right}
+
+  .section-rule{border:0; border-top:1px solid var(--hairline); margin:40px 0 0}
+
+  /* ── 交易日分节 (UX-DR4b) ── */
+  .date-section{margin-top:28px}
+  .date-section h3{
+    font-family:"Source Han Serif SC",ui-serif,serif; font-size:15px; font-weight:600;
+    color:var(--ink-2); margin:0 0 14px; letter-spacing:.02em;
+  }
+
+  /* ── 时间流条目：无边框 + hairline 分隔 (UX-DR4b / UX-DR16) ── */
+  /* 时间轨 + 竖线 + 正文：参考站编辑型排版 */
+  .feed{list-style:none; margin:0; padding:0}
+  .entry{
+    padding:20px 16px; margin:0 -16px; border-top:1px solid var(--hairline); display:flex; gap:0; align-items:stretch;
+    border-radius:8px; transition:background-color 150ms ease-out;
+  }
+  .entry:first-child{border-top:0}
+  .entry:hover{background:var(--surface-base)} /* row highlighting on hover (ui-ux-pro-max Effect) */
+  .e-rail{
+    flex:0 0 68px; padding-right:16px; padding-top:2px;
+    display:flex; flex-direction:column; align-items:flex-start; gap:4px;
+  }
+  .e-time{font-family:"IBM Plex Mono",monospace; font-size:15px; font-weight:600; color:var(--ink-1); line-height:1.2} /* HH:mm 领头，提级到 ink-1 */
+  .e-session{font-family:"IBM Plex Mono",monospace; font-size:10px; color:var(--ink-3)} /* 时段弱化，无底色 */
+  /* 竖线：内容区左 border，品牌海军蓝（呼应 evidence-row「可追溯证据」语义，1px 不重）*/
+  .e-body{flex:1; border-left:1px solid var(--brand); padding-left:18px}
+  .e-src{font-size:13px; color:var(--ink-2); margin-bottom:4px} /* 来源名提级为一等扫描元素 */
+  .e-title{font-size:17px; font-weight:600; color:var(--ink-1); margin:0 0 6px; line-height:1.4; text-decoration:none; display:block}
+  .e-title:hover{color:var(--brand)}
+  .e-summary{font-size:14px; color:var(--ink-2); margin:0 0 10px; line-height:1.7}
+
+  /* 来源数 chip + 关联讨论来源 chips (UX-DR4b) */
+  .e-chips{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:12px}
+  .chip{font-size:12px; border-radius:9999px; padding:2px 9px; background:var(--surface-muted); color:var(--ink-2)}
+  .chip.src-count{background:var(--surface-base); border:1px solid var(--hairline); color:var(--ink-1)}
+  .chip.related{background:transparent; border:1px solid var(--hairline); color:var(--ink-3); font-size:11px}
+  .chip.related b{color:var(--ink-2); font-weight:600}
+
+  /* 市场反应 chip (保留 UX-DR1 / UX-DR7：红绿仅市场语义) */
+  .chip.mkt-up{background:var(--mkt-up-soft); color:var(--mkt-up); border:0}
+  .chip.mkt-down{background:var(--mkt-down-soft); color:var(--mkt-down); border:0}
+
+  /* AI 解读签名块 (UX-DR8 扩展：实线分隔，权重仍 ≤ 事实) */
+  .ai-block{
+    margin-top:10px; padding-top:10px; border-top:1px solid var(--hairline);
+    display:flex; gap:8px; align-items:flex-start;
+  }
+  .ai-label{
+    font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    background:var(--accent-warm); color:var(--accent-warm-fg);
+    border-radius:9999px; padding:2px 8px; flex-shrink:0; margin-top:1px;
+  }
+  .ai-text{font-size:13.5px; color:var(--ink-2); line-height:1.65; margin:0}
+  /* 权重护栏：AI 解读字号/字色仍 ≤ 事实标题(17px ink-1) 与摘要(14px ink-2) */
+
+  /* 同事件精选折叠 (保留) */
+  .fold{margin-top:10px}
+  .fold summary{
+    list-style:none; cursor:pointer; display:inline-flex; align-items:center;
+    font-size:12px; color:var(--ink-2); background:var(--surface-muted); border-radius:9999px; padding:3px 10px;
+  }
+  .fold summary::-webkit-details-marker{display:none}
+  .fold summary::before{content:"同事件精选 ▾"; }
+  .fold[open] summary::before{content:"同事件精选 ▴"}
+  .fold-body{margin-top:8px; display:flex; flex-wrap:wrap; gap:6px}
+  .fold-body .chip{font-size:11px}
+
+  .footnote{margin-top:40px; padding-top:16px; border-top:1px solid var(--hairline); color:var(--ink-3); font-size:12px}
+  .legend{display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; align-items:center}
+  .legend span{display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--ink-3)}
+</style>
+</head>
+<body>
+
+<!-- 顶部窄条极简导航（替换左栏） -->
+<nav class="topnav" aria-label="主导航">
+  <div class="topnav-inner">
+    <a class="brand" href="#">AGUHOT<span class="dot">·</span></a>
+    <div class="nav-links">
+      <a href="#" class="active">时间流</a>
+      <a href="#">日报</a>
+      <a href="#">主题</a>
+      <a href="#">收藏</a>
+      <a href="#">搜索</a>
+    </div>
+  </div>
+</nav>
+
+<main>
+
+  <!-- 编号式「当前热点」排行（替换 MainLineBand） -->
+  <section aria-label="当前热点">
+    <div class="hot-head">
+      <h2>当前热点</h2>
+      <span class="sub mono">多信源热度 · 随时间消退</span>
+    </div>
+    <ol class="hot-list">
+      <li><a class="ht" href="#">半导体设备国产化提速：北方华创 Q2 订单超预期</a><span class="src">12 个信源</span><span class="when mono">2 小时前</span></li>
+      <li><a class="ht" href="#">央行降准 0.5pct 落地：流动性宽松预期升温</a><span class="src">9 个信源</span><span class="when mono">4 小时前</span></li>
+      <li><a class="ht" href="#">创新药出海：百济神州泽布替尼欧洲适应症获批</a><span class="src">7 个信源</span><span class="when mono">5 小时前</span></li>
+      <li><a class="ht" href="#">算力链景气度上行：光模块排产指引上调</a><span class="src">6 个信源</span><span class="when mono">7 小时前</span></li>
+      <li><a class="ht" href="#">地产政策再加码：一线城市限购局部松绑</a><span class="src">5 个信源</span><span class="when mono">9 小时前</span></li>
+    </ol>
+  </section>
+
+  <hr class="section-rule" />
+
+  <!-- 时间流：按交易日分节 -->
+  <section aria-label="时间流">
+
+    <div class="date-section">
+      <h3>7 月 12 日 · 周六（非交易日）</h3>
+      <ul class="feed">
+
+        <li class="entry">
+          <div class="e-rail">
+            <span class="e-time">14:38</span>
+            <span class="e-session">盘后</span>
+          </div>
+          <div class="e-body">
+            <div class="e-src">财联社</div>
+            <a class="e-title" href="#">半导体设备国产化提速：北方华创 Q2 订单超预期</a>
+            <p class="e-summary">北方华创披露 Q2 新签订单同比 +47%，刻蚀/薄膜沉积设备在长江存储、中芯国际产线验证通过率提升。机构测算 2026 年国产设备渗透率有望从 21% 提升至 28%，但高端 ALD 仍依赖进口。市场关注订单兑现节奏与毛利率压力。</p>
+            <div class="e-chips">
+              <span class="chip src-count mono">来源 12</span>
+              <span class="chip related"><b>关联讨论 4 条</b></span>
+              <span class="chip related">证券时报</span>
+              <span class="chip related">21 世纪</span>
+              <span class="chip mkt-up">板块 +3.2%</span>
+            </div>
+            <div class="ai-block">
+              <span class="ai-label">AI 解读</span>
+              <p class="ai-text">订单数据是硬兑现，但国产替代叙事已计入估值；真正边际变化在 ALD 等高端环节的验证进度——那才是下一阶段 alpha 来源。留意 Q3 毛利率是否被价格战拖累。</p>
+            </div>
+            <details class="fold"><summary></summary><div class="fold-body"><span class="chip">财联社</span><span class="chip">证券时报</span><span class="chip">21 世纪经济报道</span><span class="chip">第一财经</span><span class="chip">+8</span></div></details>
+          </div>
+        </li>
+
+        <li class="entry">
+          <div class="e-rail">
+            <span class="e-time">11:02</span>
+            <span class="e-session">盘中</span>
+          </div>
+          <div class="e-body">
+            <div class="e-src">央行公告</div>
+            <a class="e-title" href="#">央行降准 0.5pct 落地：流动性宽松预期升温</a>
+            <p class="e-summary">央行宣布全面降准 0.5 个百分点，释放长期资金约 1 万亿元。叠加前期 MLF 利率下调，银行间流动性边际宽松。债市反应积极，10Y 国债收益率下行 4bp；权益端银行、地产链受益预期升温，但市场对宽松持续性与汇率掣肘仍有分歧。</p>
+            <div class="e-chips">
+              <span class="chip src-count mono">来源 9</span>
+              <span class="chip related"><b>关联讨论 3 条</b></span>
+              <span class="chip related">新华财经</span>
+              <span class="chip related">Wind</span>
+            </div>
+            <div class="ai-block">
+              <span class="ai-label">AI 解读</span>
+              <p class="ai-text">降准本身是预期内，关键是"释放 1 万亿"的量级是否够覆盖税期。债市已 price in 一半，权益端的弹性取决于后续是否有结构性工具配合——单靠总量宽松难撑持续性行情。</p>
+            </div>
+          </div>
+        </li>
+
+        <li class="entry">
+          <div class="e-rail">
+            <span class="e-time">09:47</span>
+            <span class="e-session">盘中</span>
+          </div>
+          <div class="e-body">
+            <div class="e-src">公司公告</div>
+            <a class="e-title" href="#">创新药出海：百济神州泽布替尼欧洲适应症获批</a>
+            <p class="e-summary">EMA 批准泽布替尼新增一线 CLL 适应症，百济神州海外营收占比进一步提升。该品种 2025 年全球销售额突破 30 亿美元，成为国产创新药出海标杆。竞品伊布替尼份额持续被侵蚀，但海外商业化网络铺设成本仍压制利润端。</p>
+            <div class="e-chips">
+              <span class="chip src-count mono">来源 7</span>
+              <span class="chip related"><b>关联讨论 2 条</b></span>
+              <span class="chip related">医药魔方</span>
+              <span class="chip mkt-up">个股 +6.8%</span>
+            </div>
+            <div class="ai-block">
+              <span class="ai-label">AI 解读</span>
+              <p class="ai-text">出海逻辑兑现最硬的一个标的，但估值已反映部分海外放量。边际看点不是获批本身，而是能否在欧美挤掉伊布替尼成为一线首选——份额数据比批文更值钱。</p>
+            </div>
+          </div>
+        </li>
+
+      </ul>
+    </div>
+
+    <div class="date-section">
+      <h3>7 月 11 日 · 周五</h3>
+      <ul class="feed">
+
+        <li class="entry">
+          <div class="e-rail">
+            <span class="e-time">15:20</span>
+            <span class="e-session">盘后</span>
+          </div>
+          <div class="e-body">
+            <div class="e-src">工信部</div>
+            <a class="e-title" href="#">算力链景气度上行：光模块排产指引上调</a>
+            <p class="e-summary">工信部发布算力高质量发展通知，多家光模块厂商上调 Q3 排产指引。800G 产品出货占比提升，1.6T 进入小批量验证。海外大客户订单能见度延伸至 2027 年，但高端激光器芯片自给率仍偏低，产业链利润分布不均。</p>
+            <div class="e-chips">
+              <span class="chip src-count mono">来源 6</span>
+              <span class="chip related"><b>关联讨论 3 条</b></span>
+              <span class="chip related">招商电子</span>
+              <span class="chip mkt-up">板块 +2.1%</span>
+            </div>
+            <div class="ai-block">
+              <span class="ai-label">AI 解读</span>
+              <p class="ai-text">排产指引上调是实打实的景气信号，但市场已多次交易过算力链。真正未充分定价的是 1.6T 验证进度和高端芯片国产化——这两点决定谁能拿到下一轮超额。</p>
+            </div>
+          </div>
+        </li>
+
+        <li class="entry">
+          <div class="e-rail">
+            <span class="e-time">10:15</span>
+            <span class="e-session">盘中</span>
+          </div>
+          <div class="e-body">
+            <div class="e-src">新华财经</div>
+            <a class="e-title" href="#">地产政策再加码：一线城市限购局部松绑</a>
+            <p class="e-summary">一线城市相继宣布局部放松限购，核心区购房资格门槛下调。结合此前存量房贷利率下调，政策组合拳意在稳定需求端。但高频成交数据尚未出现持续性回暖，房企去化压力与信用风险仍存，板块分化加剧。</p>
+            <div class="e-chips">
+              <span class="chip src-count mono">来源 5</span>
+              <span class="chip related"><b>关联讨论 2 条</b></span>
+              <span class="chip related">中指研究院</span>
+              <span class="chip mkt-down">个股 -1.4%</span>
+            </div>
+            <div class="ai-block">
+              <span class="ai-label">AI 解读</span>
+              <p class="ai-text">政策在加码但成交没跟上是本轮地产最拧巴的地方。限购松绑提振的是预期，不是需求本身——关注下一周高频成交能否企稳，否则板块仍是博弈而非反转。</p>
+            </div>
+          </div>
+        </li>
+
+      </ul>
+    </div>
+
+  </section>
+
+  <div class="footnote">
+    <p>本 demo 用 aguhot 现有 token 渲染（暖底 #F5F1E8 / 深墨 / 品牌海军蓝 / 红绿仅市场语义），内容为 A 股域示例数据。视觉形态对齐参考站 aihot.virxact.com：无边框纵栏 + hairline 分隔 + 交易日分节 + HH:mm 时间戳领头 + 来源提级 + AI 解读签名块。</p>
+    <div class="legend">
+      <span><span class="chip src-count mono" style="padding:1px 7px">来源 12</span> 证据源计数（不造假「精选分」）</span>
+      <span><span class="chip mkt-up" style="padding:1px 7px">板块 +3.2%</span> 市场反应（红绿仅此用）</span>
+      <span><span class="ai-label" style="font-size:10px;padding:1px 6px">AI 解读</span> 视觉权重 ≤ 事实</span>
+    </div>
+  </div>
+
+</main>
+
+</body>
+</html>
