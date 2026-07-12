@@ -693,13 +693,20 @@ So that 我能跳出单事件看当日主线演化。
 ### Story 5.4: AI 生成内容运营抽检
 
 As a 运营人员,
-I want 对 AI 解读/深读/研判做抽检,
+I want 对 AI 解读/深读做抽检,
 So that 误导性 AI 内容不长期滞留公开页。
+
+> **V1 范围裁决（2026-07-12，PM 决策，解 dev intent-gap HALT 的 4 个 gap）：**
+> - **Gap 1 下线粒度 = 外科式**：扩 review-workflow 加新 outcome `suppress_ai_content`（不新增 publication_status，不改 decideReview 的 HotEvent 状态机），事务内只重投影该条 AI 内容——reason 置 null（`refreshPublishedTimelineForEvent`）/ deepread 删行（`refreshPublishedReadModel`）。**不**核平整个事件。审计走既有 `ReviewDecision`（note 标注 misleading + target_type+target_id）。
+> - **Gap 2 研判出 V1 范围**：TrendBriefing（coverageDate 键、无 publication_status、禁并行复核）V1 **不可标记/下线**。运营台研判仅 browse（只读），不可标记。待未来设计 coverageDate 复核 schema 后另开 story。SM-6 分子不含研判。
+> - **Gap 3 重生成延后**：V1 **不做「重生成」action**（adapter 未接、prod 空转 = 死按钮、误导运营）。AC「下线**或**重生成」的「或」使延后成立。V1 只做 suppress/takedown。重生成待真实 provider 落地后另开 story。
+> - **Gap 4 SM-6 口径**：运营 console 新增一个误导率读数 = 误导标记数（ReviewDecision where note misleading, target_type in {reason,deepread}）/ AI 内容总数（已生成的 reason+deepread 行数），**聚合分母**（reason+deepread 合计，不含研判），**滚动 7 日窗**。查 append-only `ReviewDecision` 审计表算。满足 SM-6 < 10% 可观测。
 
 **Acceptance Criteria:**
 
-**Given** AI 生成内容已上线
+**Given** AI 生成内容（reason / deepread）已上线
 **When** 运营人员进入复核台
-**Then** 可按类型筛选AI 解读/深读/研判
-**And** 可标记为误导并触发下线或重生成
-**And** 误导占比被 SM-6 监控（< 10%）
+**Then** 可按类型筛选 AI 解读（reason）/ 深读（deepread）——研判（trend briefing）仅 browse 不可标记（V1 排除）
+**And** 可标记某条 reason 或 deepread 为误导，触发**外科式下线**（扩 review-workflow 新 outcome `suppress_ai_content`，事务内只重投影该条 AI 内容、不改 HotEvent publication_status、不核平整个事件）
+**And** **不做**「重生成」action（V1 延后，待真实 provider 落地）
+**And** 运营 console 新增 SM-6 误导率读数（误导标记数 / reason+deepread 总数，聚合，滚动 7 日窗，查 ReviewDecision 审计表）——研判不计入分母/分子
