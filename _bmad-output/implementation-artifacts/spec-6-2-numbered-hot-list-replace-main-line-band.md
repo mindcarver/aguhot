@@ -2,7 +2,8 @@
 title: '编号式「当前热点」排行替换 MainLineBand (6.2)'
 type: 'feature'
 created: '2026-07-12'
-status: 'ready-for-dev'
+status: 'review'
+baseline_commit: 'dc75c39f50ec125abc7bea3bb8f9430fc33acd51'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
 context:
@@ -92,3 +93,35 @@ warnings: []
 
 **Manual checks:**
 - 目视确认编号 1-5、相对时间、标题 hover 变品牌色、空读模型时不渲染。
+
+## Dev Agent Record
+
+### Implementation Plan
+- `NumberedHotList` (NEW): server component replacing `MainLineBand` (4.2). Renders `<section aria-labelledby>` + heading「当前热点」+ subtitle「多信源热度 · 随时间消退」+ `<ol>` of top-5 `PublishedHotEventSummary`. Each item: explicit index `{i+1}` (font-mono ink-tertiary) → title (Link to detail, ink-primary semibold, hover→brand) → `{evidenceCount} 信源` (ink-tertiary) → relative time (right-aligned, ink-tertiary).
+- Data source unchanged: reuses `listPublishedHotEvents` saliency read (evidenceCount DESC + latestEvidenceAt DESC). NO new read model/field (sprint-change-proposal 提案 14 — architecture untouched).
+- `page.tsx`: `<MainLineBand>` → `<NumberedHotList>` (NumberedHotList renders its own `<section class="mt-8">` + returns null when empty, so the page-level `hotEvents.length > 0` guard + wrapping section were dropped). Import + JSDoc reference updated.
+- Index rendering: explicit `{i+1}` (NOT CSS counter) — Tailwind Preflight resets `<ol>` list-style to none (`::marker` hidden), so an explicit number span is the reliable cross-browser choice (simpler than counter-reset/increment + `::before`, same visual).
+- Relative time: `formatRelative(d, now)` — pure number math (no toLocaleString), locale-stable. <60s→「刚刚」, <60min→「N 分钟前」, <24h→「N 小时前」, else→「N 天前」.
+- Ranking-reason chips dropped (4.2 band had「近期升温」/「多源覆盖」; the reference-site numbered list doesn't, spec 6.2 AC drops them). FR-3's "同事件精选" half still lives on the timeline card fold tag. The number conveys rank.
+- `main-line-band.tsx` now orphaned (no code imports it) — KEPT per spec 6.2「保留待 6.5 清理」; deletion coupled with `timeline.spec` band-test rewrite in Story 6.5 (e2e 收口).
+
+### Debug Log
+- Visual verification: home `/` needs DATABASE_URL (500 without DB). Created DB-free scratch route `dev-hotlist-preview` with 6 mock `PublishedHotEventSummary` (fixed `now` for deterministic relative times) rendering the REAL `NumberedHotList`. Verified top-5 slice (6th event dropped), numbering, relative times, 来源数. Scratch DELETED after capture.
+- `PublishedHotEventSummary` type confirmed: `{ hotEventId, title, evidenceCount, latestEvidenceAt, publishedAt }`.
+
+### Completion Notes
+- **Typecheck + lint + prettier:** all green.
+- **Visual verification (scratch route, DB-free mock, deleted after):** numbered list renders — 「当前热点」heading + subtitle + 5 ranked items (number + title + 信源 + relative time), 6th event sliced off by top-5. Matches `demo-ui-redesign.html` `.hot-list`. See `_bmad-output/dev-6-2-hotlist.png`.
+- **E2E:** NOT run — no `DATABASE_URL`. `home.spec` has NO band assertions (only Story 1.1: 200 + masthead + no-login), so no home.spec change needed. `timeline.spec`'s `@timeline` band test (region "今日重点 / 市场主线", top-3, reason tags) is now stale — deferred to Story 6.5 (e2e 收口) along with the 6.3 timeline-card UTC→HH:mm update + main-line-band.tsx deletion.
+- **Token/architecture:** `globals.css` untouched; no schema/read-model/AD change (Epic 6 scope invariant holds).
+- **Guardrails:** NFR-2 (empty→no render, no fabricated「精选分」); reuses saliency read (no new field); UX-DR16 (borderless editorial form).
+
+## File List
+- `apps/web/app/(public)/_components/numbered-hot-list.tsx` — NEW (ordered list, top-5 saliency, relative time, replaces MainLineBand)
+- `apps/web/app/(public)/page.tsx` — MODIFY (`<MainLineBand>` → `<NumberedHotList>`; import + JSDoc reference updated; page-level empty guard dropped — NumberedHotList self-guards)
+- `apps/web/app/(public)/_components/main-line-band.tsx` — UNCHANGED (orphaned, no imports; kept per spec — deletion deferred to Story 6.5 coupled with timeline.spec rewrite)
+- `apps/web/app/(public)/dev-hotlist-preview/` — CREATED then DELETED (scratch visual verification, DB-free mock; removed before commit)
+
+## Change Log
+- 2026-07-12: Story 6.2 implemented — MainLineBand replaced by NumberedHotList (编号式「当前热点」排行, UX-DR16); reuses listPublishedHotEvents saliency read (no new read model); top-5 + relative time. typecheck + lint + prettier green; visual verified via DB-free scratch (deleted); e2e deferred (no DB, 6.5 收口). main-line-band.tsx orphaned, deletion deferred to 6.5. Status → review.
+

@@ -92,8 +92,8 @@ development_status:
   # 不动 token / architecture / PRD 定位层；仅 UX 渲染层返工。
   epic-6: backlog
   6-1-top-nav-replace-left-rail: done
-  6-2-numbered-hot-list-replace-main-line-band: ready-for-dev
-  6-3-timeline-borderless-editorial-column: ready-for-dev
+  6-2-numbered-hot-list-replace-main-line-band: review
+  6-3-timeline-borderless-editorial-column: review
   6-4-ai-reason-signature-block-and-source-chips: ready-for-dev
   6-5-visual-alignment-e2e-and-event-card: ready-for-dev
   epic-6-retrospective: optional

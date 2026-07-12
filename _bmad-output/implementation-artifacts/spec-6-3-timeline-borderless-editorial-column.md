@@ -2,7 +2,8 @@
 title: '时间流条目改无边框编辑型纵栏 (6.3)'
 type: 'feature'
 created: '2026-07-12'
-status: 'ready-for-dev'
+status: 'review'
+baseline_commit: 'dc75c39f50ec125abc7bea3bb8f9430fc33acd51'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
 context:
@@ -104,3 +105,35 @@ warnings: []
 
 **Manual checks:**
 - 目视确认三栏、海军蓝竖线、HH:mm 领头、来源行、多句摘要、日期分节、hover 微亮；reduced-motion 下 hover 即时。
+
+## Dev Agent Record
+
+### Implementation Plan
+- `TimelineCard` rewritten from the 4.2 bordered card (`rounded-lg border bg-surface-raised`) to a borderless 3-column entry: left rail (`HH:mm` semibold ink-primary + session tag ink-tertiary, fixed `w-[68px]`) → navy 1px vertical rule (`border-l border-brand` on the body, echoes `evidence-row` traceable-evidence semantic) → body (source promoted / title / multi-line summary / evidence-count dl / AI slot).
+- `<li>` uses `border-t border-border-hairline first:border-t-0` (column separator, no surrounding border) + `hover:bg-surface-base transition-colors` (global reduced-motion rule collapses to ~0ms).
+- Whole-entry `<Link>` wraps rail + body (1.8 pattern); fold `<details>` kept as a SIBLING of the Link (4.2 review fix preserved — `<summary>` inside `<a>` toggles+navigates). Fold disclosure left-padded `pl-[86px]` (rail 68 + body 18) to align under the body.
+- 4.2 logic preserved verbatim: `TIMELINE_FOLD_THRESHOLD` fold decision, `recommendationReason` null→no-slot guard (NFR-2), `SESSION_TAG_LABEL` map, AiLabel. AI slot kept in 4.2 inline form — Story 6.4 upgrades to `EditorialReasonBlock` (solid hairline signature). Evidence-count dl kept — 6.4 replaces with `SourceChipList`.
+- `DateSectionDivider` (NEW): formats `tradeDate` (YYYY-MM-DD local calendar date) → `「7 月 12 日 · 周六（非交易日）」`. Parses as `Date.UTC(y,m-1,d)` (day-granularity safe — weekday is TZ-independent at day granularity); Sat/Sun → `（非交易日）` heuristic. locale-stable (no toLocaleString). `font-display` (Source Han Serif) + `ink-secondary` + `first:mt-0`.
+- `page.tsx`: groups `filteredEntries` by `entry.tradeDate` via an ordered `Map` (filteredEntries is already latest-tradeDate-first + occurredAt DESC, so insertion order = display order). Renders `<section>` per date = `DateSectionDivider` + `<ul>` of `TimelineCard`. Single-date (common case) → one divider; multi-date → one per date.
+
+### Debug Log
+- Visual verification: home `/` needs DATABASE_URL (500 without DB, pre-existing). Created a DB-free scratch route `dev-timeline-preview` with mock `PublishedTimelineEntry` data (2 tradeDates, folded + single-source, AI reason present + null) rendering the REAL components. **Note:** initial folder name `__timeline-preview` 404'd — Next.js treats `_`-prefixed folders as private (excluded from routing); renamed to `dev-timeline-preview`. Next/Turbopack crashed once with `SyntaxError: Unexpected end of JSON input` (internal, not code — typecheck/lint/prettier green); restarted dev server. Scratch route DELETED after visual capture (before commit).
+- `published_timeline.tradeDate` field confirmed in core types (`PublishedTimelineEntry.tradeDate: string`).
+
+### Completion Notes
+- **Typecheck:** `pnpm --filter @aguhot/web typecheck` — green (`tsc --noEmit` + `tsconfig.e2e.json`).
+- **Lint + Prettier:** green (3 files prettier-formatted: timeline-card, page, scratch; scratch deleted).
+- **Visual verification (scratch route, DB-free mock, deleted after):** 3-column borderless column renders — HH:mm rail leads (ink-primary semibold), navy 1px vertical rule, source promoted, multi-line summary, evidence count, AI 解读 inline where present (null→absent), date sections with weekday + non-trading annotation, hairline separators. Matches `demo-ui-redesign.html` (方案 A). See `_bmad-output/dev-6-3-timeline.png`.
+- **E2E:** NOT run — no `DATABASE_URL` (home `/` 500s; `home.spec`/`design.spec`/`themes.spec` hit `/`). Same prerequisite gap as 6.1 / spec-4-2. `home.spec`/`design.spec`/`themes.spec` need updating for the new纵栏 structure (borderless `<li>` vs bordered card, date sections) — deferred to Story 6.5 (e2e 收口) per Epic 6 plan, OR a DB-equipped env.
+- **Token/architecture:** `globals.css` untouched; no schema/read-model/AD change (Epic 6 scope invariant holds). `published_timeline` read contract unchanged.
+- **Guardrails:** AI 解读 weight ≤ factual title (4.2 inline form, body-sm ink-secondary; 6.4 will formalize); NFR-2 null→no-slot; 4.2 fold disclosure sibling pattern preserved; UX-DR15 (no carousel); reduced-motion honored.
+
+## File List
+- `apps/web/app/(public)/_components/timeline-card.tsx` — REWRITE (bordered card → 3-column borderless entry: rail + navy vertical rule + body; HH:mm lead; source promoted; hover bg; fold `<details>` sibling preserved)
+- `apps/web/app/(public)/_components/date-section-divider.tsx` — NEW (tradeDate → editorial date header with weekday + non-trading annotation)
+- `apps/web/app/(public)/page.tsx` — MODIFY (group filteredEntries by tradeDate; render DateSectionDivider + TimelineCard per date section)
+- `apps/web/app/(public)/dev-timeline-preview/` — CREATED then DELETED (scratch visual verification, DB-free mock; removed before commit)
+
+## Change Log
+- 2026-07-12: Story 6.3 implemented — TimelineCard reworked to borderless 3-column editorial entry (UX-DR4b/DR16); DateSectionDivider added; page groups by tradeDate. typecheck + lint + prettier green; visual verified via DB-free scratch (deleted); e2e deferred (no DB, 6.5 收口). Status → review.
+
