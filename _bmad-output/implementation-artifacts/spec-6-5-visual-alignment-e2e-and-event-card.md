@@ -2,7 +2,7 @@
 title: '视觉对齐 E2E 与设计页同步 + event-card 无边框化 (6.5)'
 type: 'feature'
 created: '2026-07-12'
-status: 'review'
+status: 'done'
 baseline_commit: '9871695'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
@@ -129,4 +129,11 @@ warnings: []
 
 ## Change Log
 - 2026-07-12: Story 6.5 implemented — event-card borderless (align TimelineCard); search.spec `complementary`→`banner`; main-line-band.tsx deleted (orphaned). token/architecture zero-diff verified. typecheck + lint + prettier green; visual verified (scratch, deleted); e2e deferred (no DB). Status → review. **Epic 6 complete (6.1-6.5 all done).**
+- 2026-07-12: Codex review follow-up (1 finding, addressed) — P2: event-card's `<ul>` callers (`/search` 热点事件 + 时间流 lists, `/favorites` live-events list) still used `space-y-3`, leaving 12px gaps before every hairline instead of contiguous separators. Removed `space-y-3` from the 3 EventCard/TimelineCard lists (search/page.tsx ×2, favorites/page.tsx ×1); kept `space-y-3` on the bordered theme/offline rows (not event-card, out of 6.5 scope). typecheck + lint + prettier green; token/arch diff still empty.
+
+## Review Triage Log
+
+### 2026-07-12 — Codex review (working-tree, 6.5 diff)
+- **[P2] caller `space-y-3` broke contiguous hairlines** — ADDRESSED. event-card became a `border-t` row, but `/search` (热点事件 list `search/page.tsx:176` + 时间流 list `:208`) and `/favorites` (live-events list `favorites/page.tsx:136`) `<ul>`s still carried `space-y-3` → 12px whitespace before every hairline, not the contiguous column the home TimelineCard list uses. Removed `space-y-3` from those 3 lists (border-t self-separates, mirroring the 6.3 home TimelineCard `<ul>`). The bordered theme rows (`favorites:156`) + offline rows (`favorites:192`) KEEP `space-y-3` — they are not event-card (custom bordered `<li>`, out of 6.5 scope).
+
 
