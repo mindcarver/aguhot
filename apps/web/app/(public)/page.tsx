@@ -11,7 +11,7 @@ import {
   type TimelineSessionTagType,
 } from "@aguhot/core";
 
-import { MainLineBand } from "./_components/main-line-band";
+import { NumberedHotList } from "./_components/numbered-hot-list";
 import {
   TimelineFilters,
   mergeTimelineSearchParams,
@@ -20,6 +20,7 @@ import {
   type TimelineSessionLiteral,
 } from "./_components/timeline-filters";
 import { TimelineCard } from "./_components/timeline-card";
+import { DateSectionDivider } from "./_components/date-section-divider";
 
 export const metadata: Metadata = {
   title: "首页",
@@ -39,11 +40,12 @@ export const metadata: Metadata = {
  *     盘中 / 盘后 / 全天) is filtered on the SERVER — it hits 4.1's
  *     `(trade_date, session_tag, occurred_at)` composite index directly.
  *   - `listPublishedHotEvents` (ordered `evidenceCount DESC + latestEvidenceAt
- *     DESC`) → the top-N `main-line-band` ("今日重点 / 市场主线"). The band
- *     reuses the existing saliency read because `published_timeline` has no
- *     saliency/pin field (it is a pure time-order projection). Two read models
- *     coexist: the band answers "what is the market trading", the timeline
- *     answers "minute-level dynamics" (spec Design Notes).
+ *     DESC`) → the top-N `numbered-hot-list` ("当前热点", Story 6.2 — replaced
+ *     the 4.2 `main-line-band`). The list reuses the existing saliency read
+ *     because `published_timeline` has no saliency/pin field (it is a pure
+ *     time-order projection). Two read models coexist: the numbered list
+ *     answers "what is the market trading", the timeline answers "minute-level
+ *     dynamics" (spec Design Notes).
  *   - `listPublishedAssociations` (Story 2.2) → ONLY read when a `?category=`
  *     filter is active. Builds a `hotEventId → Set<AssociationKind>` map in
  *     memory and filters the (already session-filtered) timeline entries. This
@@ -191,6 +193,24 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
 
   const now = new Date();
 
+  // Group the (session/category-filtered) timeline entries by tradeDate for
+  // the editorial date-section layout (UX-DR4b / UX-DR16, Story 6.3).
+  // filteredEntries is already ordered latest-tradeDate-first + occurredAt DESC
+  // within a date (listPublishedTimeline contract), so a Map preserves the
+  // correct group order on insertion. Each group renders a DateSectionDivider
+  // + a <ul> of TimelineCard entries. Single-date (the common case —
+  // listPublishedTimeline defaults to the latest trade_date) renders one
+  // divider; multi-date (future filter span) renders one per date.
+  const timelineGroups = new Map<string, PublishedTimelineEntry[]>();
+  for (const entry of filteredEntries) {
+    let arr = timelineGroups.get(entry.tradeDate);
+    if (arr === undefined) {
+      arr = [];
+      timelineGroups.set(entry.tradeDate, arr);
+    }
+    arr.push(entry);
+  }
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
       {/*
@@ -212,11 +232,13 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
         the session/category dimensions (spec Never: band is saliency
         projection, independent of timeline filters, always full top-N).
       */}
-      {hotEvents.length > 0 ? (
-        <section className="mt-8">
-          <MainLineBand events={hotEvents} now={now} />
-        </section>
-      ) : null}
+      {/*
+        Numbered「当前热点」ranking — Story 6.2 (replaces the 4.2 MainLineBand
+        card-band). Renders its own <section class="mt-8"> + returns null when
+        hot-events is empty (NFR-2: no fabricated copy). Reuses the existing
+        listPublishedHotEvents saliency read — no new read model/field.
+      */}
+      <NumberedHotList events={hotEvents} now={now} />
 
       {/*
         Filter nav — Story 4.3. Renders on EVERY render (empty or populated read
@@ -251,11 +273,18 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
       */}
       <section className="mt-6" aria-label="时间流">
         {filteredEntries.length > 0 ? (
-          <ul role="list" className="space-y-3">
-            {filteredEntries.map((entry: PublishedTimelineEntry) => (
-              <TimelineCard key={entry.id} entry={entry} />
+          <div>
+            {Array.from(timelineGroups.entries()).map(([tradeDate, entries]) => (
+              <section key={tradeDate} aria-label={tradeDate}>
+                <DateSectionDivider tradeDate={tradeDate} />
+                <ul role="list">
+                  {entries.map((entry: PublishedTimelineEntry) => (
+                    <TimelineCard key={entry.id} entry={entry} />
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         ) : isFilterEmpty ? (
           <div className="space-y-3">
             <p className="text-ink-secondary">当前筛选条件下暂无时间流条目。</p>
@@ -276,9 +305,7 @@ export default async function PublicHomePage({ searchParams }: PageProps) {
               level timestamp to cite; this is the honest "this page was last
               rendered at" anchor, not a fabricated content timestamp.
             */}
-            <p className="font-mono text-xs text-ink-tertiary">
-              最近更新：{formatDateTime(now)}
-            </p>
+            <p className="font-mono text-xs text-ink-tertiary">最近更新：{formatDateTime(now)}</p>
           </div>
         )}
       </section>
