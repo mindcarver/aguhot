@@ -2,7 +2,7 @@
 title: 'AI 解读实线签名块 + 来源 chip 外显 (6.4)'
 type: 'feature'
 created: '2026-07-12'
-status: 'review'
+status: 'done'
 baseline_commit: '5b44c79'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
@@ -127,4 +127,14 @@ warnings: []
 
 ## Change Log
 - 2026-07-12: Story 6.4 implemented — EditorialReasonBlock (solid-hairline AI 解读 signature, weight ≤ factual) + SourceChipList (`来源 N` chip) + fold chip row; integrated into TimelineCard. typecheck + lint + prettier green; visual verified via DB-free scratch (deleted); e2e deferred (no DB, 6.5 收口). Status → review.
+- 2026-07-12: Codex review follow-up (4 findings, all addressed) — (1) SourceChipList accepts sourceName + renders `关联讨论 {count} 条` + representative source chip (was count-only); (2) fold body reverted to honest text「精选自 {count} 条证据…」— removed misleading `+{count-1}` chip (evidenceCount counts RECORDS not distinct sources; seed has 2 records under 1 source); (3) EditorialReasonBlock renders slot-specific「AI 解读」label (was generic AiLabel "AI"); (4) order: SourceChipList BEFORE EditorialReasonBlock (factual chips above AI divider, matches demo). timeline.spec updated (countY `来源 \d+`→`关联讨论 \d+ 条`; fold body `+1`→`精选自 2 条证据`). typecheck + lint + prettier green; visual re-verified.
+
+## Review Triage Log
+
+### 2026-07-12 — Codex review (working-tree, 6.4 diff)
+- **[P1] SourceChipList missing `关联讨论 N 条` + source chips** — ADDRESSED. The component was count-only (`来源 N`), not accepting `sourceName`, so it couldn't render the spec-6.4-contracted row. SourceChipList now accepts `sourceName` + renders `关联讨论 {count} 条` chip + `{sourceName}` representative-source chip.
+- **[P2] fold `+{count-1}` falsely implied more sources** — ADDRESSED. `evidenceCount` counts evidence RECORDS (`projectTimelineFields` uses `input.evidence.length`), NOT distinct publishers — the seed creates 2 semiconductor records under 1 EvidenceSource, so `+1` implied a non-existent second source. Fold body reverted to honest text「精选自 {count} 条证据（代表来源：{sourceName}）· 完整证据时间线请见详情页」—「条证据」honestly labels them as records, no `+N` chip.
+- **[P2] missing slot-specific「AI 解读」label** — ADDRESSED. EditorialReasonBlock used the generic `<AiLabel>` (literal "AI") — no visible「解读」identified the card-level commentary. Replaced with a slot-specific「AI 解读」label span (accent-warm token, same as AiLabel, but explicit text + no uppercase/tracking for CJK cleanliness). The generic AiLabel ("AI") stays for detail-page 深读 / daily 研判 (not mislabeled).
+- **[P2] factual chips rendered below AI divider (inverted order)** — ADDRESSED. EditorialReasonBlock was before SourceChipList → factual source metadata appeared below AI commentary, reversing the demo's `chips → AI block` order + defeating the hairline's factual/editorial separation. Reordered: SourceChipList → EditorialReasonBlock (hairline now separates all factual content above from AI commentary below).
+
 
