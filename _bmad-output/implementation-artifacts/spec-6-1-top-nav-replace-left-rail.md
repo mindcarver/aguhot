@@ -2,7 +2,7 @@
 title: '顶部窄条极简导航替换左栏 (6.1)'
 type: 'feature'
 created: '2026-07-12'
-status: 'review'
+status: 'done'
 baseline_commit: '78b2cebe699fcd7ed942a2dd312ea271d87f1bdd'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
@@ -111,11 +111,22 @@ warnings: []
 - **Guardrails:** `aria-label="主导航"` + `aria-current`; keyboard focus via global `:focus-visible`; drawer Escape/overlay close preserved (1.2); reduced-motion honored (instant toggle, no animation lib).
 
 ## File List
-- `apps/web/app/(public)/_components/public-nav.tsx` — MODIFY (rework: desktop left-rail `<aside>` removed; top-bar `<header>` promoted to all widths; horizontal `DesktopNav` + `DrawerNav` split; drawer logic preserved)
+- `apps/web/app/(public)/_components/public-nav.tsx` — MODIFY (rework: desktop left-rail `<aside>` removed; top-bar `<header>` promoted to all widths; horizontal `DesktopNav` + `DrawerNav` split; drawer logic preserved; desktop `<SearchBox variant="compact">`)
+- `apps/web/app/(public)/_components/search-box.tsx` — MODIFY (add `variant?: "stacked" | "compact"` prop; compact = horizontal `flex` row for the h-14 top bar — Codex P1 fix)
 - `apps/web/app/(public)/layout.tsx` — MODIFY (remove `md:flex` row + `min-w-0 flex-1`; column shell: skip-link + `<PublicNav>` + `<main>`)
 - `apps/web/e2e/navigation.spec.ts` — MODIFY (rewrite: `complementary` aside → `banner`/`dialog` landmarks; desktop horizontal links + mobile drawer + breakpoint)
 - `apps/web/e2e/a11y.spec.ts` — MODIFY (stale comment update: navigation.spec now scopes to `banner`/`dialog`, not `complementary`)
 
 ## Change Log
 - 2026-07-12: Story 6.1 implemented — desktop left-rail replaced by sticky top-bar窄条 at all widths (UX-DR3); mobile drawer preserved; navigation.spec rewritten for new landmarks; typecheck green; visual verified on `/design`; e2e deferred (no DB). Status → review.
+- 2026-07-12: Codex review P1 fix — desktop `<SearchBox>` (stacked, two `min-h-11` rows = 88px) overflowed the `h-14` (56px) top bar. Added `variant="compact"` (horizontal `flex`, input `w-40` + button `shrink-0`, both 44px ≤ 56px) for the desktop top bar; drawer keeps stacked. Preserves a11y INPUT-reachability + touch-target floor. typecheck + lint + prettier green; visual re-verified on `/design`.
+
+## Review Triage Log
+
+### 2026-07-12 — Codex review (working-tree, 6.1 diff)
+- P1: 1 (addressed)
+- The central desktop nav change embedded the stacked `<SearchBox>` (two `min-h-11` controls, `space-y-1`, ~88px) inside the new `h-14` (56px) sticky top bar → universal desktop overflow/clipping (input clipped above, button spilling below over content). Typecheck + lint passed (layout bug, not type/style).
+- **Fix:** `search-box.tsx` gained `variant?: "stacked" | "compact"` (default stacked, unchanged for drawer + /search page). Compact renders input + button on one `flex` row (each `min-h-11` = 44px ≤ 56px bar), input `w-40`, button `shrink-0`. `public-nav.tsx` desktop instance passes `variant="compact"`. a11y INPUT-reachability + touch-target floor preserved. Visual re-verified on `/design` (1280px).
+- Prettier: 3 files reformatted (public-nav/navigation.spec/a11y.spec) — `prettier --write` applied; `prettier --check` now all green.
+
 

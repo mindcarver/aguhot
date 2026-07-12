@@ -27,16 +27,14 @@ import { expect, test } from "@playwright/test";
  * dependency.
  *
  * The skip-link is an unscoped `<a href="#main">` rendered before `<PublicNav>`
- * inside `(public)/layout.tsx`. navigation.spec.ts scopes its link assertions
- * to the `complementary` (desktop aside) / `dialog` (mobile drawer) /
- * `banner` (mobile header) landmarks, so adding a pre-nav link here does NOT
- * perturb those existing assertions (verified during 3.5 implementation).
+ * inside `(public)/layout.tsx`. navigation.spec.ts (Story 6.1 rewrite) scopes
+ * its link assertions to the `banner` (sticky top-bar header, all widths) /
+ * `dialog` (mobile drawer) landmarks, so adding a pre-nav link here does NOT
+ * perturb those existing assertions.
  */
 
 test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () => {
-  test("键盘 Tab 序列命中真实可聚焦元素，无 div-onclick 陷阱 (AC1 可达)", async ({
-    page,
-  }) => {
+  test("键盘 Tab 序列命中真实可聚焦元素，无 div-onclick 陷阱 (AC1 可达)", async ({ page }) => {
     const response = await page.goto("/");
     expect(response, "homepage should respond").not.toBeNull();
     expect(response!.status(), "homepage status should be 200").toBe(200);
@@ -56,9 +54,7 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     // Record the first stop's tag for the sequence-membership assertions
     // below, then continue Tabbing through the rest of the page.
     const seenTags: string[] = [
-      await page.evaluate(
-        () => (document.activeElement as HTMLElement | null)?.tagName ?? "",
-      ),
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.tagName ?? ""),
     ];
 
     // Tab through a bounded number of additional stops — enough to traverse
@@ -74,26 +70,19 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
       // AC1: every keyboard focus stop MUST be a real focusable element type.
       // A `<div>` here would indicate a `div onClick` trap (keyboard
       // unreachable interaction) — the baseline this story guards against.
-      expect(tag, `Tab stop #${i + 2} must not be a <div> onclick trap`).not.toBe(
-        "DIV",
-      );
+      expect(tag, `Tab stop #${i + 2} must not be a <div> onclick trap`).not.toBe("DIV");
     }
 
     // The sequence must contain real focusable types beyond the skip-link:
     // at least one <A> (nav links) and one <INPUT> (the global search box).
     // This is the surface proof of AC1 "all core interactions reachable".
-    expect(seenTags, "Tab sequence must include at least one link").toContain(
-      "A",
+    expect(seenTags, "Tab sequence must include at least one link").toContain("A");
+    expect(seenTags, "Tab sequence must include at least one input (global search)").toContain(
+      "INPUT",
     );
-    expect(
-      seenTags,
-      "Tab sequence must include at least one input (global search)",
-    ).toContain("INPUT");
   });
 
-  test("skip-link 按 Enter 后焦点移至 <main id=\"main\"> (AC1 可达基线原语)", async ({
-    page,
-  }) => {
+  test('skip-link 按 Enter 后焦点移至 <main id="main"> (AC1 可达基线原语)', async ({ page }) => {
     await page.goto("/");
     await page.evaluate(() => document.body.focus());
 
@@ -110,14 +99,14 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
 
     // `expect.poll` because focus assignment after hash navigation can be
     // async in some browsers; poll until activeElement.id settles on "main".
-    await expect.poll(async () => {
-      const id = await page.evaluate(
-        () => (document.activeElement as HTMLElement | null)?.id ?? "",
-      );
-      return id;
-    }, "focus should move to <main id=\"main\"> after skip-link activation").toBe(
-      "main",
-    );
+    await expect
+      .poll(async () => {
+        const id = await page.evaluate(
+          () => (document.activeElement as HTMLElement | null)?.id ?? "",
+        );
+        return id;
+      }, 'focus should move to <main id="main"> after skip-link activation')
+      .toBe("main");
   });
 
   test("skip-link 未聚焦时视觉隐藏、不占布局 (sr-only)", async ({ page }) => {
@@ -141,9 +130,7 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     ).toBeLessThanOrEqual(1);
   });
 
-  test("既有 SearchBox ring 未被全局焦点规则覆盖 (AC1 不回归)", async ({
-    page,
-  }) => {
+  test("既有 SearchBox ring 未被全局焦点规则覆盖 (AC1 不回归)", async ({ page }) => {
     await page.goto("/");
     await page.evaluate(() => document.body.focus());
 
@@ -152,17 +139,14 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     for (let i = 0; i < 15; i++) {
       await page.keyboard.press("Tab");
       const tag = await page.evaluate(
-        () =>
-          (document.activeElement as HTMLElement | null)?.tagName ?? "",
+        () => (document.activeElement as HTMLElement | null)?.tagName ?? "",
       );
       if (tag === "INPUT") {
         inputFocused = true;
         break;
       }
     }
-    expect(inputFocused, "global search input must be keyboard-reachable").toBe(
-      true,
-    );
+    expect(inputFocused, "global search input must be keyboard-reachable").toBe(true);
 
     // SearchBox keeps its own `focus-visible:ring-2` (Tailwind ring compiles
     // to box-shadow). The global `:where(...):focus-visible` rule has
@@ -171,14 +155,14 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     // color, not just any shadow (a generic elevation shadow would falsely
     // satisfy a bare `!== "none"` check). Tailwind serializes the ring color
     // via `--tw-ring-color` set to the focus-ring token.
-    await expect.poll(async () => {
-      return await page.evaluate(() => {
-        const el = document.activeElement as HTMLElement | null;
-        return el ? getComputedStyle(el).boxShadow : "none";
-      });
-    }, "SearchBox ring (box-shadow) must survive the global focus rule").not.toBe(
-      "none",
-    );
+    await expect
+      .poll(async () => {
+        return await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          return el ? getComputedStyle(el).boxShadow : "none";
+        });
+      }, "SearchBox ring (box-shadow) must survive the global focus rule")
+      .not.toBe("none");
     const ringShadow = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
       return el ? getComputedStyle(el).boxShadow : "";
@@ -189,9 +173,7 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     ).toMatch(/51.*90.*145/);
   });
 
-  test("键盘聚焦的 nav 链接显示品牌色可见焦点 outline (AC1 可见焦点)", async ({
-    page,
-  }) => {
+  test("键盘聚焦的 nav 链接显示品牌色可见焦点 outline (AC1 可见焦点)", async ({ page }) => {
     await page.goto("/");
     await page.evaluate(() => document.body.focus());
 
@@ -205,27 +187,29 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     // Asserting outline-style != "none" is the surface proof the rule is in
     // effect (a regression that removes the rule collapses outline-style
     // back to the browser default `none` for plain links).
-    await expect.poll(async () => {
-      return await page.evaluate(() => {
-        const el = document.activeElement as HTMLElement | null;
-        if (el === null) return "none";
-        return getComputedStyle(el).outlineStyle;
-      });
-    }, "focused nav link must have a non-none outline-style").not.toBe("none");
+    await expect
+      .poll(async () => {
+        return await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          if (el === null) return "none";
+          return getComputedStyle(el).outlineStyle;
+        });
+      }, "focused nav link must have a non-none outline-style")
+      .not.toBe("none");
 
     // outline-color must be the brand focus-ring color #335A91. Browsers
     // serialize this as either "rgb(51, 90, 145)" (CSS Color 3, comma) or
     // "rgb(51 90 145)" (CSS Color 4, space) — tolerate both so the guard
     // survives a serialization change while still pinning token drift (a
     // transparent/wrong-color value fails the channel-equality check).
-    await expect.poll(async () => {
-      return await page.evaluate(() => {
-        const el = document.activeElement as HTMLElement | null;
-        return el ? getComputedStyle(el).outlineColor : "";
-      });
-    }, "focused nav link outline-color must be brand --color-focus-ring (#335a91)").toContain(
-      "51",
-    );
+    await expect
+      .poll(async () => {
+        return await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          return el ? getComputedStyle(el).outlineColor : "";
+        });
+      }, "focused nav link outline-color must be brand --color-focus-ring (#335a91)")
+      .toContain("51");
     const outlineColor = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
       return el ? getComputedStyle(el).outlineColor : "";
@@ -253,35 +237,25 @@ test.describe("公开页面语义与键盘可达基线 (Story 3.5) @a11y", () =>
     // regressing AC2. Scoping to the market color class also proves the
     // label belongs to a reaction chip, not some unrelated node.
     await expect(
-      page
-        .locator('[class*="market-up-soft"]')
-        .filter({ hasText: "涨" }),
+      page.locator('[class*="market-up-soft"]').filter({ hasText: "涨" }),
       "涨 chip must carry market-up color AND visible 涨 text",
     ).toBeVisible();
     await expect(
-      page
-        .locator('[class*="market-down-soft"]')
-        .filter({ hasText: "跌" }),
+      page.locator('[class*="market-down-soft"]').filter({ hasText: "跌" }),
       "跌 chip must carry market-down color AND visible 跌 text",
     ).toBeVisible();
     await expect(
-      page
-        .locator('[class*="market-flat-soft"]')
-        .filter({ hasText: "平" }),
+      page.locator('[class*="market-flat-soft"]').filter({ hasText: "平" }),
       "平 chip must carry market-flat color AND visible 平 text",
     ).toBeVisible();
   });
 
-  test("匿名访问 / 与 /design 均返回 200、无 /login 重定向 (AD-8)", async ({
-    page,
-  }) => {
+  test("匿名访问 / 与 /design 均返回 200、无 /login 重定向 (AD-8)", async ({ page }) => {
     for (const href of ["/", "/design"]) {
       const response = await page.goto(href);
       expect(response, `${href} should respond`).not.toBeNull();
       expect(response!.status(), `${href} status should be 200`).toBe(200);
-      expect(response!.url(), `${href} should not redirect to login`).not.toMatch(
-        /\/login/,
-      );
+      expect(response!.url(), `${href} should not redirect to login`).not.toMatch(/\/login/);
     }
   });
 });
@@ -359,9 +333,7 @@ test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @
    * DB gibberish collision / missing-CTA failure (and the locator doesn't
    * time out on the wrong cause).
    */
-  test("search 空态 CTA「返回首页」触控热区高度 ≥ 44px (矩阵行 2 空态 CTA)", async ({
-    page,
-  }) => {
+  test("search 空态 CTA「返回首页」触控热区高度 ≥ 44px (矩阵行 2 空态 CTA)", async ({ page }) => {
     const response = await page.goto("/search?q=zzznomatch-x1y2z3");
     expect(response, "/search?q=zzznomatch-x1y2z3 should respond").not.toBeNull();
     expect(response!.status(), "/search status should be 200").toBe(200);
@@ -394,9 +366,7 @@ test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @
    * a degraded state with the return link still present), so this test has no
    * seed dependency beyond the @a11y suite's existing local PG requirement.
    */
-  test("/daily 返回首页链接触控热区高度 ≥ 44px (矩阵行 3 返回链接)", async ({
-    page,
-  }) => {
+  test("/daily 返回首页链接触控热区高度 ≥ 44px (矩阵行 3 返回链接)", async ({ page }) => {
     const response = await page.goto("/daily");
     expect(response, "/daily should respond").not.toBeNull();
     expect(response!.status(), "/daily status should be 200").toBe(200);
@@ -406,9 +376,7 @@ test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @
     // (above the digest-dependent ternary). Its className carries `min-h-11`.
     // The `←` glyph lives in an `<span aria-hidden>`, so the accessible name
     // is `返回首页` — `getByRole("link", { name: /返回首页/ })` matches.
-    const returnLink = page
-      .getByRole("link", { name: /返回首页/ })
-      .first();
+    const returnLink = page.getByRole("link", { name: /返回首页/ }).first();
     const box = await returnLink.boundingBox();
     expect(box, "/daily return link must exist in the DOM").not.toBeNull();
     expect(
@@ -430,9 +398,7 @@ test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @
    * is correctly scoped and default users suffer no regression. Anchored on
    * `/design` (DB-free).
    */
-  test("默认无减动效偏好下 transition 不被降级 (矩阵行 5 不回归)", async ({
-    page,
-  }) => {
+  test("默认无减动效偏好下 transition 不被降级 (矩阵行 5 不回归)", async ({ page }) => {
     const response = await page.goto("/design");
     expect(response, "/design should respond").not.toBeNull();
     expect(response!.status(), "/design status should be 200").toBe(200);
@@ -440,8 +406,8 @@ test.describe("公开页面触控热区与减少动态效果支持 (Story 3.6) @
     // First prove the DEFAULT context has no reduced-motion preference —
     // `matchMedia` must report false. If this fails, the test is running under
     // an unintended preference and the "no regression" assertion is void.
-    const prefersReduced = await page.evaluate(() =>
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    const prefersReduced = await page.evaluate(
+      () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     );
     expect(
       prefersReduced,
@@ -497,8 +463,8 @@ test.describe("减少动态效果偏好下动效即时切换 (Story 3.6) @a11y",
     // First prove the emulation took effect — `matchMedia` must report the
     // preference as active. If this fails, the rest of the test is meaningless
     // (the media query would not be in effect and the probe would keep 150ms).
-    const prefersReduced = await page.evaluate(() =>
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    const prefersReduced = await page.evaluate(
+      () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     );
     expect(
       prefersReduced,

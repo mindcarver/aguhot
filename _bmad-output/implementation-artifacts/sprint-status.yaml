@@ -91,7 +91,7 @@ development_status:
   # 视觉规格: _bmad-output/demo-ui-redesign.html (方案 A, 已锁定)
   # 不动 token / architecture / PRD 定位层；仅 UX 渲染层返工。
   epic-6: backlog
-  6-1-top-nav-replace-left-rail: review
+  6-1-top-nav-replace-left-rail: done
   6-2-numbered-hot-list-replace-main-line-band: ready-for-dev
   6-3-timeline-borderless-editorial-column: ready-for-dev
   6-4-ai-reason-signature-block-and-source-chips: ready-for-dev
