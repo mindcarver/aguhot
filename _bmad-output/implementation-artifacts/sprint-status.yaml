@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-09T20:20:51+0800
-last_updated: 2026-07-11T13:17:26+0800
+last_updated: 2026-07-12T00:00:00+0800
 project: aguhot
 project_key: NOKEY
 tracking_system: file-system
@@ -87,3 +87,13 @@ development_status:
   5-3-digest-trend-briefing: done
   5-4-ai-content-operator-sampling: done
   epic-5-retrospective: optional
+  # Epic 6 — 视觉对齐参考站：编辑型纵栏 (sprint-change-proposal-2026-07-12, scope: Moderate)
+  # 视觉规格: _bmad-output/demo-ui-redesign.html (方案 A, 已锁定)
+  # 不动 token / architecture / PRD 定位层；仅 UX 渲染层返工。
+  epic-6: backlog
+  6-1-top-nav-replace-left-rail: review
+  6-2-numbered-hot-list-replace-main-line-band: ready-for-dev
+  6-3-timeline-borderless-editorial-column: ready-for-dev
+  6-4-ai-reason-signature-block-and-source-chips: ready-for-dev
+  6-5-visual-alignment-e2e-and-event-card: ready-for-dev
+  epic-6-retrospective: optional

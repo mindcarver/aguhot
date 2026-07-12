@@ -1,0 +1,100 @@
+---
+title: '视觉对齐 E2E 与设计页同步 + event-card 无边框化 (6.5)'
+type: 'feature'
+created: '2026-07-12'
+status: 'ready-for-dev'
+sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
+visual_spec: '_bmad-output/demo-ui-redesign.html'
+context:
+  - '{project-root}/_bmad-output/implementation-artifacts/epic-6-context.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-6-1-top-nav-replace-left-rail.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-6-2-numbered-hot-list-replace-main-line-band.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-6-3-timeline-borderless-editorial-column.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-6-4-ai-reason-signature-block-and-source-chips.md'
+warnings: []
+---
+
+<intent-contract>
+
+## Intent
+
+**Problem:** Story 6.1-6.4 改了 IA（左栏→顶部窄条）、卡结构（边框→无边框纵栏）、顶部组件（band→编号排行）、AI 块样式。现有 E2E（`home`/`design`/`themes`/`navigation`/`a11y` spec）断言旧形态，会大面积红。`event-card.tsx`（搜索等非流表面复用）仍是边框卡，与时间流无边框形态割裂。
+
+**Approach:** 翻修全部受影响 E2E 对齐新 IA 与纵栏形态；`event-card.tsx` 同步无边框化（UX-DR4 扩展）保证全站视觉统一。本 story 是 Epic 6 收口——验证 token 零改动、architecture 零触碰、护栏守住。
+
+## Boundaries & Constraints
+
+**Always:**
+- 复用既有 token。`globals.css` `@theme` 零改动；architecture 零触碰（无 schema/读模型/AD 变更）。
+- E2E 翻修对齐新形态：顶部窄条导航（6.1）、编号热点排行（6.2）、三栏无边框纵栏 + 日期分节（6.3）、AI 签名块 + 来源 chips（6.4）。
+- `event-card.tsx` 同步无边框 + hairline 分隔形态（与 `TimelineCard` 一致）；阅读顺序与整条点击不变；FollowButton sibling pattern（3.2）不回退。
+- 护栏校验纳入 E2E：AI 解读权重 ≤ 事实标题；红绿仅市场语义（chip 级）；无 carousel；焦点环/键盘可达；reduced-motion。
+- 诚实状态（NFR-2）：空态/缺失态文案不回归。
+
+**Block If:**
+- `pnpm typecheck` 相关类型错误不可自愈 → HALT。
+- 任一受影响 E2E 翻修后仍红 → HALT。
+- token / architecture 出现非预期改动（diff 校验 `globals.css` 与 `prisma schema` 无变）→ HALT。
+
+**Never:**
+- 不为通过测试而回退 6.1-6.4 的视觉形态。
+- 不改 `globals.css` token 数值；不改 schema/读模型。
+- 不在 event-card 引入边框回退（全站统一无边框）。
+- 不删除 FollowButton/整条点击等 3.x/1.8 既有能力。
+- 不造「精选分」/不回退 AI 命名。
+
+## I/O & Edge-Case Matrix
+
+| Scenario | Input / State | Expected Output / Behavior | Error Handling |
+|----------|---------------|----------------------------|----------------|
+| e2e 全集 | 6.1-6.4 落地后 | home/design/themes/navigation/a11e 全绿 | 翻修断言对齐新形态 |
+| event-card（搜索） | 搜索结果渲染 event-card | 无边框 + hairline 分隔，与时间流条目一致 | FollowButton sibling 保留 |
+| token diff | 实现完成 | `globals.css` 无改动 | diff 校验 |
+| 护栏 | review | AI 权重 ≤ 事实；红绿仅 chip；无 carousel | e2e 断言 |
+
+</intent-contract>
+
+## Code Map
+
+- `apps/web/app/(public)/_components/event-card.tsx` -- MODIFY：边框卡 → 无边框 + hairline 分隔条目；保留 FollowButton sibling + 整条 Link
+- `apps/web/e2e/home.spec.ts` -- MODIFY：新形态全断言（顶部窄条/编号排行/三栏纵栏/日期分节/AI 签名块/chips）
+- `apps/web/e2e/design.spec.ts` -- MODIFY：设计页对齐新组件规格
+- `apps/web/e2e/themes.spec.ts` -- MODIFY：token 不变 + 新形态
+- `apps/web/e2e/navigation.spec.ts` -- MODIFY：顶部窄条断言（与 6.1 协同）
+- `apps/web/e2e/a11y.spec.ts` -- MODIFY：新形态 a11y（焦点/aria/reduced-motion/触控热区）
+
+## Tasks & Acceptance
+
+**Execution:**
+- `apps/web/app/(public)/_components/event-card.tsx` -- MODIFY -- 无边框 + hairline 分隔；FollowButton sibling + 整条 Link 保留
+- `apps/web/e2e/home.spec.ts` / `design.spec.ts` / `themes.spec.ts` / `navigation.spec.ts` / `a11y.spec.ts` -- MODIFY -- 对齐新形态断言
+- 护栏校验 e2e：AI 权重、红绿语义、carousel 禁用、焦点/触控
+
+**Acceptance Criteria:**
+- Given 6.1-6.4 落地，when 运行 `pnpm --filter @aguhot/web e2e`，then home/design/themes/navigation/a11y 全绿。
+- Given 搜索结果渲染 event-card，when 渲染，then 无边框 + hairline 分隔，与时间流条目视觉一致，FollowButton sibling + 整条点击不回归。
+- Given 实现完成，when `git diff globals.css`，then 无改动（token 零变）。
+- Given 实现完成，when 校验 architecture，then 无 schema/读模型/AD 变更。
+- Given 护栏 e2e，when 运行，then AI 解读权重 ≤ 事实标题、红绿仅市场语义 chip、无 carousel、焦点环/键盘/触控/reduced-motion 全合规。
+- Given Epic 6 全部完成，when 对照 `demo-ui-redesign.html`，then 视觉与 demo 一致。
+
+## Design Notes
+
+**event-card 无边框化。** `event-card.tsx` 当前 `rounded-lg border-border-hairline bg-surface-raised` → 改为无边框 + `border-top: hairline` 分隔（与 `TimelineCard` 同 pattern）。FollowButton 绝对定位 sibling（3.2）保留——HTML 有效性约束（button 不嵌于 a）不变。整条 `<Link>` 保留。
+
+**e2e 翻修策略。** 6.1-6.4 各 story 已带各自 e2e 修改；6.5 收口确保**全部** spec 一致绿，并补护栏校验断言（AI 权重用 bounding-box y 位置/字号、红绿 chip 文本非颜色、carousel 不存在）。若 6.1-6.4 已让某 spec 绿，6.5 仅补缺失断言。
+
+**token/architecture diff 校验。** `git diff apps/web/app/globals.css` 须为空；`git diff` prisma schema 须为空。这是 Epic 6 scope invariant 的硬校验。
+
+**与 deferred-work。** 若 e2e 翻修中发现 4.1 残留风险（如逐源时间线、50 行分页）被触及，记录入 `deferred-work.md`，不在本 story 解决。
+
+## Verification
+
+**Commands:**
+- `pnpm typecheck` -- expected: 全绿
+- `pnpm --filter @aguhot/web e2e` -- expected: 全绿（home/design/themes/navigation/a11y + 时间流面）
+- `git diff apps/web/app/globals.css` -- expected: 空（token 零改动）
+- `git diff` prisma schema -- expected: 空（architecture 零触碰）
+
+**Manual checks:**
+- 目视全站与 `demo-ui-redesign.html` 一致；搜索页 event-card 无边框；hover/focus/reduced-motion 行为正常。
