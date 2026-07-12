@@ -1,0 +1,1296 @@
+diff --git a/apps/web/app/(public)/page.tsx b/apps/web/app/(public)/page.tsx
+index c6e5b4b..1c088d9 100644
+--- a/apps/web/app/(public)/page.tsx
++++ b/apps/web/app/(public)/page.tsx
+@@ -2,13 +2,23 @@ import type { Metadata } from "next";
+ 
+ import {
+   getPrisma,
++  listPublishedAssociations,
+   listPublishedHotEvents,
+   listPublishedTimeline,
+   newTraceId,
++  type AssociationItem,
+   type PublishedTimelineEntry,
++  type TimelineSessionTagType,
+ } from "@aguhot/core";
+ 
+ import { MainLineBand } from "./_components/main-line-band";
++import {
++  TimelineFilters,
++  mergeTimelineSearchParams,
++  parseTimelineFilters,
++  type TimelineSearchParams,
++  type TimelineSessionLiteral,
++} from "./_components/timeline-filters";
+ import { TimelineCard } from "./_components/timeline-card";
+ 
+ export const metadata: Metadata = {
+@@ -16,20 +26,35 @@ export const metadata: Metadata = {
+ };
+ 
+ /**
+- * Public timeline feed homepage — Story 4.2 (Epic 4 时间流首页).
++ * Public timeline feed homepage — Story 4.2 (Epic 4 时间流首页) + Story 4.3
++ * (session/category filters).
+  *
+  * This is the Epic 4 pivot: the home body changed from the V1 priority-sorted
+  * `listPublishedHotEvents` feed (Story 1.7) to a minute-level chronological
+  * `时间流` reading the new `published_timeline` read model (Story 4.1, AD-3b).
+- * The page now reads TWO published read models:
++ * The page now reads up to THREE published read models:
+  *   - `listPublishedTimeline` (default = latest trade_date, ordered
+  *     `occurredAt DESC`) → the timeline cards (minute-level dynamics).
++ *     Story 4.3: now accepts `{ sessionTag }` so the session dimension (盘前 /
++ *     盘中 / 盘后 / 全天) is filtered on the SERVER — it hits 4.1's
++ *     `(trade_date, session_tag, occurred_at)` composite index directly.
+  *   - `listPublishedHotEvents` (ordered `evidenceCount DESC + latestEvidenceAt
+  *     DESC`) → the top-N `main-line-band` ("今日重点 / 市场主线"). The band
+  *     reuses the existing saliency read because `published_timeline` has no
+  *     saliency/pin field (it is a pure time-order projection). Two read models
+  *     coexist: the band answers "what is the market trading", the timeline
+  *     answers "minute-level dynamics" (spec Design Notes).
++ *   - `listPublishedAssociations` (Story 2.2) → ONLY read when a `?category=`
++ *     filter is active. Builds a `hotEventId → Set<AssociationKind>` map in
++ *     memory and filters the (already session-filtered) timeline entries. This
++ *     is the 2.2 feed-filter JS-join pattern, reapplied to the timeline (spec
++ *     Never: do NOT add a `category` param to `listPublishedTimeline` — same
++ *     rationale as 2.2's filter-free `listPublishedHotEvents`). The Json-column
++ *     sub-table normalization is a logged scale-ceiling defer.
++ *
++ * URL-driven filters (Story 4.3, FR-2): all filter state lives in the URL
++ * (`?session=` / `?category=`) — shareable, refresh-keeps-filter, back/forward
++ * works. Pills render server-side via `<TimelineFilters>`; zero client JS.
+  *
+  * Masthead (H1「AGUHOT」+ subtitle「可信热点发布闭环」) is preserved byte-for-
+  * byte from 1.1 so `home.spec.ts` stays green. `(public)/layout.tsx` public
+@@ -43,10 +68,20 @@ export const metadata: Metadata = {
+  *     This keeps the public web build DATABASE_URL-free.
+  *
+  * Honest states (NFR-2: never fake data):
+- *   - `published_timeline` empty (no rows at all) → "暂无公开展示的时间流" empty
+- *     state + the page's render time as "最近更新". No skeleton, no cards, no
+- *     fabricated content. masthead still visible, no /login redirect (AD-8).
+- *   - `listPublishedTimeline` returns `[]` (not an error) → same empty state.
++ *   - Read model empty (no `published_timeline` rows at all) → "暂无公开展示的
++ *     时间流。" empty state + the page's render time as "最近更新". No skeleton,
++ *     no cards, no fabricated content. masthead still visible, no /login
++ *     redirect (AD-8). The filter nav STILL renders (so the user sees the
++ *     affordance even on an empty read model), but no cards can match.
++ *   - Filter empty (read model has rows, but the current filter matches none) →
++ *     a DISTINCT copy: "当前筛选条件下暂无时间流条目。" + a clear-filter link, and
++ *     NO "最近更新" line (data exists, just filtered out — showing 最近更新
++ *     would mislead the user into thinking the page is stale rather than
++ *     narrowed). The spec Design Notes pins this distinction: conflating the
++ *     two empty states would make users think the product has no data when it
++ *     just has no matches for their filter.
++ *   - `listPublishedTimeline` returns `[]` (not an error) → read-model empty
++ *     state (or filter empty state, depending on whether filters are active).
+  *   - `listPublishedHotEvents` empty → the band does NOT render (no fabricated
+  *     "今日重点" copy). The timeline empty state is independent: either read
+  *     model can be empty without affecting the other.
+@@ -56,28 +91,104 @@ export const metadata: Metadata = {
+  *
+  * Removed (4.2): the V1 priority-feed filter UI (`FeedFilters`, the `?window=`
+  * /`?concept=`/`?industry=`/`?stock=` searchParams, the association-dimension
+- * in-memory join, the FollowButton-on-card follow-state read). Per spec Code
+- * Map: the home no longer imports `FeedFilters` (4.3 will own the new session/
+- * category filter UI; the file is kept for 4.3 to possibly reuse, per spec
+- * Never: do not delete feed-filters.tsx). The timeline card has no follow-on-
+- * card in 4.2 scope; follow remains on the detail page.
++ * in-memory join, the FollowButton-on-card follow-state read). 4.3 ships a NEW
++ * self-contained `<TimelineFilters>` (it does NOT reuse `feed-filters.tsx`,
++ * per spec Never: keep that file but do not import it here).
+  */
+ export const dynamic = "force-dynamic";
+ 
+-export default async function PublicHomePage() {
++interface PageProps {
++  searchParams: Promise<TimelineSearchParams>;
++}
++
++export default async function PublicHomePage({ searchParams }: PageProps) {
++  // Resolve + parse the URL filter state. parseTimelineFilters whitelists the
++  // values (invalid ?session=foo / ?category=bar → undefined → no filter), so
++  // bad input never 500s the public route (I/O matrix). `await searchParams`
++  // mirrors the daily/page.tsx async-searchParams pattern (Next.js 16).
++  const params = await searchParams;
++  const filters = parseTimelineFilters(params);
++
++  // Map the session URL value to the core TimelineSessionTagType. "all" and
++  // undefined both mean "no sessionTag passed" (listPublishedTimeline returns
++  // every entry including non_trading). parseSessionFilter's whitelist only
++  // accepts the three real-session literals or "all", so when value !== "all"
++  // it is exactly one of pre_open / intraday / post_close — a subset of
++  // TimelineSessionTagType (which also includes non_trading, but non_trading
++  // has no independent pill per spec Never). The cast is therefore total.
++  const sessionTag: TimelineSessionTagType | undefined =
++    filters.session !== undefined && filters.session.value !== "all"
++      ? (filters.session.value as TimelineSessionLiteral)
++      : undefined;
++
+   // Request-time DB read. getPrisma() throws loudly if DATABASE_URL is missing —
+   // that is intentional (DB is core infra, not graceful-degradation territory).
+   const prisma = getPrisma();
+   const traceId = newTraceId();
+ 
+-  // Two parallel published-read-model reads. Both are read-only (AD-3/AD-3b);
++  // Parallel published-read-model reads. Both are read-only (AD-3/AD-3b);
+   // neither triggers a synchronous refresh or external call (AD-4). The page
+   // issues them concurrently so the request latency is the max, not the sum.
++  // `listPublishedTimeline({ sessionTag })` narrows server-side via the
++  // composite index when a session filter is active (spec Design Notes: session
++  // is the server-filtered dimension — it hits the (trade_date, session_tag,
++  // occurred_at) index directly).
+   const [hotEvents, timelineEntries] = await Promise.all([
+     listPublishedHotEvents({ prisma, traceId }),
+-    listPublishedTimeline({ prisma, traceId }),
++    listPublishedTimeline({ prisma, traceId, sessionTag }),
+   ]);
+ 
++  // Distinguish read-model-empty from session-filter-empty (spec Design Notes:
++  // two distinct empty states). When the session-filtered query returns [], the
++  // read model might still have rows for that trade_date under a DIFFERENT
++  // session — that is filter-empty (distinct copy + clear link, NO 最近更新),
++  // NOT read-model-empty (4.2 copy + 最近更新). The fallback read only fires
++  // when a session filter is active AND the filtered query returned nothing;
++  // the common case (filter returns results) never triggers it.
++  let isReadModelEmpty = timelineEntries.length === 0;
++  if (isReadModelEmpty && sessionTag !== undefined) {
++    const unfiltered = await listPublishedTimeline({ prisma, traceId });
++    isReadModelEmpty = unfiltered.length === 0;
++  }
++
++  // Category dimension: in-memory JS-join (spec Never: do NOT add a `category`
++  // param to listPublishedTimeline). Only read associations + filter when a
++  // category filter is active — avoids the read entirely on the default view
++  // (no category filter), which is the common case.
++  let filteredEntries = timelineEntries;
++  if (filters.category !== undefined && !isReadModelEmpty) {
++    const kind = filters.category.value;
++    const associations = await listPublishedAssociations({ prisma, traceId });
++    // Build hotEventId → Set<AssociationItem.kind> so one lookup per timeline
++    // entry decides membership. listPublishedAssociations is filter-free (2.2
++    // design); the web layer applies the dimension filter here.
++    const kindsByHotEvent = new Map<string, Set<AssociationItem["kind"]>>();
++    for (const row of associations) {
++      let set = kindsByHotEvent.get(row.hotEventId);
++      if (set === undefined) {
++        set = new Set();
++        kindsByHotEvent.set(row.hotEventId, set);
++      }
++      for (const item of row.items) {
++        set.add(item.kind);
++      }
++    }
++    filteredEntries = timelineEntries.filter((entry) => {
++      const set = kindsByHotEvent.get(entry.hotEventId);
++      return set !== undefined && set.has(kind);
++    });
++  }
++
++  // Two empty-state branches (spec Design Notes):
++  //   - read-model empty (NO rows at all, regardless of filters) → 4.2 copy +
++  //     最近更新. Filters render but cannot match anything.
++  //   - filter empty (rows exist but the current filter excludes them all) →
++  //     distinct copy + clear-filter link, NO 最近更新.
++  const isFilterEmpty =
++    !isReadModelEmpty &&
++    filteredEntries.length === 0 &&
++    (filters.session !== undefined || filters.category !== undefined);
++
+   const now = new Date();
+ 
+   return (
+@@ -96,8 +207,10 @@ export default async function PublicHomePage() {
+         Main-line band — "今日重点 / 市场主线". Rendered ONLY when the hot-events
+         read model has data; the band component itself also guards against an
+         empty list (defensive — NFR-2: no fabricated copy). Sits above the
+-        timeline so the home proactively answers "what is the market trading"
+-        before the minute-level scan.
++        timeline + filters so the home proactively answers "what is the market
++        trading" before the minute-level scan. The band is NEVER filtered by
++        the session/category dimensions (spec Never: band is saliency
++        projection, independent of timeline filters, always full top-N).
+       */}
+       {hotEvents.length > 0 ? (
+         <section className="mt-8">
+@@ -105,19 +218,54 @@ export default async function PublicHomePage() {
+         </section>
+       ) : null}
+ 
++      {/*
++        Filter nav — Story 4.3. Renders on EVERY render (empty or populated read
++        model) so the filter affordance is always visible (spec: even on an
++        empty read model the nav renders, just with no matches to filter).
++        `aria-label="时间流筛选"` (NOT 「筛选」) keeps the 4.2 e2e assertion
++        `nav[aria-label='筛选']` count = 0 green (the V1 FeedFilters was removed
++        in 4.2; this new nav has a distinguishing semantic for screen readers).
++      */}
++      <section className="mt-8">
++        <TimelineFilters
++          session={filters.session}
++          category={filters.category}
++          searchParams={params}
++        />
++      </section>
++
+       {/*
+         Timeline feed — the minute-level chronological list. Each entry renders
+         as a TimelineCard (fixed reading order, fold disclosure, AI 解读 slot
+-        only when non-null). The list is rendered ONLY when the timeline read
+-        model has entries; the empty state below handles the no-data case.
++        only when non-null). Two empty-state branches below handle the no-data
++        cases; the populated list renders only when filteredEntries is non-empty.
++
++        Empty-state split (spec Design Notes):
++          - read-model empty (no rows at all, regardless of filters) → the 4.2
++            copy "暂无公开展示的时间流。" + 最近更新. Filters render above but
++            cannot match anything.
++          - filter empty (rows exist but the current filter excludes them all)
++            → distinct copy "当前筛选条件下暂无时间流条目。" + a clear-filter
++            link, NO 最近更新 (data exists, just narrowed too far; citing a
++            render time would imply staleness rather than narrowness).
+       */}
+-      <section className="mt-8" aria-label="时间流">
+-        {timelineEntries.length > 0 ? (
++      <section className="mt-6" aria-label="时间流">
++        {filteredEntries.length > 0 ? (
+           <ul role="list" className="space-y-3">
+-            {timelineEntries.map((entry: PublishedTimelineEntry) => (
++            {filteredEntries.map((entry: PublishedTimelineEntry) => (
+               <TimelineCard key={entry.id} entry={entry} />
+             ))}
+           </ul>
++        ) : isFilterEmpty ? (
++          <div className="space-y-3">
++            <p className="text-ink-secondary">当前筛选条件下暂无时间流条目。</p>
++            <a
++              href={mergeTimelineSearchParams(params, {}, ["session", "category"])}
++              className="inline-flex items-center min-h-11 text-sm text-brand hover:underline"
++            >
++              清除筛选
++            </a>
++          </div>
+         ) : (
+           <div className="space-y-3">
+             <p className="text-ink-secondary">暂无公开展示的时间流。</p>
+diff --git a/apps/web/e2e/seed-timeline.ts b/apps/web/e2e/seed-timeline.ts
+index 24a211d..089d55c 100644
+--- a/apps/web/e2e/seed-timeline.ts
++++ b/apps/web/e2e/seed-timeline.ts
+@@ -1,5 +1,6 @@
+ /**
+- * Seed script for the @timeline e2e — Story 4.2 (Epic 4 时间流首页).
++ * Seed script for the @timeline e2e — Story 4.2 (Epic 4 时间流首页) + Story 4.3
++ * (session/category filters).
+  *
+  * Run with: pnpm --filter web e2e:timeline
+  *           (tsx e2e/seed-timeline.ts && playwright test --grep @timeline)
+@@ -20,20 +21,38 @@
+  * `recommendationReason` stays NULL (the 5.1 AI 解读 slot) so the e2e can assert
+  * the AI 解读 slot + AiLabel do NOT render pre-5.1.
+  *
++ * Story 4.3 — association injection for category-filter assertions:
++ * After each event is published, three of the four get an `EventAssociationSet`
++ * via `generateAssociations` (with an inline per-event adapter, NOT the shared
++ * StubAssociationAdapter — the stub returns one fixed item set for every event,
++ * but the category filter tests need DETERMINISTIC positive/negative coverage
++ * across events + kinds). The fourth event (铜价) gets NO association set — the
++ * negative case (no row, never matches any `?category=` filter). The map:
++ *   - 半导体: concept(半导体) + industry(芯片) + stock(中芯国际) — all 3 kinds.
++ *   - 稀土:   concept(稀土) + industry(有色金属) — concept + industry only.
++ *   - 军工:   stock(中航沈飞) — stock only.
++ *   - 铜价:   (no association set) — never matches any category filter.
++ * So `?category=concept` matches 半导体 + 稀土; `?category=industry` matches
++ * 半导体 + 稀土; `?category=stock` matches 半导体 + 军工; 铜价 is always the
++ * negative sample. The per-event adapter keeps this deterministic across runs.
++ *
+  * Requires DATABASE_URL pointing at local PG. Clears the full table set
+- * (including published_timeline_entries, which seed-revision does not touch) so
+- * re-runs are deterministic. Does NOT touch seed-console/feed/detail/revision.
++ * (including published_timeline_entries + published_hot_event_associations,
++ * which seed-revision does not touch) so re-runs are deterministic. Does NOT
++ * touch seed-console/feed/detail/revision.
+  */
+ 
+ import {
+   clusterEvents,
+   decideReview,
++  generateAssociations,
+   generateExplanation,
+   getPrisma,
+   listPendingCandidates,
+   newTraceId,
+   resetPrisma,
+ } from "@aguhot/core";
++import type { AssociationAdapter, AssociationItem } from "@aguhot/core";
+ import { resetEnvCache, requireEnv } from "@aguhot/config";
+ 
+ const HOUR = 60 * 60 * 1000;
+@@ -47,6 +66,18 @@ export interface SeededTimeline {
+    * assert the band caps at 3 items.
+    */
+   totalPublishedEvents: number;
++  /**
++   * Story 4.3 — the hotEventId of the event with NO association set (铜价).
++   * Category-filter tests use this as the deterministic negative sample: it
++   * never matches `?category=concept|industry|stock`.
++   */
++  noAssocHotEventId: string;
++  /**
++   * Story 4.3 — the hotEventId of an event with a stock association (军工).
++   * Used by `?category=stock` positive/negative assertions (半导体 also has
++   * stock, but 军工 is the stock-ONLY event so it isolates the dimension).
++   */
++  stockAssocHotEventId: string;
+ }
+ 
+ /**
+@@ -63,9 +94,12 @@ export async function seedTimelineFeed(): Promise<SeededTimeline> {
+   const prisma = getPrisma();
+ 
+   // Clean the full table set (superset of seed-detail/seed-revision, order
+-  // respects FK constraints, plus the 4.1 published_timeline_entries). Deterministic
+-  // re-runs; does NOT touch seed-console/feed/detail/revision.
++  // respects FK constraints, plus the 4.1 published_timeline_entries and the
++  // 2.2 association tables — Story 4.3 injects associations so both must clear).
++  // Deterministic re-runs; does NOT touch seed-console/feed/detail/revision.
+   await prisma.publishedTimelineEntry.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
+   await prisma.publishedHotEventEvidence.deleteMany({});
+   await prisma.publishedHotEventExplanation.deleteMany({});
+   await prisma.publishedHotEvent.deleteMany({});
+@@ -124,8 +158,10 @@ export async function seedTimelineFeed(): Promise<SeededTimeline> {
+   });
+   // Events C + D: two more distinct single-source topics. They exist so the
+   // band (top-3) has more candidates than its slice — the top-N cap is then
+-  // observable (4 published events, band shows 3). Their hotEventIds are not
+-  // returned; only 稀土 is pinned by name (the no-fold assertion target).
++  // observable (4 published events, band shows 3). Story 4.3 also resolves
++  // them by name (军工 / 铜价) so the per-event association injection below
++  // can target them precisely: 军工 gets a stock association, 铜价 gets none
++  // (the category-filter negative sample).
+   const sourceMilitary = await prisma.evidenceSource.create({
+     data: {
+       id: newTraceId(),
+@@ -166,11 +202,22 @@ export async function seedTimelineFeed(): Promise<SeededTimeline> {
+     );
+   }
+ 
++  // Resolve all four candidates by name so the per-event association injection
++  // below can target each precisely. 半导体 folds (>=2 evidence); the other
++  // three are single-source. 铜价 is the category-filter negative sample (no
++  // association set injected), so its identity must be pinned here.
+   const foldedCandidate = pending.find((c) => c.title.includes("半导体"));
+   const singleCandidate = pending.find((c) => c.title.includes("稀土"));
+-  if (foldedCandidate === undefined || singleCandidate === undefined) {
++  const militaryCandidate = pending.find((c) => c.title.includes("军工"));
++  const copperCandidate = pending.find((c) => c.title.includes("铜价"));
++  if (
++    foldedCandidate === undefined ||
++    singleCandidate === undefined ||
++    militaryCandidate === undefined ||
++    copperCandidate === undefined
++  ) {
+     throw new Error(
+-      `[seed-timeline] expected 半导体 + 稀土 candidates, got: ${pending.map((p) => p.title).join(" / ")}`,
++      `[seed-timeline] expected 半导体 + 稀土 + 军工 + 铜价 candidates, got: ${pending.map((p) => p.title).join(" / ")}`,
+     );
+   }
+   if (foldedCandidate.evidenceCount < 2) {
+@@ -181,27 +228,22 @@ export async function seedTimelineFeed(): Promise<SeededTimeline> {
+ 
+   // Template explanation before approve so the published projection surfaces a
+   // non-empty summary (the card's summary slot). recommendationReason stays NULL.
+-  await generateExplanation({
+-    prisma,
+-    traceId: newTraceId(),
+-    hotEventId: foldedCandidate.id,
+-  });
+-  await generateExplanation({
+-    prisma,
+-    traceId: newTraceId(),
+-    hotEventId: singleCandidate.id,
+-  });
+-
+-  // Approve the folded + 稀土 single candidates, plus two more single-source
+-  // candidates (any remaining distinct topics) so 4 events publish total.
+-  const extraSingles = pending.filter(
+-    (c) => c.id !== foldedCandidate.id && c.id !== singleCandidate.id,
+-  );
+-  for (const c of extraSingles) {
+-    await generateExplanation({ prisma, traceId: newTraceId(), hotEventId: c.id });
++  const explainedIds = [
++    foldedCandidate.id,
++    singleCandidate.id,
++    militaryCandidate.id,
++    copperCandidate.id,
++  ];
++  for (const hotEventId of explainedIds) {
++    await generateExplanation({ prisma, traceId: newTraceId(), hotEventId });
+   }
+ 
+-  const toApprove = [foldedCandidate.id, singleCandidate.id, ...extraSingles.map((c) => c.id)];
++  // Approve all four so each gets a published_timeline row + a band summary.
++  // decideReview runs refreshPublishedTimelineForEvent + refreshPublishedReadModel
++  // inside the same transaction (AD-3b method A); the latter calls
++  // projectAssociations, but at this point no EventAssociationSet exists yet →
++  // no published_hot_event_associations row (honest degraded state).
++  const toApprove = explainedIds;
+   for (const hotEventId of toApprove) {
+     await decideReview({
+       prisma,
+@@ -213,6 +255,71 @@ export async function seedTimelineFeed(): Promise<SeededTimeline> {
+     });
+   }
+ 
++  // --- Story 4.3: inject deterministic association sets ------------------
++  // Three of the four events get an EventAssociationSet via generateAssociations
++  // (with a per-event adapter, NOT the shared StubAssociationAdapter — the stub
++  // returns one fixed set for every event, but category-filter tests need
++  // deterministic positive/negative coverage ACROSS events + kinds). 铜价 gets
++  // NO set: the category-filter negative sample (never matches ?category=).
++  //
++  // After appending each set, re-run refreshPublishedReadModel({ action:
++  // "publish" }) so projectAssociations picks up the new set (decideReview's
++  // internal refresh ran before the set existed — same two-step pattern as
++  // seed-associations.ts). The timeline projection is untouched by this refresh
++  // (refreshPublishedTimelineForEvent is NOT re-run; the timeline row already
++  // exists and its content does not depend on associations).
++  const { refreshPublishedReadModel } = await import("@aguhot/core");
++  const eventsWithAssoc: Array<{ hotEventId: string; items: AssociationItem[] }> = [
++    {
++      hotEventId: foldedCandidate.id,
++      items: [
++        { kind: "concept", label: "半导体", mappingBasis: "knowledge_base:v1" },
++        { kind: "industry", label: "芯片", mappingBasis: "knowledge_base:v1" },
++        { kind: "stock", label: "中芯国际", mappingBasis: "knowledge_base:v1" },
++      ],
++    },
++    {
++      hotEventId: singleCandidate.id,
++      items: [
++        { kind: "concept", label: "稀土", mappingBasis: "knowledge_base:v1" },
++        { kind: "industry", label: "有色金属", mappingBasis: "knowledge_base:v1" },
++      ],
++    },
++    {
++      hotEventId: militaryCandidate.id,
++      items: [
++        { kind: "stock", label: "中航沈飞", mappingBasis: "knowledge_base:v1" },
++      ],
++    },
++  ];
++  for (const { hotEventId, items } of eventsWithAssoc) {
++    const perEventAdapter: AssociationAdapter = {
++      async fetchAssociations(): Promise<AssociationItem[] | null> {
++        // Return a fresh array (defensive copy, mirroring StubAssociationAdapter)
++        // so callers cannot mutate the seed's fixture constants.
++        return items.map((item) => ({ ...item }));
++      },
++    };
++    await generateAssociations({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId,
++      adapter: perEventAdapter,
++    });
++    // Re-refresh to project the appended set into published_hot_event_
++    // associations (decideReview's internal refresh ran before the set existed;
++    // this second refresh projects it — same pattern as seed-associations.ts).
++    await refreshPublishedReadModel({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId,
++      action: "publish",
++    });
++  }
++  // 铜价 deliberately gets NO generateAssociations call → no association set →
++  // no published_hot_event_associations row → the category-filter negative
++  // sample (never matches ?category=concept|industry|stock).
++
+   resetPrisma();
+ 
+   return {
+@@ -228,6 +335,8 @@ export async function seedTimelineFeed(): Promise<SeededTimeline> {
+       sourceName: sourceRare.name,
+     },
+     totalPublishedEvents: toApprove.length,
++    noAssocHotEventId: copperCandidate.id,
++    stockAssocHotEventId: militaryCandidate.id,
+   };
+ }
+ 
+@@ -263,7 +372,7 @@ async function seedRecord(
+ if (import.meta.url === `file://${process.argv[1]}`) {
+   const result = await seedTimelineFeed();
+   console.log(
+-    `[seed-timeline] folded: ${result.folded.hotEventId} (${result.folded.title}, ${result.folded.evidenceCount} evidence) | single: ${result.single.hotEventId} (${result.single.title}, 1 evidence)`,
++    `[seed-timeline] folded: ${result.folded.hotEventId} (${result.folded.title}, ${result.folded.evidenceCount} evidence) | single: ${result.single.hotEventId} (${result.single.title}, 1 evidence) | noAssoc: ${result.noAssocHotEventId} | stockAssoc: ${result.stockAssocHotEventId}`,
+   );
+   process.exit(0);
+ }
+diff --git a/apps/web/e2e/timeline.spec.ts b/apps/web/e2e/timeline.spec.ts
+index ed5e2b6..da635b8 100644
+--- a/apps/web/e2e/timeline.spec.ts
++++ b/apps/web/e2e/timeline.spec.ts
+@@ -3,7 +3,8 @@ import { expect, test } from "@playwright/test";
+ import { seedTimelineFeed, type SeededTimeline } from "./seed-timeline";
+ 
+ /**
+- * Public timeline feed surface e2e — Story 4.2 (Epic 4 时间流首页).
++ * Public timeline feed surface e2e — Story 4.2 (Epic 4 时间流首页) + Story 4.3
++ * (session/category filters).
+  *
+  * Surface-anchored structure + empty-state assertions for the post-pivot home
+  * page. NO seed step required (per spec Code Map): the assertions target the
+@@ -26,16 +27,20 @@ import { seedTimelineFeed, type SeededTimeline } from "./seed-timeline";
+  *   - AD-8: anonymous GET / returns 200, no /login redirect.
+  *   - Timeline region structure: the `<section aria-label="时间流">` region is
+  *     present on every render (empty or populated).
+- *   - No residual priority-filter UI: the V1 `FeedFilters` (`<nav
+- *     aria-label="筛选">`) was removed in 4.2 (4.3 owns the new session/category
+- *     filter UI). The old priority filter pills (今日 / 近7天 / 近30天 / 全部)
+- *     must NOT render on the home anymore.
++ *   - Story 4.3 filter nav: `<nav aria-label="时间流筛选">` is present on every
++ *     render (the affordance is always visible, even on an empty read model),
++ *     AND the V1 priority-filter UI (`<nav aria-label="筛选">` + the window
++ *     pills 今日/近7天/近30天/全部) stays absent (4.2 removed it; 4.3 does not
++ *     resurrect the dead `?window=` axis).
+  *
+  * NOT covered here (deferred to the @timeline seeded block below):
+  *   - Empty-state copy + 最近更新 — needs a deterministic empty DB, covered by
+  *     the @timeline block (which clears published_timeline_entries then asserts).
+  *   - Populated timeline cards / fold disclosure / reading order / AI 解读 slot
+  *     / main-line-band items — all covered by the @timeline seeded block.
++ *   - Story 4.3 filter BEHAVIOR (session hit / filter empty / category positive
++ *     + negative / session+category combo / URL restore) — covered by the
++ *     @timeline seeded block (needs deterministic data + associations).
+ 
+ test.describe("时间流首页 (Story 4.2)", () => {
+   test("匿名访问 / 仍渲染 masthead 且不触发 /login 重定向 (AD-8, masthead 不回归)", async ({
+@@ -63,30 +68,68 @@ test.describe("时间流首页 (Story 4.2)", () => {
+     await expect(page.locator("section[aria-label='时间流']")).toBeVisible();
+   });
+ 
+-  test("无残留优先级 filter pill (V1 FeedFilters 已从首页移除)", async ({ page }) => {
++  test("无残留 V1 window pills + 新「时间流筛选」nav 存在 (Story 4.3)", async ({ page }) => {
+     await page.goto("/");
+ 
+     // The V1 priority-feed filter UI (FeedFilters, `<nav aria-label="筛选">`)
+-    // was removed in 4.2. The old window pills (今日 / 近7天 / 近30天 / 全部)
+-    // must NOT render on the home anymore — 4.3 owns the new session/category
+-    // filter UI. Asserting the filter nav is absent pins this removal.
++    // was removed in 4.2. Story 4.3 ships a NEW filter nav with a DISTINGUISHING
++    // aria-label「时间流筛选」(NOT 「筛选」) so this 4.2 assertion stays green
++    // while the new nav is present. Pin BOTH halves:
++    //   - the V1 window pills (今日 / 近7天 / 近30天 / 全部) must NOT render —
++    //     4.3 owns the new session/category dimensions and does NOT resurrect
++    //     the dead `?window=` axis.
++    //   - the new `nav[aria-label='时间流筛选']` IS present (Story 4.3 surface).
+     await expect(
+       page.locator("nav[aria-label='筛选']"),
+-      "V1 priority filter nav should be removed from the home",
++      "V1 priority filter nav should stay removed from the home",
+     ).toHaveCount(0);
++    await expect(
++      page.getByText("今日", { exact: true }),
++      "V1 「今日」 window pill must not render",
++    ).toHaveCount(0);
++    await expect(
++      page.getByText("近7天", { exact: true }),
++      "V1 「近7天」 window pill must not render",
++    ).toHaveCount(0);
++    await expect(
++      page.getByText("近30天", { exact: true }),
++      "V1 「近30天」 window pill must not render",
++    ).toHaveCount(0);
++    await expect(
++      page.getByText("全部", { exact: true }),
++      "V1 「全部」 window pill must not render",
++    ).toHaveCount(0);
++
++    // The new Story 4.3 filter nav renders on every home render (empty or
++    // populated read model — the affordance is always visible).
++    await expect(
++      page.locator("nav[aria-label='时间流筛选']"),
++      "Story 4.3 timeline filter nav should be present",
++    ).toBeVisible();
+   });
+ });
+ 
+ /**
+- * Populated-feed e2e — Story 4.2 (Epic 4 时间流首页) @timeline.
++ * Populated-feed e2e — Story 4.2 (Epic 4 时间流首页) + Story 4.3 (filters)
++ * @timeline.
+  *
+  * Tagged @timeline so it runs only under `pnpm --filter web e2e:timeline` (DB-
+  * backed + seed) and is excluded from the public `pnpm --filter web e2e` run
+- * (whose --grep-invert list now includes @timeline). The beforeAll seeds TWO
++ * (whose --grep-invert list now includes @timeline). The beforeAll seeds FOUR
+  * published events via the real publish pipeline (seed-timeline.ts):
+  *   - folded: 半导体 event with 2 member evidence records → evidenceCount 2 →
+  *     foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD(2) → 「同事件精选」.
+  *   - single: 稀土 event with 1 member evidence record → single-source card.
++ *   - 军工 + 铜价: two more single-source events so the band top-3 slice is
++ *     observable (4 published, band caps at 3). Story 4.3 also pins these:
++ *     军工 gets a stock association (stock-only), 铜价 gets NO association (the
++ *     category-filter negative sample).
++ *
++ * Story 4.3 association injection (category filter fixtures): 半导体 gets
++ * concept+industry+stock items; 稀土 gets concept+industry; 军工 gets stock only;
++ * 铜价 gets none. So `?category=stock` matches 半导体 + 军工, `?category=concept`
++ * matches 半导体 + 稀土, `?category=industry` matches 半导体 + 稀土, and 铜价
++ * never matches any category.
+  *
+  * This block covers the I/O & Edge-Case Matrix rows the surface-anchored tests
+  * above cannot (they need a populated read model):
+@@ -95,6 +138,8 @@ test.describe("时间流首页 (Story 4.2)", () => {
+  *   - 单源条目 (no fold tag, no reason tag — FR-3 revised)
+  *   - main-line-band 置顶项 (top-N saliency band renders + links)
+  *   - AI 解读槽 null (recommendationReason stays NULL pre-5.1 → no AiLabel)
++ *   - Story 4.3: session hit / filter empty / category positive + negative /
++ *     session+category combo / URL restore (the filter behavior matrix).
+  *
+  * Requires request-time DATABASE_URL (the home is force-dynamic). The seed
+  * clears the full table set so re-runs are deterministic.
+@@ -219,6 +264,269 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
+     ).toHaveCount(0);
+   });
+ 
++  // --- Story 4.3: session + category filter behavior ------------------------
++  // These tests run BEFORE the empty-state test below (which clears the timeline
++  // projection) so the seeded cards + associations are still present. The
++  // sessionTag of each seeded event is time-dependent (derived from the
++  // Asia/Shanghai local time of its occurredAt), so the session tests DISCOVER
++  // the active session from the rendered DOM rather than assuming a specific
++  // tag — this keeps them deterministic across run times.
++
++  test("session 筛选：pill 切换更新 URL + active 态 + 服务端 narrowing (Story 4.3)", async ({
++    page,
++  }) => {
++    // The session filter is SERVER-side (listPublishedTimeline({ sessionTag })),
++    // but the sessionTag of each seeded event is time-dependent (derived from
++    // the Asia/Shanghai local time of occurredAt). On a weekend ALL events tag
++    // as non_trading — so this test does NOT assume any card has a specific
++    // trading-session tag. Instead it asserts the filter MECHANICS:
++    //   1. clicking a session pill puts ?session=<value> in the URL;
++    //   2. that pill renders active (brand class);
++    //   3. the server-side filter narrowed (or emptied) the result set — count
++    //      under filter <= count without filter (relative, not absolute).
++    await page.goto("/");
++
++    const filterNav = page.locator("nav[aria-label='时间流筛选']");
++    const timeline = page.locator("section[aria-label='时间流']");
++    const unfilteredCount = await timeline.locator("li").count();
++    expect(unfilteredCount, "seed produces >=1 card before filtering").toBeGreaterThan(0);
++
++    // Click 「盘中」(intraday) — a representative trading-session pill. The URL
++    // must gain ?session=intraday and the pill must render active.
++    await filterNav.getByText("盘中", { exact: true }).click();
++    await expect(page, "URL carries session=intraday").toHaveURL(/session=intraday/);
++    await expect(
++      filterNav.locator("a", { hasText: "盘中" }).first(),
++      "intraday pill is active (brand class)",
++    ).toHaveClass(/\bbg-brand\b/);
++    // The other two trading-session pills are NOT active.
++    for (const label of ["盘前", "盘后"]) {
++      await expect(
++        filterNav.locator("a", { hasText: label }).first(),
++        `${label} pill default when intraday is active`,
++      ).not.toHaveClass(/\bbg-brand\b/);
++    }
++
++    // Server-side narrowing: the filtered count is <= the unfiltered count
++    // (could be 0 if no seeded event is intraday, e.g. on a weekend — that's
++    // the filter-empty branch, covered by its own test below). This asserts
++    // the filter was APPLIED without assuming which sessionTag the seed has.
++    const filteredCount = await timeline.locator("li").count();
++    expect(
++      filteredCount,
++      "session filter narrows (or empties) the result set",
++    ).toBeLessThanOrEqual(unfilteredCount);
++  });
++
++  test("session 筛选空态：无命中 session 显示筛选空态文案 + 清除链接 (Story 4.3)", async ({
++    page,
++  }) => {
++    // Pick a session that has no matches. On a weekend ALL events tag as
++    // non_trading, so ANY of 盘前/盘中/盘后 produces the filter-empty state. On
++    // a trading day, at most three sessions are populated, so at least one of
++    // the three pills has no matches (3 pills, 4 events → pigeonhole guarantees
++    // an empty bucket unless events are spread exactly 1/1/2). Discover from
++    // the DOM which session label is absent, then click its pill.
++    await page.goto("/");
++
++    const filterNav = page.locator("nav[aria-label='时间流筛选']");
++    const timeline = page.locator("section[aria-label='时间流']");
++    const cards = timeline.locator("li");
++    const cardCount = await cards.count();
++
++    const presentSessions = new Set<string>();
++    for (let i = 0; i < cardCount; i++) {
++      const metaText = await cards.nth(i).locator("div.font-mono.text-xs").first().textContent();
++      // Meta line shape:「<sessionLabel> · <timestamp>」. Prefix before「·」.
++      const label = (metaText ?? "").split("·")[0]?.trim() ?? "";
++      if (label !== "") presentSessions.add(label);
++    }
++    const candidateLabels = ["盘前", "盘中", "盘后"];
++    const noMatch = candidateLabels.find((l) => !presentSessions.has(l));
++    if (noMatch === undefined) {
++      // Rare: events cover all three trading sessions. Skip rather than false-
++      // fail — the filter-empty branch is still covered by the category dimension
++      // (a no-association event under any category filter produces the same
++      // empty-state copy via the same code path).
++      test.skip(true, "seeded events cover all 3 trading sessions; no no-match pill");
++      return;
++    }
++
++    await filterNav.getByText(noMatch, { exact: true }).click();
++    await expect(page, "URL carries the no-match session filter").toHaveURL(
++      /session=(pre_open|intraday|post_close)/,
++    );
++
++    // Filter-empty state: the DISTINCT copy (NOT the read-model-empty copy) +
++    // a clear-filter link, and NO 最近更新 line (data exists, just filtered out).
++    await expect(
++      timeline.getByText("当前筛选条件下暂无时间流条目。"),
++      "filter-empty state shows the distinct narrowed-too-far copy",
++    ).toBeVisible();
++    await expect(
++      timeline.getByRole("link", { name: "清除筛选" }),
++      "filter-empty state shows a clear-filter link",
++    ).toBeVisible();
++    await expect(
++      timeline.getByText(/最近更新：/),
++      "filter-empty state must NOT show 最近更新 (data exists, not stale)",
++    ).toHaveCount(0);
++    await expect(
++      timeline.locator("li"),
++      "no cards render under a no-match session filter",
++    ).toHaveCount(0);
++  });
++
++  test("category 筛选正例：?category=stock 仅保留含 stock association 的条目 (Story 4.3)", async ({
++    page,
++  }) => {
++    // Seed fixtures: 半导体 has stock(中芯国际); 军工 has stock(中航沈飞); 稀土
++    // has concept+industry only (no stock); 铜价 has no association at all.
++    await page.goto("/?category=stock");
++
++    const filterNav = page.locator("nav[aria-label='时间流筛选']");
++    const timeline = page.locator("section[aria-label='时间流']");
++
++    // The 「个股」 pill must be active (URL has ?category=stock).
++    await expect(
++      filterNav.locator("a", { hasText: "个股" }).first(),
++      "stock pill is active under ?category=stock",
++    ).toHaveClass(/\bbg-brand\b/);
++
++    // 半导体 + 军工 (the two stock-positive events) render.
++    await expect(
++      timeline.locator("li", { hasText: "半导体" }).first(),
++      "半导体 (has stock assoc) renders under ?category=stock",
++    ).toBeVisible();
++    await expect(
++      timeline.locator("li", { hasText: "军工" }).first(),
++      "军工 (has stock assoc) renders under ?category=stock",
++    ).toBeVisible();
++
++    // 稀土 (concept+industry only, no stock) does NOT render.
++    await expect(
++      timeline.locator("li", { hasText: "稀土" }),
++      "稀土 (no stock assoc) is filtered out under ?category=stock",
++    ).toHaveCount(0);
++    // 铜价 (no association at all) does NOT render — the category-filter
++    // negative sample.
++    await expect(
++      timeline.locator("li", { hasText: "铜价" }),
++      "铜价 (no association) is filtered out under any category filter",
++    ).toHaveCount(0);
++  });
++
++  test("category 筛选负例：?category=concept 排除无 concept association 的条目 (Story 4.3)", async ({
++    page,
++  }) => {
++    // Seed fixtures: 半导体 has concept(半导体); 稀土 has concept(稀土); 军工
++    // has stock only (no concept); 铜价 has no association.
++    await page.goto("/?category=concept");
++
++    const timeline = page.locator("section[aria-label='时间流']");
++
++    // 半导体 + 稀土 (the concept-positive events) render.
++    await expect(
++      timeline.locator("li", { hasText: "半导体" }).first(),
++      "半导体 (has concept assoc) renders under ?category=concept",
++    ).toBeVisible();
++    await expect(
++      timeline.locator("li", { hasText: "稀土" }).first(),
++      "稀土 (has concept assoc) renders under ?category=concept",
++    ).toBeVisible();
++
++    // 军工 (stock only, no concept) + 铜价 (no association) do NOT render.
++    await expect(
++      timeline.locator("li", { hasText: "军工" }),
++      "军工 (no concept assoc) is filtered out under ?category=concept",
++    ).toHaveCount(0);
++    await expect(
++      timeline.locator("li", { hasText: "铜价" }),
++      "铜价 (no association) is filtered out under any category filter",
++    ).toHaveCount(0);
++  });
++
++  test("session + category 复合：两 pill 均 active，切换其一不丢失另一维度 (Story 4.3)", async ({
++    page,
++  }) => {
++    // Composite filter: ?session=intraday&category=stock. Both pills active;
++    // toggling category off (clicking the active 「个股」 pill) must preserve the
++    // session filter (mergeSearchParams keeps sibling keys).
++    await page.goto("/?session=intraday&category=stock");
++
++    const filterNav = page.locator("nav[aria-label='时间流筛选']");
++
++    // Both pills are active at once.
++    await expect(
++      filterNav.locator("a", { hasText: "盘中" }).first(),
++      "session pill active under composite filter",
++    ).toHaveClass(/\bbg-brand\b/);
++    await expect(
++      filterNav.locator("a", { hasText: "个股" }).first(),
++      "category pill active under composite filter",
++    ).toHaveClass(/\bbg-brand\b/);
++
++    // Click the active 「个股」 pill → its href clears ?category= but preserves
++    // ?session=intraday (mergeTimelineSearchParams drops only "category").
++    await filterNav.locator("a", { hasText: "个股" }).first().click();
++    await expect(page, "category cleared, session preserved").toHaveURL(
++      /session=intraday/,
++    );
++    await expect(page, "category is gone from the URL").not.toHaveURL(/category=/);
++    // The session pill stays active; the category pill reverts to default.
++    await expect(
++      filterNav.locator("a", { hasText: "盘中" }).first(),
++      "session pill still active after category cleared",
++    ).toHaveClass(/\bbg-brand\b/);
++    await expect(
++      filterNav.locator("a", { hasText: "个股" }).first(),
++      "category pill inactive after clear",
++    ).not.toHaveClass(/\bbg-brand\b/);
++  });
++
++  test("URL 还原：直访带筛选的 URL 还原 pill active 态 (Story 4.3, FR-2)", async ({
++    page,
++  }) => {
++    // Direct visit a URL with BOTH filters set; assert the active state is
++    // restored purely from the URL (server-rendered, no client state). This is
++    // the shareable/refresh/back-forward invariant.
++    await page.goto("/?category=industry");
++
++    const filterNav = page.locator("nav[aria-label='时间流筛选']");
++
++    // The 「行业」 pill is active (from the URL, no prior click needed).
++    await expect(
++      filterNav.locator("a", { hasText: "行业" }).first(),
++      "industry pill active from direct URL visit",
++    ).toHaveClass(/\bbg-brand\b/);
++    // No session pill is active (URL has no ?session=).
++    for (const label of ["盘前", "盘中", "盘后"]) {
++      await expect(
++        filterNav.locator("a", { hasText: label }).first(),
++        `${label} pill default when no ?session= in URL`,
++      ).not.toHaveClass(/\bbg-brand\b/);
++    }
++  });
++
++  test("非法筛选值不 500：?session=foo&category=bar 视同默认态 (Story 4.3)", async ({ page }) => {
++    // Invalid values are whitelisted to nothing → the page renders the default
++    // (no filter) state, HTTP 200, not a 500. Pins the I/O matrix's "非法值 →
++    // 忽略 → 视同默认" rows.
++    const response = await page.goto("/?session=foo&category=bar");
++    expect(response, "page should respond").not.toBeNull();
++    expect(response!.status(), "invalid filter values must not 500").toBe(200);
++
++    // No pill is active (both invalid values were dropped by the whitelist
++    // parsers). The timeline renders whatever the default read model returns.
++    const filterNav = page.locator("nav[aria-label='时间流筛选']");
++    for (const label of ["盘前", "盘中", "盘后", "概念", "行业", "个股"]) {
++      await expect(
++        filterNav.locator("a", { hasText: label }).first(),
++        `${label} pill default under invalid filter values`,
++      ).not.toHaveClass(/\bbg-brand\b/);
++    }
++  });
++
+   test("空态面：published_timeline 为空时渲染诚实空态 + 最近更新 (NFR-2)", async ({ page }) => {
+     // Deterministic empty read model: clear the timeline projection directly,
+     // then reload. (Runs after the populated tests in serial mode; the next
+
+=== NEW FILE: apps/web/app/(public)/_components/timeline-filters.tsx (untracked, full content) ===
+import { FilterPill } from "@/components/chips";
+
+/**
+ * Session + category filter pills for the public timeline feed — Story 4.3
+ * (Epic 4 时间流首页).
+ *
+ * URL-driven server component (zero client JS / no useState). Each pill is a
+ * `<Link href="?session=…">` / `<Link href="?category=…">` so filter state lives
+ * entirely in the URL: shareable, refresh-keeps-filter, back/forward works
+ * (FR-2). This mirrors the 1.7 FeedFilters native-platform (URL/query string)
+ * approach — the home page is `force-dynamic` and reads `searchParams` at
+ * request time, so pills render in whatever active state the URL dictates.
+ *
+ * Two orthogonal dimensions coexist without clobbering each other:
+ *   - `?session=` (盘前 / 盘中 / 盘后 / 全天) — SERVER-side filter, passed
+ *     straight through to `listPublishedTimeline({ sessionTag })` (hits the
+ *     `(trade_date, session_tag, occurred_at)` composite index built in 4.1).
+ *     「全天」is the clear control (no `sessionTag` passed → includes
+ *     `non_trading`). It is ALWAYS visible so the active session is always
+ *     clearable.
+ *   - `?category=` (概念 / 行业 / 个股) — IN-MEMORY JS-join filter, reusing the
+ *     Story 2.2 feed-filter pattern: `listPublishedAssociations` → build
+ *     `hotEventId → Set<AssociationKind>` → filter the already-session-filtered
+ *     timeline entries in memory. The spec Never forbids adding a `category`
+ *     param to `listPublishedTimeline` (same rationale as 2.2's filter-free
+ *     `listPublishedHotEvents`): it would split "no association at all" vs
+ *     "dimension has no matches" across two SQL reads. V1 scale is tiny; the
+ *     Json-column sub-table normalization is a logged scale-ceiling defer.
+ *
+ * `aria-label="时间流筛选"` is deliberate (spec Always): 4.2's e2e pins
+ * `nav[aria-label='筛选']` count = 0 (the V1 FeedFilters was removed). Reusing
+ * 「筛选」would collide; 「时间流筛选」keeps that assertion green and gives screen
+ * readers a distinguishing semantic.
+ *
+ * Invalid values (`?session=foo`, `?category=bar`) are silently ignored by the
+ * whitelist parsers below — they fall back to the default (no filter), never
+ * 500. Repeated keys (`?session=a&session=b`) collapse to the first via
+ * `firstString` (Next.js delivers arrays for repeated keys; calling `.trim()`
+ * on an array throws TypeError, which would 500 the public nav).
+ *
+ * Does NOT import `@aguhot/core` — this file is pure URL rendering. The page
+ * parses searchParams (via the exported `parseTimelineFilters`) and passes the
+ * resolved state down as props; this component only builds hrefs.
+ */
+
+// --- session dimension (server-filtered via listPublishedTimeline) -----------
+
+/**
+ * The session values the home honors, in display order. 「全天」(all-day) is the
+ * clear control and sits last so the always-visible clear path is at the end of
+ * the row — mirroring the 1.7 `FEED_WINDOWS` layout where 「全部」is last.
+ *
+ * `value` is the URL token (matches the `TimelineSessionTag` union for the
+ * three real sessions; 「全天」has no URL token — its href clears `?session=`
+ * while preserving any sibling `?category=`). `tag` is the core
+ * `TimelineSessionTagType` this value maps to on the server, or `undefined` for
+ * 「全天」(no sessionTag passed → listPublishedTimeline returns every entry
+ * including non_trading).
+ *
+ * Kept in sync with core's `TimelineSessionTag` value object by the
+ * `SessionFilter` union below (whitelist parser rejects anything else).
+ */
+const TIMELINE_SESSION_PRE_OPEN = "pre_open";
+const TIMELINE_SESSION_INTRADAY = "intraday";
+const TIMELINE_SESSION_POST_CLOSE = "post_close";
+
+export const TIMELINE_SESSIONS: ReadonlyArray<{
+  value: SessionUrlValue;
+  label: string;
+  tag: TimelineSessionLiteral | undefined;
+}> = [
+  { value: TIMELINE_SESSION_PRE_OPEN, label: "盘前", tag: TIMELINE_SESSION_PRE_OPEN },
+  { value: TIMELINE_SESSION_INTRADAY, label: "盘中", tag: TIMELINE_SESSION_INTRADAY },
+  { value: TIMELINE_SESSION_POST_CLOSE, label: "盘后", tag: TIMELINE_SESSION_POST_CLOSE },
+  { value: "all", label: "全天", tag: undefined },
+] as const;
+
+/**
+ * The URL values the session dimension owns (the three real sessions + the
+ * clear control). 「全天」lives in the URL as `?session=all`; the page's parser
+ * maps it back to "no sessionTag" before calling listPublishedTimeline.
+ */
+type SessionUrlValue = "pre_open" | "intraday" | "post_close" | "all";
+
+/**
+ * The three real `TimelineSessionTag` literals that have a server-side filter
+ * (non_trading has no independent pill — it appears only under 「全天」with no
+ * standalone toggle, per spec Never: defensible because non_trading is not a
+ * trading session users seek out). Exported so the page can cast a parsed
+ * session value to the core `TimelineSessionTagType` it passes to
+ * `listPublishedTimeline` (the cast is total: the whitelist parser only
+ * accepts these three literals or "all").
+ */
+export type TimelineSessionLiteral = "pre_open" | "intraday" | "post_close";
+
+/**
+ * The resolved session filter: the URL value (or undefined when `?session=` is
+ * absent / invalid / "all"). The page reads this and maps `value` → the core
+ * `TimelineSessionTagType` it passes to `listPublishedTimeline`.
+ */
+export interface SessionFilter {
+  value: SessionUrlValue;
+}
+
+// --- category dimension (in-memory JS-join via listPublishedAssociations) ---
+
+/**
+ * The category values the home honors, in display order. There is no 「全部类
+ * 别」clear pill — instead the active category pill itself flips to a clear href
+ * (its own label, but pointing at the URL with `?category=` dropped). This
+ * matches 4.2's "clear path always visible" (FR-2) without adding a redundant
+ * always-present pill. When no category is active, none of these pills render
+ * active — they are all default-state links that set `?category=<value>`.
+ *
+ * `value` is the URL token AND the `AssociationItem.kind` literal (concept /
+ * industry / stock — the canonical kinds core stores). The whitelist parser
+ * rejects anything else.
+ */
+const TIMELINE_CATEGORY_CONCEPT = "concept";
+const TIMELINE_CATEGORY_INDUSTRY = "industry";
+const TIMELINE_CATEGORY_STOCK = "stock";
+
+export const TIMELINE_CATEGORIES: ReadonlyArray<{
+  value: CategoryUrlValue;
+  label: string;
+}> = [
+  { value: TIMELINE_CATEGORY_CONCEPT, label: "概念" },
+  { value: TIMELINE_CATEGORY_INDUSTRY, label: "行业" },
+  { value: TIMELINE_CATEGORY_STOCK, label: "个股" },
+] as const;
+
+/**
+ * The URL values the category dimension owns. These ARE the
+ * `AssociationItem["kind"]` literals — the page reads the resolved value and
+ * matches it against the in-memory `hotEventId → Set<kind>` map built from
+ * `listPublishedAssociations`.
+ */
+export type CategoryUrlValue = "concept" | "industry" | "stock";
+
+/**
+ * The resolved category filter, or null when no category dimension is active.
+ */
+export interface CategoryFilter {
+  value: CategoryUrlValue;
+}
+
+// --- searchParams boundary helpers (timeline-specific) ----------------------
+
+/**
+ * The raw shape of the homepage searchParams this module owns. Matches
+ * PageProps.searchParams (resolved) in page.tsx so the filter pills can preserve
+ * the sibling key (session↔category) when changing one — bare `?session=…`
+ * concatenation would drop an active `?category=`, and vice versa.
+ *
+ * Values are `string | string[] | undefined` because Next.js searchParams
+ * deliver arrays for repeated keys (e.g. `?session=a&session=b`). Callers that
+ * touch `.trim()` must route through `firstString` first.
+ */
+export interface TimelineSearchParams {
+  session?: string | string[];
+  category?: string | string[];
+}
+
+/**
+ * Normalize a Next.js searchParams value to a single string (or undefined).
+ * Next.js hands searchParams values as `string | string[] | undefined` — a URL
+ * like `?session=a&session=b` produces `string[]`. Calling `.trim()` on an
+ * array throws TypeError, which would 500 the public timeline nav. This
+ * collapses arrays to their first element before any string method is called,
+ * at the boundary where searchParams enter this module. Pure + total. Mirrors
+ * the feed-filters `firstString` (kept local — spec Never: this story does NOT
+ * reuse feed-filters.tsx; it ships a self-contained new component).
+ */
+export function firstString(raw: string | string[] | undefined): string | undefined {
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
+/**
+ * Merge a partial searchParams update into the current params and return a
+ * pathname-relative href string (`?a=1&b=2`, or `/` when empty). Used by the
+ * filter pills so a session change never clobbers a sibling category key, and a
+ * category change never clobbers the session. This is the querystring-merge fix
+ * for the same review finding that hit 1.7 FeedFilters (C2) — bare
+ * `?session=…` / `?category=…` concatenation would drop any other active
+ * filter.
+ *
+ * `updates`/`deletes` accept only the keys this component owns (session +
+ * category). The merge order is deterministic (TIMELINE_QUERY_KEYS) so URLs
+ * stay stable across renders.
+ */
+const TIMELINE_QUERY_KEYS = ["session", "category"] as const;
+type TimelineQueryKey = (typeof TIMELINE_QUERY_KEYS)[number];
+
+export function mergeTimelineSearchParams(
+  current: TimelineSearchParams,
+  updates: Partial<Record<TimelineQueryKey, string>> = {},
+  deletes: TimelineQueryKey[] = [],
+): string {
+  const next = new Map<string, string>();
+  for (const key of TIMELINE_QUERY_KEYS) {
+    // Normalize at the boundary: searchParams values may be string[] for a
+    // repeated key; firstString collapses to the first element before trim.
+    const raw = firstString(current[key]);
+    if (raw !== undefined && raw.trim() !== "") {
+      next.set(key, raw);
+    }
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined && value.trim() !== "") {
+      next.set(key, value);
+    }
+  }
+  for (const key of deletes) {
+    next.delete(key);
+  }
+  if (next.size === 0) return "/";
+  const pairs: string[] = [];
+  for (const key of TIMELINE_QUERY_KEYS) {
+    const value = next.get(key);
+    if (value !== undefined) {
+      pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    }
+  }
+  return `?${pairs.join("&")}`;
+}
+
+// --- whitelist parsers (invalid value → no filter, never 500) ---------------
+
+/**
+ * Parse the raw `?session=` searchParams value into a known SessionFilter, or
+ * undefined when the value is absent / invalid / "all". Invalid values
+ * (`?session=foo`) silently fall back to "no session filter" (the page does not
+ * pass sessionTag → listPublishedTimeline returns every entry) — this is the
+ * I/O matrix's "非法 session 值 → 忽略 → 视同「全天」" row. NEVER throws / 500s.
+ *
+ * "all" is the explicit clear token: it means the user clicked 「全天」, so the
+ * filter is conceptually active (the 「全天」pill renders in brand active state)
+ * but maps to no server-side sessionTag. We still return a SessionFilter so the
+ * pill can render active — `value: "all"` is the signal.
+ */
+export function parseSessionFilter(params: {
+  session?: string | string[];
+}): SessionFilter | undefined {
+  const raw = firstString(params.session);
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  for (const s of TIMELINE_SESSIONS) {
+    if (s.value === trimmed) {
+      return { value: s.value };
+    }
+  }
+  // Unknown value — ignore, fall back to default (no filter). Do NOT echo the
+  // garbage back into the URL; the pills render against the canonical values.
+  return undefined;
+}
+
+/**
+ * Parse the raw `?category=` searchParams value into a known CategoryFilter, or
+ * undefined when the value is absent / invalid. Invalid values (`?category=foo`)
+ * silently fall back to "no category filter" — I/O matrix's "非法 category 值 →
+ * 忽略 → 视同无 category 筛选" row. NEVER throws / 500s.
+ */
+export function parseCategoryFilter(params: {
+  category?: string | string[];
+}): CategoryFilter | undefined {
+  const raw = firstString(params.category);
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  for (const c of TIMELINE_CATEGORIES) {
+    if (c.value === trimmed) {
+      return { value: c.value };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Convenience: parse both dimensions at once. The page calls this on its
+ * resolved searchParams to get the full filter state in one shot.
+ */
+export interface TimelineFilterState {
+  session: SessionFilter | undefined;
+  category: CategoryFilter | undefined;
+}
+
+export function parseTimelineFilters(params: TimelineSearchParams): TimelineFilterState {
+  return {
+    session: parseSessionFilter(params),
+    category: parseCategoryFilter(params),
+  };
+}
+
+// --- component --------------------------------------------------------------
+
+/**
+ * Render the session + category filter nav. Pure URL rendering — the page has
+ * already parsed the filter state and passes it down as props. Each pill builds
+ * its href via `mergeTimelineSearchParams` so toggling one dimension preserves
+ * the other (session↔category never clobber).
+ */
+export interface TimelineFiltersProps {
+  session: SessionFilter | undefined;
+  category: CategoryFilter | undefined;
+  /**
+   * The resolved homepage searchParams, forwarded by the page so filter pills
+   * can merge their own key into the existing querystring instead of clobbering
+   * the sibling key. Optional (defaults to empty) for callers that don't care
+   * about sibling keys.
+   */
+  searchParams?: TimelineSearchParams;
+}
+
+export function TimelineFilters({
+  session,
+  category,
+  searchParams = {},
+}: TimelineFiltersProps) {
+  return (
+    <nav aria-label="时间流筛选" className="flex flex-wrap items-center gap-2">
+      {/*
+        Session pills (盘前 / 盘中 / 盘后 / 全天). 「全天」is the clear control —
+        its href drops `?session=` (preserving any active `?category=`). The
+        current session pill renders active (brand state); the active 「全天」
+        also renders active so the user sees the "no session filter" state
+        explicitly.
+      */}
+      {TIMELINE_SESSIONS.map((s) => {
+        const isActive = session?.value === s.value;
+        // 「全天」(value "all", tag undefined) clears the session key; the three
+        // real sessions set it. mergeTimelineSearchParams preserves any sibling
+        // ?category= so the two dimensions don't clobber each other.
+        const href =
+          s.tag === undefined
+            ? mergeTimelineSearchParams(searchParams, {}, ["session"])
+            : mergeTimelineSearchParams(searchParams, { session: s.value });
+        return (
+          <FilterPill key={s.value} href={href} active={isActive}>
+            {s.label}
+          </FilterPill>
+        );
+      })}
+
+      {/*
+        Category pills (概念 / 行业 / 个股). When a category is active, ITS OWN
+        pill flips to a clear href (drops ?category=, preserves ?session=) —
+        this is the always-visible clear path (FR-2). When no category is
+        active, each pill is a default-state link that sets ?category=<value>.
+        There is no redundant 「全部类别」pill; the active pill IS the clear
+        control, and inactive pills never need clearing.
+      */}
+      {TIMELINE_CATEGORIES.map((c) => {
+        const isActive = category?.value === c.value;
+        const href = isActive
+          ? mergeTimelineSearchParams(searchParams, {}, ["category"])
+          : mergeTimelineSearchParams(searchParams, { category: c.value });
+        return (
+          <FilterPill key={c.value} href={href} active={isActive}>
+            {c.label}
+          </FilterPill>
+        );
+      })}
+    </nav>
+  );
+}
