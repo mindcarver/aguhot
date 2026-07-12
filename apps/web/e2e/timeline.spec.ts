@@ -205,9 +205,11 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     expect(tsX, "timestamp rail is left of the source body").toBeLessThan(srcX);
     const srcY = await topY(foldedCard.getByText("timeline-e2e-半导体源").first());
     const titleY = await topY(foldedCard.getByRole("heading", { level: 3 }));
-    // The count <dl> is unique (the disclosure's "精选自 N 条证据源" lives in a
-    // <p>, not a dl), so scope by element rather than text to avoid an ambiguity.
-    const countY = await topY(foldedCard.locator("dl"));
+    // Story 6.4: the evidence count is now a `SourceChipList` chip
+    // (`关联讨论 N 条`), not a <dl>. 半导体 has evidenceCount 2 →「关联讨论 2 条」.
+    // The chip text is unique in the card (the fold disclosure uses a sentence,
+    // not the chip label).
+    const countY = await topY(foldedCard.getByText(/关联讨论 \d+ 条/));
     expect(srcY, "source above title").toBeLessThan(titleY);
     expect(titleY, "title above evidence count").toBeLessThan(countY);
 
@@ -241,7 +243,12 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     // and the page stays on /.
     const summary = foldedCard.locator("summary", { hasText: "同事件精选" });
     await summary.click();
-    await expect(foldedCard.locator("details")).toContainText(/精选自 2 条证据源/);
+    // Story 6.4: the fold body is honest text — count of evidence RECORDS +
+    // representative source + detail-page guide (no「+N」chip: evidenceCount
+    // counts records, not distinct sources — Codex P2). 半导体 has
+    // evidenceCount 2 →「精选自 2 条证据」.
+    await expect(foldedCard.locator("details")).toContainText(/精选自 2 条证据/);
+    await expect(foldedCard.locator("details")).toContainText(/完整证据时间线请见详情页/);
     await expect(page).toHaveURL(/\/$/);
   });
 

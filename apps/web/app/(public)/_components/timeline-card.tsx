@@ -6,8 +6,10 @@ import {
   type TimelineSessionTagType,
 } from "@aguhot/core";
 
-import { AiLabel } from "@/components/chips";
 import { cn } from "@/lib/utils";
+
+import { EditorialReasonBlock } from "./editorial-reason-block";
+import { SourceChipList } from "./source-chip-list";
 
 /**
  * Timeline feed entry — Story 6.3 (Epic 6 视觉对齐参考站).
@@ -82,10 +84,10 @@ export function TimelineCard({ entry }: TimelineCardProps) {
   // Fold decision: pure >= check against the event-assembly-owned threshold.
   const isFolded = entry.foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD;
 
-  // AI 解读 slot: render ONLY when recommendationReason is non-null (5.1+).
-  // Pre-5.1 default is null → no slot, no AiLabel, no empty marketing placeholder.
+  // AI 解读 slot (Story 6.4): EditorialReasonBlock renders a solid-hairline
+  // signature block and self-guards null/empty (pre-5.1 default null → no
+  // block, no AiLabel, no empty marketing placeholder, NFR-2).
   const recommendationReason = entry.recommendationReason;
-  const hasRecommendation = recommendationReason !== null && recommendationReason !== "";
 
   return (
     // hover on the <li> so the whole entry — including the fold disclosure
@@ -125,31 +127,23 @@ export function TimelineCard({ entry }: TimelineCardProps) {
           ) : null}
 
           {/*
-            AI 解读 slot (PRD §10 / NFR-3). 4.2 inline form retained here;
-            Story 6.4 upgrades this to a solid-hairline signature
-            `EditorialReasonBlock` (visual weight ≤ factual title preserved).
-            Rendered ONLY when recommendationReason is non-null AND non-empty
-            (spec Never: no empty marketing placeholder).
+            Source chips (Story 6.4, factual). `关联讨论 {count} 条` +
+            representative `{sourceName}` chip. Replaces the 4.2/6.3 evidence
+            <dl>. Rendered BEFORE EditorialReasonBlock so the hairline divider
+            separates ALL factual content (source/title/summary/chips) ABOVE
+            from the AI commentary BELOW (demo reading order, Codex P2).
           */}
-          {hasRecommendation ? (
-            <div className="mt-2 flex items-start gap-2">
-              <AiLabel className="mt-0.5 shrink-0" />
-              <p className="text-sm text-ink-secondary">{recommendationReason}</p>
-            </div>
-          ) : null}
+          <SourceChipList count={entry.evidenceCount} sourceName={sourceName} />
 
           {/*
-            Evidence count: the last item in the reading order inside the
-            clickable body. font-mono + ink-tertiary matches the numeric meta
-            layer. Story 6.4 replaces this dl with a `SourceChipList`
-            (来源数 chip + 关联讨论来源 chips).
+            AI 解读 signature block (Story 6.4, PRD §10 / NFR-3). Solid-hairline
+            separator + slot-specific「AI 解读」label + reason. Self-guards
+            null/empty (pre-5.1 → no block). Visual weight ≤ factual title
+            (body-sm ink-secondary; the hairline separates without raising
+            weight — UX-DR8). Rendered AFTER the factual chips so the divider
+            sits between factual and editorial.
           */}
-          <dl className="mt-2 font-mono text-xs text-ink-tertiary">
-            <div>
-              <dt className="inline">证据源 </dt>
-              <dd className="inline">{entry.evidenceCount}</dd>
-            </div>
-          </dl>
+          <EditorialReasonBlock reason={recommendationReason} />
         </div>
       </Link>
 
@@ -179,9 +173,20 @@ export function TimelineCard({ entry }: TimelineCardProps) {
           >
             同事件精选
           </summary>
+          {/*
+            Expanded disclosure: honest text — count of evidence RECORDS + the
+            one representative source + a guide to the detail page. No `+N`
+            chip: `evidenceCount` counts records (`projectTimelineFields` uses
+            `input.evidence.length`), NOT distinct publishers, so `+{count-1}`
+            would falsely imply more sources (Codex P2 — the seed has 2
+            semiconductor records under 1 EvidenceSource). 「条证据」honestly
+            labels them as evidence records. No fabricated per-source name/time
+            list — `published_timeline` carries only count + representative
+            sourceName; the full per-source timeline is the detail page's
+            `证据时间线` job (1.8).
+          */}
           <p className="mt-2 text-xs text-ink-tertiary">
-            精选自 {entry.evidenceCount} 条证据源（代表来源：{sourceName}）·
-            完整证据时间线请见详情页
+            精选自 {entry.evidenceCount} 条证据（代表来源：{sourceName}）· 完整证据时间线请见详情页
           </p>
         </details>
       ) : null}
