@@ -153,6 +153,8 @@ export {
   refreshPublishedDailyDigest,
   getPublishedDailyDigest,
   listPublishedDailyDigestCoverageDates,
+  refreshPublishedTrendBriefing,
+  getPublishedTrendBriefing,
 } from "./modules/publish-orchestrator/publish-service.js";
 export {
   refreshPublishedTimelineForEvent,
@@ -199,17 +201,44 @@ export type {
   RefreshPublishedDailyDigestOptions,
   GetPublishedDailyDigestOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
+  PublishedHotEventDeepRead,
+  PublishedTrendBriefing,
+  RefreshPublishedTrendBriefingOptions,
+  GetPublishedTrendBriefingOptions,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
 // append-only ExplanationVersion, AD-5; Story 1.9 — saveExplanation operator
-// revision write-point, source passed by caller, V1 "human").
+// revision write-point, source passed by caller, V1 "human";
+// Story 5.1 — LLMAdapter port AD-7 + StubLlmAdapter test-only +
+// generateRecommendationReason append-only AD-2 + recommendation_reasons table +
+// 6-class wording guardrail; recommendation-reason worker resolves no adapter →
+// prod degrades honestly, stub is verify/e2e-only;
+// Story 5.2 — LLMAdapter.generateDeepRead (second method on the same port) +
+// generateDeepRead append-only AD-2 + deep_reads table + published_hot_event_
+// deep_reads projection; deep-read worker resolves no adapter → prod degrades
+// honestly, stub is verify/e2e-only; reuses the 5.1 6-class guardrail per
+// segment).
 export {
   generateExplanation,
   getLatestExplanation,
   derivePartitions,
   saveExplanation,
 } from "./modules/explanation/explain-service.js";
+export {
+  generateRecommendationReason,
+  getLatestRecommendationReason,
+  passesRecommendationGuardrail,
+  RECOMMENDATION_REASON_MAX_LENGTH,
+  RECOMMENDATION_FORBIDDEN_PHRASES,
+  generateDeepRead,
+  getLatestDeepRead,
+  DEEP_READ_SEGMENT_MAX_LENGTH,
+  StubLlmAdapter,
+  STUB_RECOMMENDATION_REASON,
+  STUB_DEEP_READ,
+  STUB_TREND_BRIEFING,
+} from "./modules/explanation/index.js";
 export {
   ExplanationSource,
 } from "./modules/explanation/types.js";
@@ -222,6 +251,19 @@ export type {
   ExplanationVersionRecord,
   SaveExplanationOptions,
   SaveExplanationResult,
+  LlmSource,
+  LlmReasonResult,
+  LlmDeepReadResult,
+  LlmDeepReadArgs,
+  LlmTrendBriefingResult,
+  LlmTrendBriefingArgs,
+  LLMAdapter,
+  GenerateRecommendationReasonOptions,
+  GenerateRecommendationReasonResult,
+  RecommendationReasonRecord,
+  GenerateDeepReadOptions,
+  GenerateDeepReadResult,
+  DeepReadRecord,
 } from "./modules/explanation/types.js";
 
 // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
@@ -291,12 +333,20 @@ export type {
 // digest module (Story 2.4 — DigestAdapter port AD-7 + StubDigestAdapter
 // test-only + generateDailyDigest append-only AD-2 + noInvestAdvice / coverage
 // helpers; coverageDate-keyed aggregate, no FK to hot_events; daily-digest
-// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only).
+// worker resolves no adapter → prod degrades honestly, stub is verify/e2e-only.
+// Story 5.3 — generateTrendBriefing append-only AD-2 (coverageDate-keyed cross-event
+// AI 趋势研判) + TREND_BRIEFING_MAX_LENGTH + validateTrendBriefing; reuses explanation's
+// LLMAdapter port + passesRecommendationGuardrail; trend_briefings table is data-only
+// linked (no FK); daily-digest worker resolves no llmAdapter → prod degrades honestly).
 export {
   generateDailyDigest,
   getLatestDigest,
   noInvestAdvice,
   filterByCoverageDay,
+  generateTrendBriefing,
+  getLatestTrendBriefing,
+  validateTrendBriefing,
+  TREND_BRIEFING_MAX_LENGTH,
   StubDigestAdapter,
   STUB_DIGEST_CONCLUSION,
 } from "./modules/digest/index.js";
@@ -310,6 +360,9 @@ export type {
   GenerateDailyDigestResult,
   GetLatestDigestOptions,
   DigestRecord,
+  GenerateTrendBriefingOptions,
+  GenerateTrendBriefingResult,
+  TrendBriefingRecord,
 } from "./modules/digest/index.js";
 
 // search-read module (Story 3.1 — public search over published_* read models;

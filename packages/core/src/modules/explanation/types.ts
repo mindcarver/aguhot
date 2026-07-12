@@ -138,3 +138,318 @@ export interface SaveExplanationResult {
   explanationVersionId?: string;
   notFound?: boolean;
 }
+
+// --- Story 5.1: LLMAdapter port + RecommendationReason (card AI 解读) -----------
+
+/**
+ * The provenance of a recommendation reason (AI 解读). Stored on every
+ * recommendation_reasons row so the audit chain can trace which provider +
+ * model + prompt version produced it (NFR-7). Mirrors `ExplanationSource` and
+ * reuses its "ai" value (already reserved there): V1 rows all carry source="ai"
+ * (the stub also writes "ai" so the projection pipeline is identical — only
+ * modelId/promptVersion mark a row as stub-generated).
+ *
+ * This alias exists so the LLMAdapter port + reason-service can name the source
+ * type in its own terms without reaching back into the ExplanationVersion
+ * vocabulary; the wire value is the same string union.
+ */
+export type LlmSource = ExplanationSource;
+
+/**
+ * One unit of LLMAdapter output — the ≤40 字 AI 解读 hook for one hot event.
+ * The adapter resolves a one-line reason from the event's title + summary and
+ * returns it with a non-empty `reason` plus its own provenance (modelId +
+ * promptVersion, recorded on the appended row for NFR-7). reason-service
+ * validates the reason is non-empty, ≤40 字, and passes the 6-class wording
+ * guardrail (passesRecommendationGuardrail) — violations throw (fail-fast,
+ * never silently truncates/rewrites).
+ *
+ *   - reason: NON-EMPTY one-line AI 解读, ≤40 字, free of the six forbidden
+ *     phrase classes (action / return-prediction / manipulation-frame /
+ *     recommendation-strength / timing-advice / over-certainty).
+ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future
+ *     real provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the
+ *     appended row.
+ *   - promptVersion: the prompt template version (e.g. "reason-stub-v1").
+ *     Recorded verbatim on the appended row.
+ */
+export interface LlmReasonResult {
+  reason: string;
+  modelId: string;
+  promptVersion: string;
+}
+
+/**
+ * The LLMAdapter port (AD-7). All LLM knowledge sources for AI 解读 (and,
+ * transitively, the future 5.2 AI 深读 / 5.3 趋势研判) enter through this
+ * interface; domain modules never import a third-party LLM SDK. V1 has no
+ * concrete implementation wired in prod (real provider procurement deferred) —
+ * the recommendation-reason worker resolves `adapter = undefined` so
+ * generateRecommendationReason returns null and prod degrades honestly (AC).
+ * verify/e2e pass StubLlmAdapter directly to generateRecommendationReason. The
+ * only concrete implementation today is StubLlmAdapter (test-only).
+ *
+ * Defined in types.ts (single source of truth, alongside the other explanation
+ * domain types) and re-exported from llm-adapter.ts as the port's home (mirrors
+ * the DigestAdapter precedent: types.ts holds the interface, *-adapter.ts is the
+ * thin re-export home).
+ *
+ * The adapter receives the event's title + summary as context (the same fields
+ * the card renders) so it can produce a one-line hook grounded in the evidence.
+ * A real LLM would also read the member evidence records; V1 keeps the context
+ * minimal (title + summary) since the stub returns a fixed string and a real
+ * provider's context window is a story-time decision when the provider lands.
+ */
+export interface LLMAdapter {
+  /**
+   * Resolve a one-line (≤40 字) AI 解读 for the given event. Implementations
+   * return a NON-EMPTY reason ≤40 字, free of the six forbidden phrase classes,
+   * plus their own modelId + promptVersion. Return null when no reason is
+   * available (the caller writes nothing and degrades honestly). Each returned
+   * reason is validated by generateRecommendationReason (non-empty, ≤40 字,
+   * passes guardrail) — violations throw at the generator, never silently
+   * truncated.
+   *
+   * The adapter receives the event's title + summary (the same context the card
+   * renders) so the reason is grounded in the factual evidence, not fabricated.
+   */
+  generateReason(args: {
+    hotEventId: string;
+    title: string;
+    summary: string;
+  }): Promise<LlmReasonResult | null>;
+
+  /**
+   * Resolve the three-segment 影响面/受益方/风险点 AI 深读 for the given event's
+   * detail page. Implementations return three NON-EMPTY segments (each ≤120 字,
+   * free of the six forbidden phrase classes) plus their own modelId +
+   * promptVersion. Return null when no deep read is available (the caller writes
+   * nothing and degrades honestly). Each returned segment is validated by
+   * generateDeepRead (non-empty, ≤120 字, passes guardrail) — violations throw at
+   * the generator, never silently truncated.
+   *
+   * The adapter receives the event's title + summary + the member evidence records
+   * (sourceName / summary / publishedAt) so the three segments are grounded in the
+   * factual evidence timeline, not fabricated (NFR-2). Story 5.2 reuses the same
+   * LLMAdapter port 5.1 introduced (epic-5-context :108 "三者共用 worker resolve
+   * 模式"); the second method is added here rather than spawning a parallel port.
+   */
+  generateDeepRead(args: LlmDeepReadArgs): Promise<LlmDeepReadResult | null>;
+
+  /**
+   * Resolve the single-paragraph AI 趋势研判 (cross-event trend briefing) for the given
+   * coverageDate's daily digest page. Implementations return a NON-EMPTY briefing
+   * (≤ TREND_BRIEFING_MAX_LENGTH = 200 字, free of the six forbidden phrase classes)
+   * plus their own modelId + promptVersion. Return null when no briefing is available
+   * (the caller writes nothing and degrades honestly). The returned briefing is
+   * validated by generateTrendBriefing (non-empty, ≤200 字, passes guardrail) —
+   * violations throw at the generator, never silently truncated.
+   *
+   * The adapter receives the day's published hot events (hotEventId + title + summary
+   * per event) so the briefing is grounded in the factual evidence timeline, not
+   * fabricated (NFR-2: AI content must not fabricate sourceless conclusions; must stay
+   * consistent with the evidence timeline). Story 5.3 reuses the same LLMAdapter port
+   * 5.1/5.2 introduced (epic-5-context :108 "三者共用端口"); this third method is added
+   * here rather than spawning a parallel port.
+   */
+  generateTrendBriefing(
+    args: LlmTrendBriefingArgs,
+  ): Promise<LlmTrendBriefingResult | null>;
+}
+
+/**
+ * Options for generateRecommendationReason. `{ prisma, traceId, hotEventId,
+ * adapter? }` mirrors the established command pattern (generateExplanation,
+ * generateDailyDigest) plus an optional LLMAdapter. When adapter is omitted (or
+ * the event is missing / has no evidence), the function returns null and writes
+ * nothing (honest degradation — never fabricates a reason). Otherwise it loads
+ * the HotEvent, calls the adapter, validates the result (non-empty, ≤40 字,
+ * passesRecommendationGuardrail), and APPENDS one recommendation_reasons row
+ * (source="ai").
+ */
+export interface GenerateRecommendationReasonOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  adapter?: LLMAdapter;
+}
+
+/**
+ * The result of a successful generation: the newly-appended reason row's id +
+ * the reason text + provenance + createdAt. Callers (the worker's projection
+ * refresh, verify/seed) consume the reason directly.
+ */
+export interface GenerateRecommendationReasonResult {
+  recommendationReasonId: string;
+  hotEventId: string;
+  reason: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+  traceId: string;
+}
+
+/**
+ * One recommendation_reasons row projected for read. Mirrors the columns the
+ * worker + audit need (no write paths here).
+ */
+export interface RecommendationReasonRecord {
+  id: string;
+  hotEventId: string;
+  reason: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+}
+
+// --- Story 5.2: LLMAdapter.generateDeepRead + DeepRead (detail-page AI 深读) ----
+
+/**
+ * One unit of LLMAdapter deep-read output — the three-segment 影响面/受益方/风险点
+ * AI 深读 for one hot event's detail page. The adapter resolves the three segments
+ * from the event's title + summary + member evidence and returns them with its own
+ * provenance (modelId + promptVersion, recorded on the appended row for NFR-7).
+ * deep-read-service validates each segment is non-empty, ≤ DEEP_READ_SEGMENT_MAX_LENGTH
+ * (120 字), and passes the 6-class wording guardrail (passesRecommendationGuardrail,
+ * reused from 5.1 — the guardrail is generic PRD §10, not reason-specific) — violations
+ * throw (fail-fast, never silently truncates/rewrites).
+ *
+ *   - impactSurface: 影响面 — NON-EMPTY, ≤120 字, free of the six forbidden phrase
+ *     classes.
+ *   - beneficiaries: 受益方 — NON-EMPTY, ≤120 字, free of the six forbidden phrase
+ *     classes.
+ *   - riskPoints: 风险点 — NON-EMPTY, ≤120 字, free of the six forbidden phrase classes.
+ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future real
+ *     provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the appended row.
+ *   - promptVersion: the prompt template version (e.g. "deepread-stub-v1").
+ *     Recorded verbatim on the appended row.
+ */
+export interface LlmDeepReadResult {
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
+  modelId: string;
+  promptVersion: string;
+}
+
+/**
+ * The context passed to LLMAdapter.generateDeepRead. Carries the event's title +
+ * summary (same overlay rule as the reason adapter) PLUS the member evidence records
+ * (sourceName + summary + publishedAt) so the adapter can ground the three segments in
+ * the actual evidence timeline (NFR-2: AI content must not fabricate sourceless
+ * conclusions; must stay consistent with the evidence timeline). evidence is a
+ * ReadonlyArray so the adapter cannot mutate the caller's array.
+ *
+ * The evidence shape mirrors what publish-orchestrator projects into
+ * published_hot_event_evidence (sourceName / summary / publishedAt) — the adapter
+ * receives the same grounding the public detail page renders.
+ */
+export interface LlmDeepReadArgs {
+  hotEventId: string;
+  title: string;
+  summary: string;
+  evidence: ReadonlyArray<{
+    sourceName: string;
+    summary: string;
+    publishedAt: Date | null;
+  }>;
+}
+
+/**
+ * Options for generateDeepRead. `{ prisma, traceId, hotEventId, adapter? }` mirrors
+ * generateRecommendationReason's command pattern plus an optional LLMAdapter. When
+ * adapter is omitted (or the event is missing / has no evidence), the function returns
+ * null and writes nothing (honest degradation — never fabricates a deep read).
+ * Otherwise it loads the HotEvent + member evidence, calls the adapter, validates the
+ * result (each segment non-empty, ≤120 字, passesRecommendationGuardrail; modelId +
+ * promptVersion non-empty), and APPENDS one deep_reads row (source="ai").
+ */
+export interface GenerateDeepReadOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  hotEventId: string;
+  adapter?: LLMAdapter;
+}
+
+/**
+ * The result of a successful generation: the newly-appended deep-read row's id + the
+ * three segments + provenance + createdAt. Callers (the worker's projection refresh,
+ * verify/seed) consume the segments directly.
+ */
+export interface GenerateDeepReadResult {
+  deepReadId: string;
+  hotEventId: string;
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+  traceId: string;
+}
+
+/**
+ * One deep_reads row projected for read. Mirrors the columns the worker + audit need
+ * (no write paths here).
+ */
+export interface DeepReadRecord {
+  id: string;
+  hotEventId: string;
+  impactSurface: string;
+  beneficiaries: string;
+  riskPoints: string;
+  source: LlmSource;
+  modelId: string;
+  promptVersion: string;
+  createdAt: Date;
+}
+
+// --- Story 5.3: LLMAdapter.generateTrendBriefing + TrendBriefing (daily-page AI 趋势研判)
+
+/**
+ * One unit of LLMAdapter trend-briefing output — the single-paragraph cross-event AI
+ * 趋势研判 for one coverageDate's daily digest page. The adapter resolves the paragraph
+ * from the day's published hot events (title + summary per event) and returns it with its
+ * own provenance (modelId + promptVersion, recorded on the appended row for NFR-7).
+ * trend-briefing-service validates the briefing is non-empty, ≤ TREND_BRIEFING_MAX_LENGTH
+ * (200 字), and passes the 6-class wording guardrail (passesRecommendationGuardrail,
+ * reused from 5.1 — the guardrail is generic PRD §10, not reason-specific) — violations
+ * throw (fail-fast, never silently truncates/rewrites).
+ *
+ *   - briefing: NON-EMPTY single-paragraph cross-event trend briefing, ≤200 字, free of
+ *     the six forbidden phrase classes (action / return-prediction / manipulation-frame /
+ *     recommendation-strength / timing-advice / over-certainty).
+ *   - modelId: the provider + model that produced it (e.g. "stub:v1"; a future real
+ *     provider would carry e.g. "openai:gpt-4o"). Recorded verbatim on the appended row.
+ *   - promptVersion: the prompt template version (e.g. "trendbriefing-stub-v1").
+ *     Recorded verbatim on the appended row.
+ */
+export interface LlmTrendBriefingResult {
+  briefing: string;
+  modelId: string;
+  promptVersion: string;
+}
+
+/**
+ * The context passed to LLMAdapter.generateTrendBriefing. Carries the coverageDate plus
+ * the day's published hot events (hotEventId + title + summary per event) so the adapter
+ * can ground the cross-event briefing in the factual evidence timeline (NFR-2: AI content
+ * must not fabricate sourceless conclusions; must stay consistent with the evidence
+ * timeline). events is a ReadonlyArray so the adapter cannot mutate the caller's array.
+ *
+ * Each event's title is the latest-revision overlay title (same overlay rule as the
+ * detail-page projection); each event's summary is the latest ExplanationVersion summary
+ * (same overlay rule as the deep-read adapter). The adapter receives the same grounding
+ * the daily digest renders.
+ */
+export interface LlmTrendBriefingArgs {
+  coverageDate: Date;
+  events: ReadonlyArray<{
+    hotEventId: string;
+    title: string;
+    summary: string;
+  }>;
+}

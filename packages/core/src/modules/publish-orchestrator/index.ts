@@ -28,6 +28,8 @@ export {
   refreshPublishedDailyDigest,
   getPublishedDailyDigest,
   listPublishedDailyDigestCoverageDates,
+  refreshPublishedTrendBriefing,
+  getPublishedTrendBriefing,
 } from "./publish-service.js";
 // Story 4.1 (AD-3b): the published_timeline read model. The per-event refresh
 // (refreshPublishedTimelineForEvent) runs inside decideReview's $transaction;
@@ -80,4 +82,8 @@ export type {
   RefreshPublishedDailyDigestOptions,
   GetPublishedDailyDigestOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
+  PublishedHotEventDeepRead,
+  PublishedTrendBriefing,
+  RefreshPublishedTrendBriefingOptions,
+  GetPublishedTrendBriefingOptions,
 } from "./types.js";

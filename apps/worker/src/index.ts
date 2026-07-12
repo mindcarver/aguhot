@@ -1,40 +1,42 @@
 /**
  * @aguhot/worker — ingest / normalize / cluster / explain / market-reaction /
- * theme-backfill / daily-digest / publish-timeline runtime.
+ * theme-backfill / daily-digest / publish-timeline / recommendation-reason /
+ * deep-read runtime.
  *
  * Story 1.4 registered the source-ingest worker. Story 1.5 added the event-
  * cluster worker. Story 1.8 added the explain worker. Story 2.1 added the
  * market-reaction worker. Story 2.3 added the theme-backfill worker. Story 2.4
- * added the daily-digest worker. Story 4.1 adds the publish-timeline self-heal
- * worker alongside them: validate required env (DB + Redis), connect Redis,
- * register all seven workers, wire the timeline self-heal repeatable schedule,
- * and wire graceful shutdown (close all seven). The web request path never
- * imports this module — heavy work is async (AD-4).
+ * added the daily-digest worker. Story 4.1 added the publish-timeline self-heal
+ * worker. Story 5.1 added the recommendation-reason worker. Story 5.2 added the
+ * deep-read worker alongside them: validate required env (DB + Redis), connect
+ * Redis, register all nine workers, wire the timeline self-heal repeatable
+ * schedule, and wire graceful shutdown (close all nine). The web request path
+ * never imports this module — heavy work is async (AD-4).
  *
- * The seven workers are independent and idempotent: ingest does not trigger a
+ * The nine workers are independent and idempotent: ingest does not trigger a
  * cluster job automatically, cluster does not trigger an explain job, explain
  * does not trigger a market-reaction job, market-reaction does not trigger a
- * theme-backfill job, theme-backfill does not trigger a daily-digest job, and
- * none of the six triggers the publish-timeline self-heal automatically (the
- * jobs are decoupled; pipeline chaining/cron orchestration is deferred — see
- * deferred-work.md). The publish-timeline worker is the first to carry a
- * repeatable self-heal schedule (every 15 min, corrective only — the main
- * timeline refresh is the in-transaction refreshPublishedTimelineForEvent
- * inside decideReview, AD-3b method A). Each worker can run in isolation
- * against the shared DB/Redis.
+ * theme-backfill job, theme-backfill does not trigger a daily-digest job, none
+ * of those triggers the publish-timeline self-heal automatically, none triggers
+ * the recommendation-reason job automatically, and none triggers the deep-read
+ * job automatically (the jobs are decoupled; pipeline chaining/cron orchestration
+ * is deferred — see deferred-work.md). The publish-timeline worker is the only
+ * one carrying a repeatable self-heal schedule (every 15 min, corrective only —
+ * the main timeline refresh is the in-transaction refreshPublishedTimelineForEvent
+ * inside decideReview, AD-3b method A). Each worker can run in isolation against
+ * the shared DB/Redis.
  */
 
 import { requireEnv } from "@aguhot/config";
 
 import { closeRedis, getRedis } from "./queues/connection.js";
 import { registerDailyDigestWorker } from "./queues/daily-digest-queue.js";
+import { registerDeepReadWorker } from "./queues/deep-read-queue.js";
 import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
 import { registerExplainWorker } from "./queues/explain-queue.js";
 import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
-import {
-  registerPublishTimelineWorker,
-  schedulePublishTimelineSelfHeal,
-} from "./queues/publish-timeline-queue.js";
+import { registerPublishTimelineWorker, schedulePublishTimelineSelfHeal } from "./queues/publish-timeline-queue.js";
+import { registerRecommendationReasonWorker } from "./queues/recommendation-reason-queue.js";
 import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
 import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
 
@@ -54,6 +56,8 @@ async function main(): Promise<void> {
   const themeBackfillWorker = registerThemeBackfillWorker();
   const dailyDigestWorker = registerDailyDigestWorker();
   const publishTimelineWorker = registerPublishTimelineWorker();
+  const recommendationReasonWorker = registerRecommendationReasonWorker();
+  const deepReadWorker = registerDeepReadWorker();
 
   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
   // only — the main timeline refresh is the in-tx refreshPublishedTimeline-
@@ -61,7 +65,7 @@ async function main(): Promise<void> {
   // existing schedule with the same key on restart.
   await schedulePublishTimelineSelfHeal();
 
-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline workers registered and running");
+  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read workers registered and running");
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -73,6 +77,8 @@ async function main(): Promise<void> {
       themeBackfillWorker.close(),
       dailyDigestWorker.close(),
       publishTimelineWorker.close(),
+      recommendationReasonWorker.close(),
+      deepReadWorker.close(),
     ]);
     await closeRedis();
     process.exit(0);

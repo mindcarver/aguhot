@@ -1001,3 +1001,40 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 两类「筛选空」边沿分支（session 单独空 → fallback unfiltered 再读区分 read-model-empty；category 单独空 → isFilterEmpty）在当前 4-event band 播种夹具下结构性不可达，仅由 composite 交集测试间接覆盖。
   evidence: step-04 verification-gap + intent-alignment 审计：`apps/web/app/(public)/page.tsx:148-152` 的 fallback unfiltered 再读（`isReadModelEmpty && sessionTag !== undefined` 时再读一次无 sessionTag 的 timeline 以区分「读模型真空」vs「session 筛空」）只在「session 单独返回 `[]` 但读模型有行」时触发——而 `apps/web/e2e/seed-timeline.ts` 的 4 个事件铺满全部三个交易时段（intraday={半导体,铜价}、pre_open={稀土}、post_close={军工}），任何合法 `?session=` 都至少返回 1 行，故该 fallback 的 distinguishing branch（返回非空 → 翻 isReadModelEmpty=false → 走筛选空态）从无播种命中。同理 `page.tsx:187` 的 `isFilterEmpty` 经 category-alone 路径也不可达：seed 每个合法 category 至少匹配 2 个事件（concept→半导体+稀土、industry→半导体+稀土、stock→半导体+军工），唯一正向筛选空测试用 `?session=pre_open&category=stock` 复合交集（session 先收窄到 {稀土} 再被 category 去掉），不走 category-alone 路径。fallback 区分逻辑与 category-alone 空态路由因此只有间接/汇合路径覆盖，回归（删 fallback 或翻 isFilterEmpty 守卫）不会被任何测试捕获——这正是 spec Design Notes 警告的「读模型空 vs 筛选空混同」bug 的防线。补专门测试需扩展 seed 允许某 session/category 单独空（与现有 4-event band top-3 断言冲突），非平凡。
   resolution: 待 seed 夹具可扩展时补——加一个「某 session 单独无事件」+「某 category 单独无命中」的播种配置（或独立 dedicated seed），为 fallback unfiltered 再读的 distinguishing branch 与 category-alone isFilterEmpty 路径各加一个 `@timeline` e2e（断言筛选空态文案 + 清除链接，而非读模型空态）。属 4.3 测试覆盖加固，登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-card-recommendation-reason.md`（5.1 review pass 登记）
+  summary: recommendation-reason worker 的候选查询（findMany）与逐条 append 之间存在 `publicationStatus` TOCTOU——事件可能在两步之间由 candidate 翻为 rejected/taken_down，仍被追加一条 reason（孤儿审计行）
+  evidence: Story 5.1 worker（`apps/worker/src/queues/recommendation-reason-queue.ts`）一次 `findMany({ where: { publicationStatus: { in: ["candidate","published"] }, recommendationReasons: { none: {} } } })` 读出 pending 快照，随后逐条 `generateRecommendationReason`（append）。事件若在快照与 append 之间被复核员 rejected 或 taken_down，worker 仍会为其追加一条 `recommendation_reasons` 行；该行不会被投影（投影仅作用于 published 事件），但会滞留在 append-only 审计表（FK cascade 仅在 HotEvent 删除时触发，非状态变更），污染审计链。竞争窗口小、后果低（不可见、仅审计噪声）。
+  resolution: 在逐条处理循环内 append 前重读一次 `publicationStatus`，若已非 candidate/published 则 skip（每事件一次额外 findUnique）。后果低，未在 5.1 内做；登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-card-recommendation-reason.md`（5.1 review pass 登记）
+  summary: recommendation-reason 生成无并发锁——未来多 worker 进程并发会在同一事件上追加重复 reason 行
+  evidence: Story 5.1 worker（`apps/worker/src/queues/recommendation-reason-queue.ts`）与既有所有 worker（explain/digest/market-reaction 等）一致：单进程、无 advisory lock、无 BullMQ job 级互斥。`recommendation_reasons` 表按 AD-5 append-only、无 `(hotEventId, ...)` 唯一约束（幂等性靠候选查询的 `recommendationReasons: { none: {} }` 前置过滤）。今日单 worker 下安全；一旦横向扩成多 worker 进程，两个副本可能同时读到同一 pending 集合并为同一事件各 append 一行，投影在两行间非确定翻转。与既有 worker 模式同源，非 5.1 引入。
+  resolution: 待多进程扩容时，为 worker 加 BullMQ job 级按 hotEventId 互斥（或 Postgres advisory lock），或在表上加生成冷却约束。属 worker 运行模式级升级，超 5.1 范围，登记为 deferred。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-card-recommendation-reason.md`（5.1 review pass 登记）
+  summary: dev 库既有迁移 `20260710141148_association_read_models` checksum 漂移——未来任何 `prisma migrate dev` 会被要求全库 reset
+  evidence: Story 5.1 实现期发现本地 `aguhot_dev` 对 `20260710141148_association_read_models` 存在应用后被编辑的 checksum 漂移（早于 5.1，非本 story 引入）。`prisma migrate dev` 检测到该漂移会要求 reset 整库（销毁 dev 数据）；实现期改用 `prisma db execute` + `prisma migrate resolve --applied` 应用 5.1 迁移以绕开。漂移行仍在，`migrate status` 显示 up-to-date 但底层漂移未修。
+  resolution: 待专人择期对漂移迁移做 reconciliation（reset 或校正 checksum），与 5.1 无关，登记为 deferred。
+
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
+  summary: AI 措辞黑名单（6 类子串）对合法金融描述词（持仓/增持/主力/一定 等）false-positive，深读风险段更易误杀
+  evidence: Story 5.2 复用 5.1 的 `passesRecommendationGuardrail`/`RECOMMENDATION_FORBIDDEN_PHRASES`（子串匹配，有意保守）。深读三段（影响面/受益方/风险点）讨论风险时天然用到「持仓结构调整」「主力动向」「一定不确定性」等合法词，会被 fail-fast 拒绝→该事件落 null 缺失态。verify-deepread 证明黑名单拒绝全部词但未证明接受合法风险词汇。V1 用 Stub（固定串过黑名单）不触发；真实 provider 接入时会显现。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
+  summary: deep-read worker append→refresh 一致性洞 + candidate-query TOCTOU——已 published 事件深读投影可能缺失且永不被重扫
+  evidence: worker 对已 published 事件 append DeepRead 后调 `refreshPublishedReadModel(action:"publish")`；若该 refresh 失败（worker try/catch 捕获、log、continue，无 retry——retry 为 spec Never），该事件有 `deep_reads` 真相行但无 `published_hot_event_deep_reads` 投影，详情页显示缺失态。worker 下次运行的 `deepReads:{none:{}}` 候选过滤排除已有深读行的事件，永不重扫；detail 读模型无 self-heal（仅 timeline 有 15min self-heal）。另：findMany 与逐条 generate 之间存在 publicationStatus TOCTOU（刚被 rejected/taken_down 的事件留孤儿深读行，罕见、后果低、Cascade 清理）。与 5.1 deferred 的 recommendation-reason TOCTOU 同类。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-2-event-deep-read.md`
+  summary: deep-read adapter grounding 的 evidence 无 orderBy，adapter 收到非确定顺序（NFR-2 漂移）
+  evidence: `generateDeepRead` 加载 `event.evidence` 传给 adapter 作 grounding，relation select 未加 `orderBy`（如 publishedAt asc）。NFR-2 要求深读与证据时间线一致；非确定顺序可能影响真实 provider 的 grounding。V1 Stub 忽略全部上下文不触发；真实 provider 接入时显现。修法：select 加 `orderBy: { publishedAt: "asc" }`（或与 published 投影的 position 顺序对齐）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: daily-digest worker 共享 try/catch，trend 路径 throw 会标记整 job 失败、digest 重跑 append 重复行；post-V1 接真实双 adapter 后改为 per-path try/catch 上报部分成功
+  evidence: `apps/worker/src/queues/daily-digest-queue.ts` 的 handler 用单个 try/catch 包住 digest 与 trend 两条 `if (adapter !== undefined)` 路径；若 digest 成功（generated=1、refresh 已 commit）后 trend 路径 throw，catch re-throw → BullMQ 标记 job 失败，重跑时 digest 路径再 append 一条 daily_digests 行。spec AC（「任一 adapter undefined 时另一路径独立产出」）指 undefined 情形，code 的独立 `if` 块已满足；throw 情形 benign（append-only latest-wins、投影取最新、V1 无 retry、返回值无人消费），故 V1 不修。真实双 adapter 接入 + retry 启用后，改为 digest/trend 各自 try/catch、分别上报 {digestFailed, trendFailed} 以正确反映部分成功并避免重跑重复 append。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: /daily 页 trend-briefing fetch gate `digest !== null`，post-V1 双 adapter 且 digest adapter 失败时研判被隐藏
+  evidence: `apps/web/app/(public)/daily/page.tsx` 的 `trendBriefing` 三元式以 `digest !== null` 为前置条件，研判段渲染于 `<DigestContent>` 内（spec Code Map/Tasks 明示此放置，dev 照做）。日报与研判共用 `filterByCoverageDay` 发现当日事件，正常操作下 digest-null ⟺ 无当日事件 ⟺ briefing-null，故无丢失。仅 post-V1 两 adapter 都接入、且 digest adapter 返回 null/[] 而 llmAdapter 产出有效研判的窄边沿下，页面显示 `<DegradedContent>` 而隐藏已存在的 briefing。修法（届时）：`coverageDate !== undefined` 即并发 `Promise.all` 取两个投影，研判在 `<DegradedContent>` 与 `<DigestContent>` 均可渲染（或提到 digest 分支之上）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: trend-briefing-service `loadEventContext` 逐事件 findUnique（N+1，bounded ≤12）；改 batch findMany
+  evidence: `packages/core/src/modules/digest/trend-briefing-service.ts` 的 `loadEventContext` 对 top-12 事件逐个 `prisma.hotEvent.findUnique`（最多 12 次往返）。注释已标注「V1 scale is tiny…a future batched read is a one-line change」。无正确性问题、bounded；规模上行后改 `prisma.hotEvent.findMany({ where: { id: { in: ids } }, select: { revisions, explanationVersions } })` 一次取齐。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
+  summary: 6 类子串黑名单对合法金融词汇（持仓/增持/主力/一定 等）的 false-positive——研判现为其第 3 个消费者（reason/deepread/trendbriefing），真实 provider 接入时统一调
+  evidence: `passesRecommendationGuardrail` 为原始子串匹配（`reason-service.ts`），无 CJK 词界。研判段落更易触发（如「存在一定的不确定性」命中「一定」）。V1 Stub 文案已避开（dev 将示例「一定延续性」改为「延续性」）；5.2 deferred 已登记同类。3 个 AI 内容表面（reason/deepread/trendbriefing）共用此 guardrail，真实 provider 接入时需统一调（提升到 shared + 改名 + 词界感知，或按表面差异化白名单）。

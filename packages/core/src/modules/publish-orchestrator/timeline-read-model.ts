@@ -51,6 +51,13 @@ import type {
  * The projection input: everything refreshPublishedTimelineForEvent needs to
  * derive one timeline row from a published HotEvent. Loaded in one findUniqueOrThrow
  * with nested selects (same shape as refreshPublishedReadModel's event load).
+ *
+ * `recommendationReasons` (Story 5.1) is take:1 ordered createdAt desc + id desc
+ * — the latest AI 解读 row, or empty when none exist. projectTimelineFields
+ * projects its `reason` (or null) into published_timeline_entries.recommendation_
+ * reason. This keeps publish-orchestrator the SOLE writer of that column (AD-2/
+ * AD-3b): the recommendation-reason worker only appends recommendation_reasons
+ * and calls refreshPublishedTimelineForEvent to trigger this projection.
  */
 interface TimelineProjectionInput {
   title: string;
@@ -64,6 +71,7 @@ interface TimelineProjectionInput {
     };
   }>;
   explanationVersions: ReadonlyArray<{ summary: string }>;
+  recommendationReasons: ReadonlyArray<{ reason: string }>;
 }
 
 /**
@@ -82,6 +90,7 @@ function projectTimelineFields(input: TimelineProjectionInput): {
   summary: string;
   evidenceCount: number;
   foldedEvidenceRecordIds: string[];
+  recommendationReason: string | null;
 } | null {
   if (input.evidence.length === 0) {
     return null;
@@ -96,6 +105,15 @@ function projectTimelineFields(input: TimelineProjectionInput): {
   // state — the card renders an empty summary slot rather than fabricating one).
   const latestExplanation = input.explanationVersions[0] ?? null;
   const summary = latestExplanation !== null ? latestExplanation.summary : "";
+
+  // Recommendation reason (Story 5.1): latest RecommendationReason.reason, or
+  // null when none. Derived from the recommendation_reasons append-only table
+  // (explanation module owns it); publish-orchestrator projects the latest into
+  // published_timeline_entries.recommendation_reason — the SOLE writer of that
+  // column (AD-2/AD-3b). null → the 4.2 card renders NO AI 解读 slot (absent
+  // state, never an empty marketing placeholder).
+  const latestReason = input.recommendationReasons[0] ?? null;
+  const recommendationReason = latestReason !== null ? latestReason.reason : null;
 
   // occurredAt: the MAX member publishedAt. Falls back to the HotEvent's stable
   // createdAt when all members have null publishedAt (the column is non-null).
@@ -158,6 +176,7 @@ function projectTimelineFields(input: TimelineProjectionInput): {
     summary,
     evidenceCount: input.evidence.length,
     foldedEvidenceRecordIds,
+    recommendationReason,
   };
 }
 
@@ -219,6 +238,11 @@ export async function refreshPublishedTimelineForEvent(
         take: 1,
         select: { summary: true },
       },
+      recommendationReasons: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { reason: true },
+      },
     },
   });
 
@@ -228,6 +252,7 @@ export async function refreshPublishedTimelineForEvent(
     revisions: event.revisions,
     evidence: event.evidence,
     explanationVersions: event.explanationVersions,
+    recommendationReasons: event.recommendationReasons,
   };
   const projected = projectTimelineFields(input);
 
@@ -257,7 +282,7 @@ export async function refreshPublishedTimelineForEvent(
       evidenceCount: projected.evidenceCount,
       foldedEvidenceRecordIds:
         projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
-      recommendationReason: null,
+      recommendationReason: projected.recommendationReason,
       traceId,
     },
     update: {
@@ -270,6 +295,7 @@ export async function refreshPublishedTimelineForEvent(
       evidenceCount: projected.evidenceCount,
       foldedEvidenceRecordIds:
         projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
+      recommendationReason: projected.recommendationReason,
       traceId,
     },
   });
@@ -324,6 +350,11 @@ export async function refreshPublishedTimelineAll(
         take: 1,
         select: { summary: true },
       },
+      recommendationReasons: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { reason: true },
+      },
     },
   });
 
@@ -345,6 +376,7 @@ export async function refreshPublishedTimelineAll(
         revisions: event.revisions,
         evidence: event.evidence,
         explanationVersions: event.explanationVersions,
+        recommendationReasons: event.recommendationReasons,
       };
       const projected = projectTimelineFields(input);
       if (projected === null) {
@@ -367,7 +399,7 @@ export async function refreshPublishedTimelineAll(
           evidenceCount: projected.evidenceCount,
           foldedEvidenceRecordIds:
             projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
-          recommendationReason: null,
+          recommendationReason: projected.recommendationReason,
           traceId,
         },
         update: {
@@ -380,6 +412,7 @@ export async function refreshPublishedTimelineAll(
           evidenceCount: projected.evidenceCount,
           foldedEvidenceRecordIds:
             projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
+          recommendationReason: projected.recommendationReason,
           traceId,
         },
       });
