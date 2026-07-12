@@ -10,79 +10,61 @@ import { AiLabel } from "@/components/chips";
 import { cn } from "@/lib/utils";
 
 /**
- * Timeline feed card — Story 4.2 (Epic 4 时间流首页).
+ * Timeline feed entry — Story 6.3 (Epic 6 视觉对齐参考站).
  *
- * Renders one `PublishedTimelineEntry` (the per-HotEvent folded projection from
- * the 4.1 `published_timeline` read model) as a minute-level timeline card on
- * the public home feed. This card is DISTINCT from `event-card` (the V1
- * priority-feed card): the timeline answers "分钟级动态", event-card answered
- * "priority-sorted saliency" (the latter now lives only in `main-line-band`).
+ * Reworked from the 4.2 bordered card (`rounded-lg border bg-surface-raised`)
+ * to a borderless editorial-column entry (UX-DR4b / UX-DR16, 2026-07-12). The
+ * reference site (aihot.virxact.com) renders its feed as a borderless vertical
+ * column with a per-entry time rail + vertical rule + body; this card matches
+ * that form using aguhot's existing tokens (no token change — ui-ux-pro-max
+ * 2026-07-12 reconciliation confirmed the palette is correct).
  *
- * Fixed reading order (DESIGN `timeline-card`, UX-DR4b):
- *   timestamp + session tag → source → title → one-line summary →
- *   `AI 解读` slot (only when non-null) → evidence count.
- * Timestamp is visually de-emphasized via `ink-tertiary` + `font-mono` (DESIGN:
- * the numeric/meta layer). The whole card is a `<Link>` to the detail page
- * (`/events/{hotEventId}`) — the 1.8-deferred whole-card-click pattern, applied
- * to the timeline card.
+ * Three-column structure:
+ *   ┌──────────────────────────────────────────────┐
+ *   │ HH:mm   │ <navy 1px vertical rule> │ body    │
+ *   │ 时段     │                          │ 来源    │
+ *   │         │                          │ 标题    │
+ *   │         │                          │ 摘要    │
+ *   │         │                          │ 证据源  │
+ *   │         │                          │ (AI槽)  │
+ *   └──────────────────────────────────────────────┘
  *
- * `AI 解读` slot (DESIGN `ai-label` + the entry's `recommendationReason`):
- *   - Per spec Never: 4.2 does NOT generate `AI 解读`. The
- *     `published_timeline.recommendation_reason` field is a NULL slot reserved
- *     for Story 5.1. When it is null (the 4.2 default), the slot AND the
- *     AiLabel are NOT rendered — never an empty marketing placeholder.
- *   - When non-null (5.1+), the AiLabel renders adjacent to the reason copy,
- *     visually separated from the factual summary (DESIGN: AI label expresses
- *     "information source nature", not "superior").
- *   - Visual weight ≤ factual title/summary (PRD §10): the reason renders in
- *     `body-sm` ink-secondary, never bolder than the title/summary above it.
+ *   - Left rail: `HH:mm` (font-mono, ink-primary, semibold — LEADS the entry,
+ *     no longer de-emphasized) + session tag (盘前/盘中/盘后/非交易, ink-tertiary).
+ *   - Navy 1px vertical rule: `border-l border-brand` on the body. Echoes the
+ *     DESIGN `evidence-row` `borderLeft: 3px solid brand-primary` "traceable
+ *     evidence" semantic — every timeline entry is sourced, the rule signals
+ *     that. 1px (not 3px) so a column of entries stays light.
+ *   - Body: source name (ink-secondary, promoted to a first-class scan
+ *     element) → title (ink-primary semibold, factual anchor) → multi-line
+ *     summary (body-sm ink-secondary, density allowed) → evidence count →
+ *     AI 解读 slot (4.2 inline form; Story 6.4 upgrades to a solid-hairline
+ *     signature `EditorialReasonBlock`).
  *
- * Folding (FR-3 revised, "同事件精选"):
- *   - When `foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD` (default
- *     2, owned by event-assembly per AD-2), the card shows the「同事件精选」tag
- *     and a native `<details>` that discloses "精选自 N 条证据源（代表来源：
- *     {sourceName}）· 完整证据时间线请见详情页". Per spec Never: the card does NOT
- *     fabricate a per-source name/time list — `published_timeline` carries only
- *     `evidenceCount` + `foldedEvidenceRecordIds` (ids only) + a representative
- *     `sourceName`; the full per-source timeline is the detail page's
- *     `证据时间线` job (1.8). The `<details>` is a static disclosure with zero
- *     client JS (UX-DR4b "展开列出每条证据源的时间" is partially met — count +
- *     representative source here, full list on the detail page).
- *   - Single-source entries (length < 2) render independently with NO fold tag
- *     and NO reason tag (FR-3 revised: reason labels only appear when an entry
- *     deviates from pure time order).
+ * Whole-entry link (1.8 pattern): the rail + body is one `<Link>` to the
+ * detail page. The `<details>` fold disclosure is a SIBLING of the Link (NOT
+ * inside it) — a `<summary>` inside an `<a>` toggles disclosure AND navigates
+ * (card click wins, disclosure unreachable by mouse). Kept outside the anchor
+ * hit area so the summary toggles cleanly (4.2 review fix, preserved).
  *
- * Whole-card link + fold coexistence (Design Notes):
- *   The whole card body is wrapped in a `<Link>`. The `<details>`/`<summary>`
- *   (the「同事件精选」tag) is a SIBLING of the Link (a card footer), NOT inside
- *   it. A `<summary>` nested in an `<a>` toggles disclosure AND navigates on
- *   the same click — the card click wins, so the disclosure body was
- *   unreachable by mouse. Keeping the disclosure outside the anchor hit area
- *   means the summary toggles cleanly while the rest of the card navigates
- *   (the same sibling-not-descendant pattern event-card uses for FollowButton;
- *   here the reason is interaction correctness, not HTML validity).
+ * Hover: `hover:bg-surface-base` on the `<li>`, 150ms `transition-colors`. The
+ * global `@media (prefers-reduced-motion: reduce)` rule in globals.css
+ * collapses the transition to ~0ms (no per-component handling needed).
  *
- * Honest states (NFR-2):
+ * Honest states (NFR-2, preserved from 4.2):
  *   - Empty summary (`""`) → the summary slot renders nothing (the
  *     `published_timeline` projection stores `""` when no ExplanationVersion
- *     exists; honest degraded state, not a fabricated summary).
- *   - The card is only rendered when the read model has a row; the empty-read-
- *     model empty state is the page's responsibility (not the card's).
+ *     exists; honest degraded state, not fabricated).
+ *   - `recommendationReason` null/empty (5.1 pre-default) → AI slot + AiLabel
+ *     NOT rendered (no empty marketing placeholder).
+ *   - The card renders only when the read model has a row; page-level empty
+ *     state is the page's responsibility (not the card's).
  *
- * Tokens: reuses only real @theme tokens (bg-surface-raised /
- * border-border-hairline / rounded-lg / ink-* / bg-surface-muted / font-mono /
- * bg-accent-warm via AiLabel). No shadcn/ui (project doesn't install it). No
- * undefined tokens.
+ * Tokens: reuses only real @theme tokens (border-border-hairline / border-brand
+ * / surface-base / ink-* / font-mono / bg-accent-warm via AiLabel). No shadcn/ui
+ * (project doesn't install it). No undefined tokens. No token VALUE changes.
  */
 
-/**
- * The Chinese label for each A-share session tag, folded into the timestamp
- * meta line (e.g.「盘前 · 09:25 UTC」). Per spec Design Notes: `sessionTag` is
- * NOT a filter UI (4.3 owns filters) — it is a low-cost visual meta folded into
- * the timestamp row, `font-mono` + `ink-tertiary`. Defined here (not in core)
- * because this is a pure display concern of the timeline card; core's
- * TimelineSessionTag is the value authority, this map is the label authority.
- */
 const SESSION_TAG_LABEL: Record<TimelineSessionTagType, string> = {
   pre_open: "盘前",
   intraday: "盘中",
@@ -98,8 +80,6 @@ export function TimelineCard({ entry }: TimelineCardProps) {
   const { hotEventId, occurredAt, sessionTag, sourceName, title, summary } = entry;
 
   // Fold decision: pure >= check against the event-assembly-owned threshold.
-  // The read model stores the full folded id set; the THRESHOLD only controls
-  // the「同事件精选」TAG display here (publish-orchestrator does not read it).
   const isFolded = entry.foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD;
 
   // AI 解读 slot: render ONLY when recommendationReason is non-null (5.1+).
@@ -108,108 +88,89 @@ export function TimelineCard({ entry }: TimelineCardProps) {
   const hasRecommendation = recommendationReason !== null && recommendationReason !== "";
 
   return (
-    // hover lives on the <li> (not the Link) so the whole card — including the
-    // fold disclosure footer below — shares one hover affordance.
-    <li className="rounded-lg border border-border-hairline bg-surface-raised transition-colors hover:bg-surface-muted">
+    // hover on the <li> so the whole entry — including the fold disclosure
+    // footer below — shares one hover affordance. border-t (not border around)
+    // gives the borderless column its only separator.
+    <li className="border-t border-border-hairline transition-colors first:border-t-0 hover:bg-surface-base">
       {/*
-        Whole-card link (1.8 pattern applied to the timeline card). The card
-        body — meta → source → title → summary → (AI slot) → evidence count —
-        is wrapped in a Link so that block is one click target to the detail
-        page. The fold `<details>` is a SIBLING of the Link (below), NOT inside
-        it: a `<summary>` inside an `<a>` toggles disclosure AND navigates on
-        the same click (the card click wins, so the disclosure body was
-        unreachable by mouse). Keeping the disclosure outside the anchor hit
-        area means the summary toggles cleanly while the rest of the card still
-        navigates — the same sibling-not-descendant pattern event-card uses for
-        its FollowButton.
+        Whole-entry link (1.8 pattern): rail + body is one click target to the
+        detail page. The fold `<details>` is a SIBLING below (outside the
+        anchor) so its summary toggles without navigating.
       */}
-      <Link
-        href={`/events/${hotEventId}`}
-        className="block rounded-lg px-5 py-4"
-      >
+      <Link href={`/events/${hotEventId}`} className="flex items-stretch">
         {/*
-          Meta line: session tag + timestamp, visually de-emphasized
-          (ink-tertiary + font-mono). Session tag folds in as a prefix
-          (「盘前 · 09:25 UTC」). Reading order puts this FIRST per DESIGN
-          `timeline-card` (timestamp → source → title → summary → AI → count).
+          Left rail: HH:mm (LEADS, ink-primary semibold — no longer
+          de-emphasized) + session tag (ink-tertiary, below). Fixed width so
+          the vertical rule aligns across all entries in the column.
         */}
-        <div className="font-mono text-xs text-ink-tertiary">
-          {SESSION_TAG_LABEL[sessionTag]} · {formatDateTime(occurredAt)}
+        <div className="flex w-[68px] shrink-0 flex-col items-start gap-1 pt-3 pr-4">
+          <span className="font-mono text-[15px] font-semibold leading-none text-ink-primary">
+            {formatHHmm(occurredAt)}
+          </span>
+          <span className="font-mono text-[10px] text-ink-tertiary">
+            {SESSION_TAG_LABEL[sessionTag]}
+          </span>
         </div>
 
         {/*
-          Source line: representative source name. ink-secondary so it sits
-          below the timestamp meta but above the title. Kept on its own line so
-          the scan order (time → source → title) is unambiguous.
+          Body: navy 1px vertical rule (border-l border-brand — "traceable
+          evidence" semantic, echoes evidence-row) + content. Reading order:
+          source → title → summary → evidence count → (AI slot).
         */}
-        <div className="mt-1 text-sm text-ink-secondary">{sourceName}</div>
+        <div className="flex-1 border-l border-brand py-3 pl-[18px]">
+          <div className="text-[13px] text-ink-secondary">{sourceName}</div>
+          <h3 className="mt-1 text-[17px] font-semibold leading-snug text-ink-primary">{title}</h3>
+          {summary !== "" ? (
+            <p className="mt-1 text-sm leading-relaxed text-ink-secondary">{summary}</p>
+          ) : null}
 
-        {/*
-          Title: the factual anchor (effective HotEvent title). ink-primary +
-          semibold so it carries the most visual weight on the card (DESIGN:
-          factual title dominates; AI/explanation must not outweigh it).
-        */}
-        <h2 className="mt-1 text-lg font-semibold text-ink-primary">{title}</h2>
+          {/*
+            AI 解读 slot (PRD §10 / NFR-3). 4.2 inline form retained here;
+            Story 6.4 upgrades this to a solid-hairline signature
+            `EditorialReasonBlock` (visual weight ≤ factual title preserved).
+            Rendered ONLY when recommendationReason is non-null AND non-empty
+            (spec Never: no empty marketing placeholder).
+          */}
+          {hasRecommendation ? (
+            <div className="mt-2 flex items-start gap-2">
+              <AiLabel className="mt-0.5 shrink-0" />
+              <p className="text-sm text-ink-secondary">{recommendationReason}</p>
+            </div>
+          ) : null}
 
-        {/*
-          Summary: one-line explanation (latest ExplanationVersion.summary ?? "").
-          Only rendered when non-empty — the read model stores "" when no
-          ExplanationVersion exists (honest degraded state, not fabricated).
-          ink-secondary body-sm so it stays subordinate to the title.
-        */}
-        {summary !== "" ? (
-          <p className="mt-1 text-sm text-ink-secondary">{summary}</p>
-        ) : null}
-
-        {/*
-          AI 解读 slot (PRD §10 / NFR-3). Rendered ONLY when
-          recommendationReason is non-null AND non-empty. Pre-5.1 default is
-          null → no slot, no AiLabel, no empty marketing placeholder (spec
-          Never). Visual weight ≤ factual title/summary: body-sm +
-          ink-secondary, never bolder than the title above. The AiLabel is
-          adjacent (DESIGN: visually separated from the factual summary,
-          expresses "information source nature", not "superior").
-        */}
-        {hasRecommendation ? (
-          <div className="mt-2 flex items-start gap-2">
-            <AiLabel className="mt-0.5 shrink-0" />
-            <p className="text-sm text-ink-secondary">{recommendationReason}</p>
-          </div>
-        ) : null}
-
-        {/*
-          Evidence count: the last item in the reading order inside the
-          clickable body. font-mono + ink-tertiary matches the timestamp meta
-          layer (DESIGN: numeric layer). Kept visually quiet so it reads as
-          supporting meta, not a headline.
-        */}
-        <dl className="mt-2 font-mono text-xs text-ink-tertiary">
-          <div>
-            <dt className="inline">证据源 </dt>
-            <dd className="inline">{entry.evidenceCount}</dd>
-          </div>
-        </dl>
+          {/*
+            Evidence count: the last item in the reading order inside the
+            clickable body. font-mono + ink-tertiary matches the numeric meta
+            layer. Story 6.4 replaces this dl with a `SourceChipList`
+            (来源数 chip + 关联讨论来源 chips).
+          */}
+          <dl className="mt-2 font-mono text-xs text-ink-tertiary">
+            <div>
+              <dt className="inline">证据源 </dt>
+              <dd className="inline">{entry.evidenceCount}</dd>
+            </div>
+          </dl>
+        </div>
       </Link>
 
       {/*
         Fold disclosure (FR-3 revised,「同事件精选」) — a SIBLING of the Link,
-        rendered as a card footer. Only rendered when the entry folds >=
+        rendered as an entry footer. Only rendered when the entry folds >=
         TIMELINE_FOLD_THRESHOLD sources. Native `<details>`: zero client JS
-        (public pages are server components + force-dynamic, no useState /
-        loading skeleton per spec Never). Because it is OUTSIDE the anchor,
-        clicking the summary toggles disclosure without navigating (review fix:
-        previously the summary lived inside the `<a>` and the card click won on
-        every toggle, making the disclosure body unreachable by mouse).
+        (public pages are server components + force-dynamic). Because it is
+        OUTSIDE the anchor, clicking the summary toggles disclosure without
+        navigating (4.2 review fix — preserved).
+
+        Left padding (w-[68px] rail + pl-[18px] body = 86px) aligns the
+        disclosure under the body content, not under the rail.
 
         Per spec Never: the disclosure does NOT fabricate a per-source name/time
         list — `published_timeline` carries only evidenceCount +
         foldedEvidenceRecordIds (ids) + a representative sourceName; the full
-        per-source timeline is the detail page's `证据时间线` job (1.8). The
-        expanded body states the count + representative source + a guide to the
-        detail page.
+        per-source timeline is the detail page's `证据时间线` job (1.8).
       */}
       {isFolded ? (
-        <details className="px-5 pb-4">
+        <details className="pb-3 pl-[86px]">
           <summary
             className={cn(
               "inline-flex cursor-pointer items-center rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-ink-secondary",
@@ -218,11 +179,6 @@ export function TimelineCard({ entry }: TimelineCardProps) {
           >
             同事件精选
           </summary>
-          {/*
-            Expanded disclosure: count + representative source + a guide to the
-            detail page for the full per-source timeline. No fabricated
-            per-source name/time list (spec Never).
-          */}
           <p className="mt-2 text-xs text-ink-tertiary">
             精选自 {entry.evidenceCount} 条证据源（代表来源：{sourceName}）·
             完整证据时间线请见详情页
@@ -234,14 +190,13 @@ export function TimelineCard({ entry }: TimelineCardProps) {
 }
 
 /**
- * Locale-stable UTC format (mirrors event-card.tsx's formatDateTime). Avoids
- * locale-dependent toLocaleString so the timestamp stays consistent across
- * build-time TZ and runtime TZ. YYYY-MM-DD HH:mm UTC is enough for the timeline
- * card meta line. Per spec Design Notes: each card can自带 formatDateTime
- * (consistent with event-card); kept as a local helper rather than a shared
- * util to avoid coupling the two card components' formatting independently.
+ * Locale-stable HH:mm format. Avoids locale-dependent toLocaleString so the
+ * timestamp stays consistent across build-time TZ and runtime TZ. The
+ * `published_timeline.occurredAt` is a UTC instant; `toISOString().slice(11,16)`
+ * yields the UTC HH:mm. V1 displays UTC time (the 4.2 formatDateTime showed
+ * full `YYYY-MM-DD HH:mm UTC`; 6.3 drops to HH:mm per UX-DR4b — the date
+ * context now lives in the DateSectionDivider, the per-entry time is HH:mm).
  */
-function formatDateTime(d: Date): string {
-  const iso = d.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+function formatHHmm(d: Date): string {
+  return d.toISOString().slice(11, 16);
 }

@@ -2,7 +2,7 @@
 title: '时间流条目改无边框编辑型纵栏 (6.3)'
 type: 'feature'
 created: '2026-07-12'
-status: 'review'
+status: 'done'
 baseline_commit: 'dc75c39f50ec125abc7bea3bb8f9430fc33acd51'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
@@ -146,5 +146,9 @@ Findings touching 6.3:
 - **[P1] timeline.spec card reading-order test guaranteed-fail** — ADDRESSED. The `@timeline` card test asserted timestamp `/UTC$/` + card `heading level: 2`; 6.3 changed timestamp to HH:mm (no UTC suffix) and (after the P2 fix below) card title to `<h3>`. Updated: `/UTC$/`→`/^\d{2}:\d{2}$/`, `level: 2`→`level: 3`. (Moved out of 6.5 deferral — Codex correctly flagged guaranteed-fail.)
 - **[P2] heading hierarchy inverted (date h3 < card h2)** — ADDRESSED. DateSectionDivider was `<h3>`, TimelineCard title was `<h2>` → screen-reader heading nav promoted each event above its date section; and if the hot-events list was empty, the page jumped H1→H3. Fixed: DateSectionDivider h3→h2, TimelineCard title h2→h3. Hierarchy is now H1 (masthead) → H2 (「当前热点」+ date sections) → H3 (card titles). No H1→H3 skip (date h2 fills the gap when hot list is empty).
 - **[P2] multi-date grouping unreachable** — ACKNOWLEDGED, KEPT with rationale. `listPublishedTimeline({ prisma, traceId, sessionTag })` defaults to the latest trade_date (one date), so `filteredEntries` typically holds one Map key → one date section. The grouping is NOT dead code: it renders the current-date header (useful context「7 月 12 日 · 周六（非交易日）」) and is future-proof for when the read supports a date range (load-more / date-span filter — a logged future feature). Rejecting Codex's "supply a bounded multi-date feed before grouping": forcing a read-model change to justify the grouping would be scope creep; the single-date header alone justifies the divider. The multi-date path is correct (verified via scratch with 2 tradeDates) — it's just not exercised by the default read yet.
+
+### 2026-07-12 — Codex re-review (round 2, code-only diff)
+- **[P1] timeline.spec reading-order assertion failed under flex** — ADDRESSED. The card test retained `expect(tsY).toBeLessThan(srcY)` (timestamp above source) from the 4.2 stacked layout. In the 6.3 3-column flex layout the rail (timestamp) and body (source) share the same top coordinate (rail `pt-3` / body `py-3` ≈ 12px) — timestamp is LEFT of source, not above. The assertion failed every seeded `e2e:timeline` run. Fixed: assert x-order for the rail/body split (`tsX < srcX` via a new `leftX` helper) + y-order for the body's internal reading order (`srcY < titleY < countY`, retained). Added `leftX` helper next to `topY`.
+
 
 

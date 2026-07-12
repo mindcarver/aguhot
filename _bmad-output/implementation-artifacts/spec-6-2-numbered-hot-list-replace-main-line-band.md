@@ -2,7 +2,7 @@
 title: '编号式「当前热点」排行替换 MainLineBand (6.2)'
 type: 'feature'
 created: '2026-07-12'
-status: 'review'
+status: 'done'
 baseline_commit: 'dc75c39f50ec125abc7bea3bb8f9430fc33acd51'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
@@ -134,5 +134,10 @@ Findings touching 6.2:
 - **[P1] timeline.spec band test guaranteed-fail** — ADDRESSED. The `@timeline` band test asserted region「今日重点 / 市场主线」+ top-3 li; NumberedHotList replaced both. Updated: region→「当前热点」, top-3→top-5 (4 seeded events → 4 li, 稀土 no longer drops), reason-tag absence assertions kept (NumberedHotList carries none — pins the intentional drop). Empty-state independence test + file-header/seed comments synced. (Originally deferred to 6.5; Codex correctly flagged a guaranteed-failing committed suite — moved the timeline.spec update into 6.2/6.3 rather than leaving it broken.)
 - **[P2] subtitle「随时间消退」misrepresents algorithm** — ADDRESSED. `listPublishedHotEvents` orders by `evidenceCount DESC, latestEvidenceAt DESC` (no time-decay — an older high-evidence event stays ranked first). Subtitle changed「多信源热度 · 随时间消退」→「多信源热度排序」(accurate, NFR-2: don't misrepresent). The「随时间消退」copy was copied verbatim from the reference site without checking aguhot's algorithm.
 - **[P2] multi-date grouping unreachable** — see spec-6-3 (page.tsx grouping; acknowledged there, kept as future-proof).
+
+### 2026-07-12 — Codex re-review (round 2, code-only diff)
+- **[P2] future timestamp misreported as「刚刚」** — ADDRESSED. `formatRelative` had `if (diffMs < 60_000) return "刚刚"` which implicitly caught negative diff (future latestEvidenceAt). Ingestion does not reject future `publishedAt`, so clock skew / malformed feeds could land a future timestamp displayed as「刚刚」, concealing the anomaly. Added an EXPLICIT `if (diffMs < 0) return "刚刚"` branch (first) with a comment documenting the anomaly + deferring the real fix (reject future timestamps at ingestion) — the branch is now visible in code, not silently caught. Display「刚刚」is the least-bad fallback for slight skew.
+- **[P2] `<ol>` lost list semantics after Preflight reset** — ADDRESSED. Tailwind Preflight's `ol { list-style: none }` causes Safari/VoiceOver to stop exposing a marker-less `<ol>` as a list. The numbered list relies on that reset (explicit `{i+1}` numbers, no `::marker`) but omitted `role="list"`. Added `role="list"` to the `<ol>` so assistive-tech users hear an ordered 5-item ranking, not unrelated rows.
+
 
 

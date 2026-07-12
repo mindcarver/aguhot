@@ -37,7 +37,7 @@ import { seedTimelineFeed, type SeededTimeline } from "./seed-timeline";
  *   - Empty-state copy + 最近更新 — needs a deterministic empty DB, covered by
  *     the @timeline block (which clears published_timeline_entries then asserts).
  *   - Populated timeline cards / fold disclosure / reading order / AI 解读 slot
- *     / main-line-band items — all covered by the @timeline seeded block.
+ *     / numbered-hot-list items — all covered by the @timeline seeded block.
  *   - Story 4.3 filter BEHAVIOR (session hit / filter empty / category positive
  *     + negative / session+category combo / URL restore) — covered by the
  *     @timeline seeded block (needs deterministic data + associations).
@@ -55,9 +55,7 @@ test.describe("时间流首页 (Story 4.2)", () => {
     expect(response!.url(), "should remain on public homepage").toMatch(/\/$/);
 
     // 2. Masthead preserved byte-for-byte from 1.1 (home.spec.ts contract).
-    await expect(
-      page.getByRole("heading", { level: 1, name: "AGUHOT" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "AGUHOT" })).toBeVisible();
     await expect(page.getByText("可信热点发布闭环")).toBeVisible();
   });
 
@@ -121,10 +119,10 @@ test.describe("时间流首页 (Story 4.2)", () => {
  *   - folded: 半导体 event with 2 member evidence records → evidenceCount 2 →
  *     foldedEvidenceRecordIds.length >= TIMELINE_FOLD_THRESHOLD(2) → 「同事件精选」.
  *   - single: 稀土 event with 1 member evidence record → single-source card.
- *   - 军工 + 铜价: two more single-source events so the band top-3 slice is
- *     observable (4 published, band caps at 3). Story 4.3 also pins these:
- *     军工 gets a stock association (stock-only), 铜价 gets NO association (the
- *     category-filter negative sample).
+ *   - 军工 + 铜价: two more single-source events so the numbered-hot-list top-5
+ *     slice is observable (4 published, all render under top-5). Story 4.3 also
+ *     pins these: 军工 gets a stock association (stock-only), 铜价 gets NO
+ *     association (the category-filter negative sample).
  *
  * Story 4.3 association injection (category filter fixtures): 半导体 gets
  * concept+industry+stock items; 稀土 gets concept+industry; 军工 gets stock only;
@@ -137,7 +135,7 @@ test.describe("时间流首页 (Story 4.2)", () => {
  *   - 时间流默认视图 (cards render in the fixed reading order)
  *   - 折叠条目 (fold tag + disclosure of N sources)
  *   - 单源条目 (no fold tag, no reason tag — FR-3 revised)
- *   - main-line-band 置顶项 (top-N saliency band renders + links)
+ *   - numbered-hot-list 排行项 (top-N saliency list renders + links, Story 6.2)
  *   - AI 解读槽 null (recommendationReason stays NULL pre-5.1 → no AiLabel)
  *   - Story 4.3: session hit / filter empty / category positive + negative /
  *     session+category combo / URL restore (the filter behavior matrix).
@@ -154,41 +152,31 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     seeded = await seedTimelineFeed();
   });
 
-  test("main-line-band 渲染 top-3 saliency、每项可点进详情、诚实理由标签 (FR-3)", async ({
-    page,
-  }) => {
+  test("numbered-hot-list 渲染 top-5 saliency、每项可点进详情 (Story 6.2)", async ({ page }) => {
     await page.goto("/");
 
-    // The band is a region whose accessible name comes from its heading.
-    const band = page.getByRole("region", { name: "今日重点 / 市场主线" });
-    await expect(band, "main-line band renders when hot-events has data").toBeVisible();
-    // Band ordering = evidenceCount DESC, latestEvidenceAt DESC. 半导体 (count 2)
-    // is rank 1; the three count-1 events break by pinned latestEvidenceAt DESC:
-    // 军工 (07:30Z) > 铜价 (06:00Z) > 稀土 (01:15Z). Top-3 = {半导体, 军工, 铜价};
-    // 稀土 drops to rank 4 (outside top-3) under the pinned-timestamp seed.
-    await expect(band.getByRole("link", { name: /半导体/ })).toBeVisible();
-    await expect(band.getByRole("link", { name: /军工/ })).toBeVisible();
+    // The numbered hot list is a region whose accessible name comes from its
+    // heading「当前热点」(Story 6.2 replaced the 4.2 MainLineBand card-band).
+    const hotList = page.getByRole("region", { name: "当前热点" });
+    await expect(hotList, "numbered hot list renders when hot-events has data").toBeVisible();
+    // Ordering = evidenceCount DESC, latestEvidenceAt DESC (listPublishedHotEvents
+    // contract, unchanged from 4.2). 半导体 (count 2) is rank 1; the three count-1
+    // events break by pinned latestEvidenceAt DESC: 军工 (07:30Z) > 铜价 (06:00Z)
+    // > 稀土 (01:15Z). Top-5 caps at 5; the seed publishes 4 events, so all 4
+    // render (稀土 no longer drops — it was rank 4, outside the 4.2 top-3 but
+    // inside the 6.2 top-5).
+    await expect(hotList.getByRole("link", { name: /半导体/ })).toBeVisible();
+    await expect(hotList.getByRole("link", { name: /军工/ })).toBeVisible();
 
-    // top-N slice: 4 events published, band caps at MAIN_LINE_BAND_TOP_N (3).
-    await expect(band.locator("li")).toHaveCount(3);
+    // top-N slice: 4 events published, all render (top-5 > 4).
+    await expect(hotList.locator("li")).toHaveCount(4);
 
-    // Honest ranking-reason tag (FR-3): the seed pins evidence publishedAt to
-    // 2024-01-02 so occurredAt/latestEvidenceAt are ~930 days old at test time
-    // (2026-07) — well outside the 72h recency window. None of the 4 events has
-    // evidenceCount >= 3 either (半导体=2, the rest=1), so NO reason tag renders
-    // (neither「近期升温」nor「多源覆盖」). This pins the no-tag branch: a regression
-    // that fabricates a reason, or inverts the recency/multi-source precedence,
-    // fails here. (Pre-pin this asserted「近期升温」; the pin made recency false, so
-    // the expectation follows the now-deterministic data per the review-driven
-    // constraint.)
-    await expect(
-      band.getByText("近期升温", { exact: true }),
-      "no 近期升温 tag: pinned 2024-01-02 dates are outside the 72h window",
-    ).toHaveCount(0);
-    await expect(
-      band.getByText("多源覆盖", { exact: true }),
-      "no 多源覆盖 tag: no seeded event reaches evidenceCount >= 3",
-    ).toHaveCount(0);
+    // No ranking-reason chips: Story 6.2 dropped the 4.2 band's「近期升温」/
+    //「多源覆盖」tags (the reference-site numbered list carries none; the number
+    // conveys rank). Assert absence to pin that the drop is intentional, not a
+    // regression that re-introduces stale tags.
+    await expect(hotList.getByText("近期升温", { exact: true })).toHaveCount(0);
+    await expect(hotList.getByText("多源覆盖", { exact: true })).toHaveCount(0);
   });
 
   test("时间流卡按固定阅读顺序渲染 + 整卡可点进详情（折叠卡）", async ({ page }) => {
@@ -202,14 +190,24 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     // Reading order is ORDINAL (DESIGN timeline-card, UX-DR4b): timestamp →
     // source → title → summary → (AI) → evidence count. Assert vertical order
     // via bounding-box y positions, not just presence — a reorder that placed
-    // the count above the title would otherwise pass.
-    const tsY = await topY(foldedCard.getByText(/UTC$/));
+    // the count above the title would otherwise pass. Story 6.3 changed the
+    // timestamp to HH:mm (was "YYYY-MM-DD HH:mm UTC") and the card title to
+    // <h3> (was <h2>, heading-hierarchy fix — date section is now <h2>).
+    // Story 6.3 changed the card to a 3-column flex layout: left rail
+    // (timestamp + session) | navy vertical rule | body (source → title →
+    // summary → count, vertical). The timestamp is LEFT of the source (same
+    // row, rail vs body), NOT above — so assert x-order for the rail/body
+    // split + y-order for the body's internal reading order. (The prior
+    // `tsY < srcY` assumed the 4.2 stacked layout and fails under flex —
+    // rail pt-3 and body py-3 share the same top coordinate.)
+    const tsX = await leftX(foldedCard.getByText(/^\d{2}:\d{2}$/));
+    const srcX = await leftX(foldedCard.getByText("timeline-e2e-半导体源").first());
+    expect(tsX, "timestamp rail is left of the source body").toBeLessThan(srcX);
     const srcY = await topY(foldedCard.getByText("timeline-e2e-半导体源").first());
-    const titleY = await topY(foldedCard.getByRole("heading", { level: 2 }));
+    const titleY = await topY(foldedCard.getByRole("heading", { level: 3 }));
     // The count <dl> is unique (the disclosure's "精选自 N 条证据源" lives in a
     // <p>, not a dl), so scope by element rather than text to avoid an ambiguity.
     const countY = await topY(foldedCard.locator("dl"));
-    expect(tsY, "timestamp above source").toBeLessThan(srcY);
     expect(srcY, "source above title").toBeLessThan(titleY);
     expect(titleY, "title above evidence count").toBeLessThan(countY);
 
@@ -250,9 +248,7 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
   test("单源卡不带「同事件精选」标签，整卡仍可点进详情 (FR-3 revised)", async ({ page }) => {
     await page.goto("/");
 
-    const singleCard = page
-      .locator("section[aria-label='时间流'] li", { hasText: "稀土" })
-      .first();
+    const singleCard = page.locator("section[aria-label='时间流'] li", { hasText: "稀土" }).first();
 
     await expect(singleCard, "single-source timeline card renders").toBeVisible();
     await expect(
@@ -392,9 +388,7 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     // default unfiltered view. Pins the mergeTimelineSearchParams two-key-delete
     // → "/" branch that no pill href exercises (pills always set a value).
     await timeline.getByRole("link", { name: "清除筛选" }).click();
-    await expect(page, "clear-all drops both session and category").toHaveURL(
-      /^[^?]*$/,
-    );
+    await expect(page, "clear-all drops both session and category").toHaveURL(/^[^?]*$/);
     await expect(
       timeline.getByText("当前筛选条件下暂无时间流条目。"),
       "filter-empty copy is gone after clear-all",
@@ -520,9 +514,7 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     // Click the active 「个股」 pill → its href clears ?category= but preserves
     // ?session=intraday (mergeTimelineSearchParams drops only "category").
     await filterNav.locator("a", { hasText: "个股" }).first().click();
-    await expect(page, "category cleared, session preserved").toHaveURL(
-      /session=intraday/,
-    );
+    await expect(page, "category cleared, session preserved").toHaveURL(/session=intraday/);
     await expect(page, "category is gone from the URL").not.toHaveURL(/category=/);
     // The session pill stays active; the category pill reverts to default.
     await expect(
@@ -535,9 +527,7 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
     ).not.toHaveClass(/\bbg-brand\b/);
   });
 
-  test("URL 还原：直访带筛选的 URL 还原 pill active 态 (Story 4.3, FR-2)", async ({
-    page,
-  }) => {
+  test("URL 还原：直访带筛选的 URL 还原 pill active 态 (Story 4.3, FR-2)", async ({ page }) => {
     // Direct visit a URL with BOTH filters set; assert the active state is
     // restored purely from the URL (server-rendered, no client state). This is
     // the shareable/refresh/back-forward invariant.
@@ -600,14 +590,15 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
       "empty state cites a last-updated time",
     ).toBeVisible();
 
-    // Independence invariant (spec I/O matrix): the band reads a SEPARATE read
-    // model (published_hot_events), so clearing the timeline projection must NOT
-    // hide the band. Only publishedTimelineEntry was cleared above — the hot-
-    // events rows from the seed are still present, so the band still renders.
-    // Pins that the two empty states are genuinely independent.
+    // Independence invariant (spec I/O matrix): the numbered hot list reads a
+    // SEPARATE read model (published_hot_events), so clearing the timeline
+    // projection must NOT hide it. Only publishedTimelineEntry was cleared
+    // above — the hot-events rows from the seed are still present, so the
+    // numbered hot list still renders. Pins that the two empty states are
+    // genuinely independent.
     await expect(
-      page.getByRole("region", { name: "今日重点 / 市场主线" }),
-      "band stays visible when only the timeline read model is empty",
+      page.getByRole("region", { name: "当前热点" }),
+      "numbered hot list stays visible when only the timeline read model is empty",
     ).toBeVisible();
   });
 
@@ -676,6 +667,16 @@ test.describe("时间流首页 — 播种数据面 (Story 4.2) @timeline", () =>
 async function topY(locator: import("@playwright/test").Locator): Promise<number> {
   const box = await locator.boundingBox();
   return box?.y ?? Number.NaN;
+}
+
+/**
+ * Horizontal (left) position of a locator's bounding box — for asserting
+ * column order in the 6.3 flex 3-column timeline card (rail left of body).
+ * Returns NaN if the box is unavailable.
+ */
+async function leftX(locator: import("@playwright/test").Locator): Promise<number> {
+  const box = await locator.boundingBox();
+  return box?.x ?? Number.NaN;
 }
 
 test("重复键 ?session=…&session=… / ?category=…&category=… 取首个不抛 TypeError (Story 4.3)", async ({
