@@ -239,6 +239,13 @@ export async function refreshPublishedTimelineForEvent(
         select: { summary: true },
       },
       recommendationReasons: {
+        // Story 5.4: skip suppressed reasons so a surgical takedown survives the
+        // whole-event refresh (republish / self-heal). The latest non-suppressed
+        // row wins; all suppressed → empty → recommendationReason projects null.
+        // The signal is co-located on the source row (suppressedAt), which the
+        // projection already reads — no cross-module reverse dependency on
+        // review-workflow / ReviewDecision.
+        where: { suppressedAt: null },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 1,
         select: { reason: true },
@@ -351,6 +358,11 @@ export async function refreshPublishedTimelineAll(
         select: { summary: true },
       },
       recommendationReasons: {
+        // Story 5.4: skip suppressed reasons (same where clause as the per-event
+        // refresh above — keeps the self-heal recompute consistent with the
+        // in-transaction projection so a suppressed reason cannot be revived by
+        // the periodic full-recompute pass).
+        where: { suppressedAt: null },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 1,
         select: { reason: true },

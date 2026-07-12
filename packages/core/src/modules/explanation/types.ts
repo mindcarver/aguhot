@@ -453,3 +453,106 @@ export interface LlmTrendBriefingArgs {
     summary: string;
   }>;
 }
+
+// --- Story 5.4: AI content operator sampling (suppress + sampling list) --------
+
+/**
+ * The discriminator for which kind of AI content a Story 5.4 operation targets.
+ * Stored as a free String column value (on ReviewDecision.targetType) and used to
+ * route suppressAiContent to the right source-table writer + projection refresh.
+ *
+ * The wire values are "reason" and "deepread" (lowercase, matching the table-name
+ * family). TrendBriefing is DELIBERATELY excluded (epic Gap 2: V1 does not allow
+ * marking / taking down trend briefings — the sampling console is browse-only for
+ * them, and SM-6 numerator / denominator both exclude trend briefings). The
+ * server action whitelist rejects any targetType outside this const's values, so
+ * a forged "trend_briefing" submit never reaches suppressAiContent.
+ *
+ * Kept as a const + type pair (no Prisma enum, per erasableSyntaxOnly). Mirrors
+ * the FollowTargetKind / PublicationStatus precedent.
+ */
+export const AiContentType = {
+  Reason: "reason",
+  DeepRead: "deepread",
+} as const;
+
+export type AiContentType = (typeof AiContentType)[keyof typeof AiContentType];
+
+/**
+ * Options for suppressRecommendationReason — the SOLE writer of
+ * recommendation_reasons.suppressedAt (AD-2 source-table ownership). Idempotent:
+ * if the row's suppressedAt is already non-null, returns `{ suppressed: false,
+ * reason: "already-suppressed" }` and writes nothing (prevents SM-6 numerator
+ * double-counting via repeat ReviewDecision appends). If the row is missing,
+ * Prisma's findUniqueOrThrow raises P2025 → the caller's transaction rolls back
+ * (fail-fast, no partial state).
+ *
+ * `{ prisma, traceId, id }` accepts either the root PrismaClient or a
+ * `$transaction` tx handle (the sibling suppressAiContent passes its tx cast to
+ * PrismaClient so the source suppress + ReviewDecision append + projection
+ * refresh are atomic). Mirrors the established `{ prisma, traceId }` shape.
+ */
+export interface SuppressRecommendationReasonOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  id: string;
+}
+
+/**
+ * The result of a source-row suppress attempt. `{ suppressed: true }` on a fresh
+ * suppress (suppressedAt was null → set to now). `{ suppressed: false, reason:
+ * "already-suppressed" }` on an idempotent re-suppress (suppressedAt was already
+ * set → no write, no duplicate ReviewDecision). The caller (suppressAiContent)
+ * branches on `suppressed` to decide whether to append the audit row.
+ */
+export interface SuppressResult {
+  suppressed: boolean;
+  reason?: "already-suppressed";
+}
+
+/**
+ * Options for suppressDeepRead — the SOLE writer of deep_reads.suppressedAt.
+ * Same shape + idempotency contract as SuppressRecommendationReasonOptions (the
+ * two source tables have identical append-only + suppress semantics).
+ */
+export interface SuppressDeepReadOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  id: string;
+}
+
+/**
+ * Options for listAiContentForSampling — the operator sampling-console data
+ * source. Returns a unified list across recommendation_reasons + deep_reads
+ * (trend briefings are EXCLUDED — epic Gap 2). `type?` filters to one kind;
+ * omitted returns both. The list is NOT filtered by suppressedAt (operators need
+ * to see already-suppressed rows + their "已下线" marker). Ordered by createdAt
+ * desc across both kinds. No pagination (V1 volume is tiny; matches the
+ * listPendingCandidates / listPublishedHotEvents no-pagination precedent — real
+ * pagination is deferred).
+ */
+export interface ListAiContentForSamplingOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  /** Optional filter to one kind. Omitted = both reason + deepread. */
+  type?: AiContentType;
+}
+
+/**
+ * One unified sampling-console row. The `type` discriminator lets the UI render
+ * a type tag + route the suppress form to the right targetType. `content` is a
+ * display preview: the reason text for "reason", or the three deep-read segments
+ * concatenated for "deepread" (the console shows a preview, not the full block).
+ * `suppressedAt` is null while live, non-null when an operator has suppressed the
+ * row (the UI renders a "已下线" marker and hides the suppress button, UX-DR14).
+ */
+export interface AiContentSamplingItem {
+  type: AiContentType;
+  id: string;
+  hotEventId: string;
+  eventTitle: string;
+  content: string;
+  source: string;
+  createdAt: Date;
+  suppressedAt: Date | null;
+}

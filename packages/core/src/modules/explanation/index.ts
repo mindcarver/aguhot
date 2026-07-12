@@ -27,6 +27,7 @@ export { generateExplanation, getLatestExplanation, derivePartitions, saveExplan
 export {
   generateRecommendationReason,
   getLatestRecommendationReason,
+  suppressRecommendationReason,
   passesRecommendationGuardrail,
   RECOMMENDATION_REASON_MAX_LENGTH,
   RECOMMENDATION_FORBIDDEN_PHRASES,
@@ -34,15 +35,20 @@ export {
 export {
   generateDeepRead,
   getLatestDeepRead,
+  suppressDeepRead,
   DEEP_READ_SEGMENT_MAX_LENGTH,
 } from "./deep-read-service.js";
+export {
+  listAiContentForSampling,
+  AI_CONTENT_SAMPLING_TAKE_LIMIT,
+} from "./ai-content-sampling-service.js";
 export {
   StubLlmAdapter,
   STUB_RECOMMENDATION_REASON,
   STUB_DEEP_READ,
   STUB_TREND_BRIEFING,
 } from "./stub-llm-adapter.js";
-export { ExplanationSource } from "./types.js";
+export { ExplanationSource, AiContentType } from "./types.js";
 export type {
   ExplanationSource as ExplanationSourceType,
   ExplanationPartitions,
@@ -65,4 +71,10 @@ export type {
   GenerateDeepReadOptions,
   GenerateDeepReadResult,
   DeepReadRecord,
+  AiContentType as AiContentTypeType,
+  SuppressRecommendationReasonOptions,
+  SuppressDeepReadOptions,
+  SuppressResult,
+  ListAiContentForSamplingOptions,
+  AiContentSamplingItem,
 } from "./types.js";

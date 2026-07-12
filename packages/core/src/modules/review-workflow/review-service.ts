@@ -28,6 +28,8 @@
 
 import type { PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
+import { suppressDeepRead } from "../explanation/deep-read-service.js";
+import { suppressRecommendationReason } from "../explanation/reason-service.js";
 import { refreshPublishedReadModel } from "../publish-orchestrator/publish-service.js";
 import { refreshPublishedTimelineForEvent } from "../publish-orchestrator/timeline-read-model.js";
 import { resolveTransition } from "./transitions.js";
@@ -39,11 +41,19 @@ import type {
   DecideReviewResult,
   GetCandidateDetailOptions,
   GetPublishedEventForRevisionOptions,
+  GetSm6MisleadingRateOptions,
   ListPendingCandidatesOptions,
   PendingCandidateSummary,
   PublishedEventRevisionView,
+  Sm6MisleadingRate,
+  SuppressAiContentOptions,
+  SuppressAiContentResult,
 } from "./types.js";
-import { CandidateNotFoundError, IllegalTransitionError } from "./types.js";
+import {
+  CandidateNotFoundError,
+  IllegalTransitionError,
+  SUPPRESS_AI_CONTENT_OUTCOME,
+} from "./types.js";
 
 /**
  * Execute one operator review decision atomically.
@@ -474,4 +484,184 @@ function tagsEqual(a: string[], b: string[]): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+// --- Story 5.4: AI content operator sampling ----------------------------------
+
+/**
+ * Suppress one piece of AI content (one recommendation_reasons or deep_reads row)
+ * — the SIBLING function to decideReview. Story 5.4.
+ *
+ * This function reuses decideReview's "single $transaction + append ReviewDecision
+ * + call publish-orchestrator refresh" COORDINATION SHAPE but DOES NOT touch the
+ * HotEvent state machine: it never calls decideReview / resolveTransition, never
+ * writes hot_events.publicationStatus, never appends a PublicationDecision. The
+ * outcome string "suppress_ai_content" is written directly to ReviewDecision.outcome
+ * (a free String column) — it is NOT added to the ReviewOutcome const / LEGAL_TRANSITIONS
+ * (those feed the state-machine selfcheck; adding it would perturb the count + a
+ * resolveTransition branch). See spec-5-4 Design Notes for the full rationale.
+ *
+ * Single transaction (atomic — mirrors decideReview's atomicity guarantee):
+ *   1. Call the source-table suppress fn (suppressRecommendationReason /
+ *      suppressDeepRead — the SOLE writers of their respective suppressedAt columns).
+ *      Pass the tx handle so the suppress is part of this transaction.
+ *   2. If the source returns `{ suppressed: false, reason: "already-suppressed" }`
+ *      → return the same idempotent result WITHOUT appending a ReviewDecision or
+ *      refreshing (prevents SM-6 numerator double-counting on a repeat submit).
+ *   3. Append one ReviewDecision (outcome="suppress_ai_content", targetType,
+ *      targetId, note, reviewer, traceId). The audit row is scoped to hotEventId
+ *      (the event whose AI content was judged misleading) even though the state
+ *      machine is not touched.
+ *   4. Read hot_events.publicationStatus. If it is "published", call the matching
+ *      publish-orchestrator refresh (refreshPublishedTimelineForEvent for a reason,
+ *      refreshPublishedReadModel for a deep read) so the public surface reflects
+ *      the suppress immediately (timeline reason → null; deep-read row → deleted).
+ *      For non-published events (candidate / taken_down / rejected) NO refresh is
+ *      issued — refreshPublishedTimelineForEvent({action:"publish"}) would upsert
+ *      a published row, which is wrong for an unpublished event; the source
+ *      suppressedAt persists, and the next legitimate publish (via decideReview)
+ *      naturally skips the suppressed row in its projection (where:{suppressedAt:null}).
+ *      Reading publicationStatus does NOT write it — the state-machine-zero-edits
+ *      invariant holds.
+ *
+ * Missing target: the source suppress fn's findUniqueOrThrow raises Prisma P2025
+ * → the transaction rolls back (fail-fast, no partial suppress). The verify script
+ * asserts the throw.
+ *
+ * Never calls decideReview / resolveTransition. This is a SIBLING, not a new
+ * decideReview outcome — the epic ruling "do not change decideReview's HotEvent
+ * state machine" is honored literally.
+ */
+export async function suppressAiContent(
+  options: SuppressAiContentOptions,
+): Promise<SuppressAiContentResult> {
+  const { prisma, traceId, targetType, targetId, hotEventId, reviewer, note } = options;
+
+  return prisma.$transaction(async (tx) => {
+    const client = tx as unknown as PrismaClient;
+
+    // 1. Suppress the source row (sole writer of suppressedAt). The fn is
+    //    idempotent: an already-suppressed row returns {suppressed:false} and we
+    //    short-circuit WITHOUT appending a duplicate ReviewDecision (prevents
+    //    SM-6 numerator double-counting). findUniqueOrThrow raises P2025 on a
+    //    missing target → tx rolls back (fail-fast).
+    const suppressResult =
+      targetType === "reason"
+        ? await suppressRecommendationReason({ prisma: client, traceId, id: targetId })
+        : await suppressDeepRead({ prisma: client, traceId, id: targetId });
+
+    if (!suppressResult.suppressed) {
+      // Idempotent: already suppressed — no duplicate audit row, no refresh.
+      return { suppressed: false, reason: "already-suppressed" } satisfies SuppressAiContentResult;
+    }
+
+    // 2. Append the audit row (outcome="suppress_ai_content", targetType, targetId).
+    //    Scoped to hotEventId for audit even though the state machine is not touched.
+    await client.reviewDecision.create({
+      data: {
+        id: newTraceId(),
+        hotEventId,
+        outcome: SUPPRESS_AI_CONTENT_OUTCOME,
+        reviewer,
+        note: note ?? null,
+        targetType,
+        targetId,
+        traceId,
+      },
+    });
+
+    // 3. Refresh the public projection ONLY when the event is currently published.
+    //    refreshPublishedTimelineForEvent({action:"publish"}) upserts a published
+    //    row — calling it on a candidate/taken_down event would wrongly publish it.
+    //    The source suppressedAt persists regardless; a non-published event's next
+    //    legitimate publish (via decideReview) naturally skips the suppressed row.
+    //    Reading publicationStatus does NOT write it (state machine untouched).
+    const event = await client.hotEvent.findUniqueOrThrow({
+      where: { id: hotEventId },
+      select: { publicationStatus: true },
+    });
+    if (event.publicationStatus === "published") {
+      if (targetType === "reason") {
+        // Timeline projection: re-derives recommendation_reason from the latest
+        // non-suppressed reason row → null when all are suppressed.
+        await refreshPublishedTimelineForEvent({
+          prisma: client,
+          traceId,
+          hotEventId,
+          action: "publish",
+        });
+      } else {
+        // Read-model projection: projectDeepRead's where:{suppressedAt:null} skips
+        // the suppressed row → published row deleted (or falls back to an earlier
+        // unsuppressed version). refreshPublishedReadModel(publish) re-projects
+        // the whole event read model atomically.
+        await refreshPublishedReadModel({
+          prisma: client,
+          traceId,
+          hotEventId,
+          action: "publish",
+        });
+      }
+    }
+
+    return { suppressed: true } satisfies SuppressAiContentResult;
+  });
+}
+
+/**
+ * Compute the SM-6 misleading-rate readout — the 7-day rolling window ratio of
+ * suppressed AI content decisions to total AI content generated. Story 5.4.
+ *
+ * Epic Gap 4 literal, operationalized on structured columns (Design Notes: the
+ * epic's "note misleading" phrasing is a sketch; the structured query needs
+ * indexable columns, so "misleading" = the existence of a suppress_ai_content
+ * decision, expressed as `outcome="suppress_ai_content" AND targetType∈{reason,
+ * deepread}`; note is operator free-text, not a query field):
+ *   - numerator = ReviewDecision.count({ outcome: "suppress_ai_content",
+ *       targetType ∈ {"reason","deepread"}, createdAt ≥ now-windowDays }).
+ *   - denominator = recommendationReason.count({ createdAt ≥ window }) +
+ *       deepRead.count({ createdAt ≥ window }) — aggregate AI content generated
+ *       in the same window (TrendBriefing EXCLUDED, epic Gap 2).
+ *   - rate = denominator === 0 ? 0 : numerator/denominator (the UI shows "暂无数据"
+ *     when denominator is 0 — the readout is meaningless until there is generated
+ *     content to judge).
+ *
+ * Lives in review-workflow because it owns the ReviewDecision numerator table.
+ * The denominator reads cross into explanation's source tables (read-only counts;
+ * no write dependency). SM-6 target: rate < 10%.
+ */
+export async function getSm6MisleadingRate(
+  options: GetSm6MisleadingRateOptions,
+): Promise<Sm6MisleadingRate> {
+  const { prisma, windowDays = 7 } = options;
+
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+  // Numerator: suppress decisions in the window targeting reason or deepread
+  // (TrendBriefing targets never reach ReviewDecision — the server-action
+  // whitelist rejects them — but the targetType:{in:[...]} belt-and-suspenders
+  // ensures a forged row cannot inflate the numerator).
+  const numerator = await prisma.reviewDecision.count({
+    where: {
+      outcome: SUPPRESS_AI_CONTENT_OUTCOME,
+      targetType: { in: ["reason", "deepread"] },
+      createdAt: { gte: since },
+    },
+  });
+
+  // Denominator: total reason + deepread rows generated in the same window
+  // (TrendBriefing excluded — it is not suppressible in V1, so counting it would
+  // dilute the ratio with un-judgeable content).
+  const [reasonCount, deepReadCount] = await Promise.all([
+    prisma.recommendationReason.count({ where: { createdAt: { gte: since } } }),
+    prisma.deepRead.count({ where: { createdAt: { gte: since } } }),
+  ]);
+  const denominator = reasonCount + deepReadCount;
+
+  return {
+    rate: denominator === 0 ? 0 : numerator / denominator,
+    numerator,
+    denominator,
+    windowDays,
+  };
 }

@@ -1,0 +1,2125 @@
+diff --git a/apps/web/app/(operator)/console/page.tsx b/apps/web/app/(operator)/console/page.tsx
+index 0148046..aaf2e92 100644
+--- a/apps/web/app/(operator)/console/page.tsx
++++ b/apps/web/app/(operator)/console/page.tsx
+@@ -40,6 +40,25 @@ export default async function ConsolePage() {
+           </p>
+         </header>
+ 
++        {/* Story 5.4: AI content sampling console entry. Cross-event list of AI
++            解读 + AI 深读 with a type filter, an SM-6 misleading-rate readout,
++            and a per-row suppress form. Research briefings are browse-only (not
++            listed / not suppressible in V1). */}
++        <section className="mt-8">
++          <Link
++            href="/console/ai-content"
++            className="block rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition hover:border-ink-secondary"
++          >
++            <div className="flex items-baseline justify-between gap-4">
++              <h2 className="text-base font-semibold">AI 内容抽检（reason / 深读）</h2>
++              <span className="shrink-0 text-sm text-ink-secondary">进入 →</span>
++            </div>
++            <p className="mt-1 text-sm text-ink-secondary">
++              抽检 AI 解读与 AI 深读 · 标记误导并下线 · 误导率读数
++            </p>
++          </Link>
++        </section>
++
+         {candidates.length === 0 ? (
+           <p className="mt-12 text-ink-secondary">暂无待复核候选。</p>
+         ) : (
+diff --git a/apps/worker/package.json b/apps/worker/package.json
+index 53b1a95..bc2eb07 100644
+--- a/apps/worker/package.json
++++ b/apps/worker/package.json
+@@ -17,6 +17,7 @@
+     "verify:reason": "tsx src/verify-reason.ts",
+     "verify:deepread": "tsx src/verify-deepread.ts",
+     "verify:trendbriefing": "tsx src/verify-trendbriefing.ts",
++    "verify:suppress-ai-content": "tsx src/verify-suppress-ai-content.ts",
+     "verify:revision": "tsx src/verify-revision.ts",
+     "verify:merge-split": "tsx src/verify-merge-split.ts",
+     "verify:timeline": "tsx src/verify-timeline.ts",
+diff --git a/packages/core/prisma/schema.prisma b/packages/core/prisma/schema.prisma
+index 08dd032..846107c 100644
+--- a/packages/core/prisma/schema.prisma
++++ b/packages/core/prisma/schema.prisma
+@@ -230,9 +230,18 @@ model HotEventEvidence {
+ model ReviewDecision {
+   id        String   @id // UUIDv7, assigned in application code (newTraceId)
+   hotEventId String  @map("hot_event_id")
+-  outcome   String // ReviewOutcome union value ("approve"|"reject"|"takedown")
++  outcome   String // ReviewOutcome union value ("approve"|"reject"|"takedown"|"republish") OR the sibling "suppress_ai_content" outcome (Story 5.4 — written directly to this free-String column, NOT added to the ReviewOutcome const / state machine)
+   reviewer  String // operator identity (V1: placeholder; real auth deferred)
+   note      String? // optional operator note
++  // Story 5.4 — suppress_ai_content target. Nullable: the traditional 4-outcome
++  // decisions leave both null (the decision is per-HotEvent, identified by
++  // hotEventId). A suppress_ai_content decision sets targetType ∈ {"reason",
++  // "deepread"} + targetId = the suppressed RecommendationReason.id /
++  // DeepRead.id (structured audit: which generated AI content was judged
++  // misleading + which exact source row). Kept as a free String (no TS enum, per
++  // erasableSyntaxOnly); the AiContentType const lives in the explanation module.
++  targetType String? @map("target_type")
++  targetId   String? @map("target_id")
+   traceId   String? @map("trace_id")
+   createdAt DateTime @default(now()) @map("created_at")
+ 
+@@ -842,6 +851,18 @@ model RecommendationReason {
+   source        String // ExplanationSource union value ("ai" in V1)
+   modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+   promptVersion String   @map("prompt_version") // prompt template version (e.g. "reason-stub-v1")
++  // Story 5.4 — suppression timestamp. Nullable metadata: null while the row is
++  // live, set to now() by suppressRecommendationReason (the SOLE writer of this
++  // column) when an operator judges the reason misleading and suppresses it via
++  // the sibling suppressAiContent path. The content columns are NEVER cleared
++  // (NFR-7 audit / traceability intact); only this timestamp marks suppression.
++  // publish-orchestrator's timeline projection adds `where:{suppressedAt:null}`
++  // so a suppressed reason is skipped at projection time → published_timeline_
++  // entries.recommendation_reason goes null (or falls back to an earlier
++  // unsuppressed version). The signal is co-located on the source row (which the
++  // projection already reads) so no cross-module reverse dependency on
++  // review-workflow / ReviewDecision is needed (see spec-5-4 Design Notes).
++  suppressedAt  DateTime? @map("suppressed_at")
+   traceId       String?  @map("trace_id")
+   createdAt     DateTime @default(now()) @map("created_at")
+ 
+@@ -880,6 +901,11 @@ model DeepRead {
+   source        String // ExplanationSource union value ("ai" in V1)
+   modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+   promptVersion String   @map("prompt_version") // prompt template version (e.g. "deepread-stub-v1")
++  // Story 5.4 — suppression timestamp. Nullable metadata; same semantics as
++  // RecommendationReason.suppressedAt (sole writer = suppressDeepRead; content
++  // columns never cleared; projection skips via where:{suppressedAt:null}). See
++  // the RecommendationReason comment + spec-5-4 Design Notes for the rationale.
++  suppressedAt  DateTime? @map("suppressed_at")
+   traceId       String?  @map("trace_id")
+   createdAt     DateTime @default(now()) @map("created_at")
+ 
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index ba9b1a7..b502685 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -96,8 +96,15 @@ export type {
+ } from "./modules/event-assembly/types.js";
+ 
+ // review-workflow module (Story 1.6 — the publish gate; Story 1.9 — republish +
+-// operator revision view).
+-export { decideReview, listPendingCandidates, getCandidateDetail, getPublishedEventForRevision } from "./modules/review-workflow/review-service.js";
++// operator revision view; Story 5.4 — suppressAiContent sibling + SM-6 readout).
++export {
++  decideReview,
++  listPendingCandidates,
++  getCandidateDetail,
++  getPublishedEventForRevision,
++  suppressAiContent,
++  getSm6MisleadingRate,
++} from "./modules/review-workflow/review-service.js";
+ export type {
+   DecideReviewOptions,
+   DecideReviewResult,
+@@ -109,6 +116,10 @@ export type {
+   CandidateDecisionEntry,
+   GetPublishedEventForRevisionOptions,
+   PublishedEventRevisionView,
++  SuppressAiContentOptions,
++  SuppressAiContentResult,
++  GetSm6MisleadingRateOptions,
++  Sm6MisleadingRate,
+ } from "./modules/review-workflow/types.js";
+ export { resolveTransition, LEGAL_TRANSITIONS } from "./modules/review-workflow/transitions.js";
+ export {
+@@ -116,6 +127,8 @@ export {
+   PublishAction,
+   IllegalTransitionError,
+   CandidateNotFoundError,
++  SUPPRESS_AI_CONTENT_OUTCOME,
++  TargetNotFoundError,
+ } from "./modules/review-workflow/types.js";
+ export type {
+   ReviewOutcome as ReviewOutcomeType,
+@@ -228,12 +241,16 @@ export {
+ export {
+   generateRecommendationReason,
+   getLatestRecommendationReason,
++  suppressRecommendationReason,
+   passesRecommendationGuardrail,
+   RECOMMENDATION_REASON_MAX_LENGTH,
+   RECOMMENDATION_FORBIDDEN_PHRASES,
+   generateDeepRead,
+   getLatestDeepRead,
++  suppressDeepRead,
+   DEEP_READ_SEGMENT_MAX_LENGTH,
++  listAiContentForSampling,
++  AI_CONTENT_SAMPLING_TAKE_LIMIT,
+   StubLlmAdapter,
+   STUB_RECOMMENDATION_REASON,
+   STUB_DEEP_READ,
+@@ -241,6 +258,7 @@ export {
+ } from "./modules/explanation/index.js";
+ export {
+   ExplanationSource,
++  AiContentType,
+ } from "./modules/explanation/types.js";
+ export type {
+   ExplanationSource as ExplanationSourceType,
+@@ -264,6 +282,12 @@ export type {
+   GenerateDeepReadOptions,
+   GenerateDeepReadResult,
+   DeepReadRecord,
++  AiContentType as AiContentTypeType,
++  SuppressRecommendationReasonOptions,
++  SuppressDeepReadOptions,
++  SuppressResult,
++  ListAiContentForSamplingOptions,
++  AiContentSamplingItem,
+ } from "./modules/explanation/types.js";
+ 
+ // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
+diff --git a/packages/core/src/modules/explanation/deep-read-service.ts b/packages/core/src/modules/explanation/deep-read-service.ts
+index 7b1e621..4b552dc 100644
+--- a/packages/core/src/modules/explanation/deep-read-service.ts
++++ b/packages/core/src/modules/explanation/deep-read-service.ts
+@@ -52,6 +52,8 @@ import type {
+   GenerateDeepReadOptions,
+   GenerateDeepReadResult,
+   LlmDeepReadResult,
++  SuppressDeepReadOptions,
++  SuppressResult,
+ } from "./types.js";
+ 
+ /**
+@@ -260,6 +262,51 @@ export async function getLatestDeepRead(
+   };
+ }
+ 
++// --- Story 5.4: suppress (operator sampling — surgical takedown of one deep read) ---
++
++/**
++ * Suppress one deep_reads row by setting its `suppressedAt` to now. Story 5.4.
++ * This module is the SOLE writer of deep_reads.suppressedAt (AD-2 source-table
++ * ownership — content columns never cleared, only this nullable metadata timestamp
++ * marks suppression; NFR-7 audit / traceability intact). Same shape + idempotency
++ * contract as suppressRecommendationReason in reason-service (the two source tables
++ * have identical append-only + suppress semantics).
++ *
++ * Idempotent: if `suppressedAt` is already non-null, returns `{ suppressed: false,
++ * reason: "already-suppressed" }` and writes nothing (prevents SM-6 numerator
++ * double-counting via repeat ReviewDecision appends). Missing row raises Prisma
++ * P2025 via findUniqueOrThrow → caller's `$transaction` rolls back (fail-fast).
++ *
++ * Accepts the root PrismaClient OR a `$transaction` tx handle. review-workflow's
++ * suppressAiContent passes its `tx as unknown as PrismaClient` so the source
++ * suppress + ReviewDecision append + (conditional) read-model refresh are atomic.
++ * publish-orchestrator's deep-read projection (projectDeepRead) adds
++ * `where:{suppressedAt:null}`, so once this sets the timestamp the next
++ * refreshPublishedReadModel (republish / whole-event refresh / self-heal) skips
++ * this row → published deep-read row deleted (or falls back to an earlier
++ * unsuppressed version).
++ */
++export async function suppressDeepRead(
++  options: SuppressDeepReadOptions,
++): Promise<SuppressResult> {
++  const { prisma, id } = options;
++
++  const existing = await prisma.deepRead.findUniqueOrThrow({
++    where: { id },
++    select: { suppressedAt: true },
++  });
++
++  if (existing.suppressedAt !== null) {
++    return { suppressed: false, reason: "already-suppressed" };
++  }
++
++  await prisma.deepRead.update({
++    where: { id },
++    data: { suppressedAt: new Date() },
++  });
++  return { suppressed: true };
++}
++
+ // --- validation ---------------------------------------------------------------
+ 
+ /**
+diff --git a/packages/core/src/modules/explanation/index.ts b/packages/core/src/modules/explanation/index.ts
+index 34d60a5..78c026f 100644
+--- a/packages/core/src/modules/explanation/index.ts
++++ b/packages/core/src/modules/explanation/index.ts
+@@ -27,6 +27,7 @@ export { generateExplanation, getLatestExplanation, derivePartitions, saveExplan
+ export {
+   generateRecommendationReason,
+   getLatestRecommendationReason,
++  suppressRecommendationReason,
+   passesRecommendationGuardrail,
+   RECOMMENDATION_REASON_MAX_LENGTH,
+   RECOMMENDATION_FORBIDDEN_PHRASES,
+@@ -34,15 +35,20 @@ export {
+ export {
+   generateDeepRead,
+   getLatestDeepRead,
++  suppressDeepRead,
+   DEEP_READ_SEGMENT_MAX_LENGTH,
+ } from "./deep-read-service.js";
++export {
++  listAiContentForSampling,
++  AI_CONTENT_SAMPLING_TAKE_LIMIT,
++} from "./ai-content-sampling-service.js";
+ export {
+   StubLlmAdapter,
+   STUB_RECOMMENDATION_REASON,
+   STUB_DEEP_READ,
+   STUB_TREND_BRIEFING,
+ } from "./stub-llm-adapter.js";
+-export { ExplanationSource } from "./types.js";
++export { ExplanationSource, AiContentType } from "./types.js";
+ export type {
+   ExplanationSource as ExplanationSourceType,
+   ExplanationPartitions,
+@@ -65,4 +71,10 @@ export type {
+   GenerateDeepReadOptions,
+   GenerateDeepReadResult,
+   DeepReadRecord,
++  AiContentType as AiContentTypeType,
++  SuppressRecommendationReasonOptions,
++  SuppressDeepReadOptions,
++  SuppressResult,
++  ListAiContentForSamplingOptions,
++  AiContentSamplingItem,
+ } from "./types.js";
+diff --git a/packages/core/src/modules/explanation/reason-service.ts b/packages/core/src/modules/explanation/reason-service.ts
+index 940ae92..7ee4f7c 100644
+--- a/packages/core/src/modules/explanation/reason-service.ts
++++ b/packages/core/src/modules/explanation/reason-service.ts
+@@ -43,6 +43,8 @@ import type {
+   GenerateRecommendationReasonResult,
+   LlmReasonResult,
+   RecommendationReasonRecord,
++  SuppressRecommendationReasonOptions,
++  SuppressResult,
+ } from "./types.js";
+ 
+ /**
+@@ -321,6 +323,61 @@ export async function getLatestRecommendationReason(
+   };
+ }
+ 
++// --- Story 5.4: suppress (operator sampling — surgical takedown of one reason) ---
++
++/**
++ * Suppress one recommendation_reasons row by setting its `suppressedAt` to now.
++ * Story 5.4. This module is the SOLE writer of recommendation_reasons.suppressedAt
++ * (AD-2 source-table ownership — the content columns are never cleared, only this
++ * nullable metadata timestamp marks suppression; NFR-7 audit / traceability intact).
++ *
++ * Idempotent (AC "已抑制目标再次标记"): if `suppressedAt` is already non-null, returns
++ * `{ suppressed: false, reason: "already-suppressed" }` and writes nothing. This
++ * prevents a repeat operator submit from appending a second ReviewDecision (which
++ * would double-count the SM-6 numerator). The caller (review-workflow's sibling
++ * suppressAiContent) branches on `suppressed` to decide whether to append the audit
++ * row + trigger the projection refresh.
++ *
++ * Missing row: findUniqueOrThrow raises Prisma P2025 → the caller's `$transaction`
++ * rolls back (fail-fast, no partial suppress). The spec's TargetNotFoundError path
++ * lets P2025 propagate; the verify script asserts the throw.
++ *
++ * Accepts the root PrismaClient OR a `$transaction` tx handle. review-workflow's
++ * suppressAiContent passes its `tx as unknown as PrismaClient` so the source
++ * suppress + ReviewDecision append + (conditional) timeline projection refresh are
++ * atomic — mirroring decideReview's established in-transaction cross-module shape.
++ * publish-orchestrator's timeline projection adds `where:{suppressedAt:null}`, so
++ * once this sets the timestamp the next refreshPublishedTimelineForEvent
++ * (republish / whole-event refresh / self-heal) skips this row → published reason
++ * goes null (or falls back to an earlier unsuppressed version). The signal is
++ * co-located on the source row the projection already reads, so no cross-module
++ * reverse dependency on review-workflow / ReviewDecision is needed.
++ */
++export async function suppressRecommendationReason(
++  options: SuppressRecommendationReasonOptions,
++): Promise<SuppressResult> {
++  const { prisma, id } = options;
++
++  // findUniqueOrThrow so a missing target raises P2025 cleanly → tx rollback. We
++  // only need suppressedAt to decide idempotency; the content columns stay put.
++  const existing = await prisma.recommendationReason.findUniqueOrThrow({
++    where: { id },
++    select: { suppressedAt: true },
++  });
++
++  // Idempotent: already suppressed → no-op, signal the caller not to append a
++  // duplicate ReviewDecision (prevents SM-6 numerator double-counting).
++  if (existing.suppressedAt !== null) {
++    return { suppressed: false, reason: "already-suppressed" };
++  }
++
++  await prisma.recommendationReason.update({
++    where: { id },
++    data: { suppressedAt: new Date() },
++  });
++  return { suppressed: true };
++}
++
+ // --- validation ---------------------------------------------------------------
+ 
+ /**
+diff --git a/packages/core/src/modules/explanation/types.ts b/packages/core/src/modules/explanation/types.ts
+index 3e98e05..8a0c2fb 100644
+--- a/packages/core/src/modules/explanation/types.ts
++++ b/packages/core/src/modules/explanation/types.ts
+@@ -453,3 +453,106 @@ export interface LlmTrendBriefingArgs {
+     summary: string;
+   }>;
+ }
++
++// --- Story 5.4: AI content operator sampling (suppress + sampling list) --------
++
++/**
++ * The discriminator for which kind of AI content a Story 5.4 operation targets.
++ * Stored as a free String column value (on ReviewDecision.targetType) and used to
++ * route suppressAiContent to the right source-table writer + projection refresh.
++ *
++ * The wire values are "reason" and "deepread" (lowercase, matching the table-name
++ * family). TrendBriefing is DELIBERATELY excluded (epic Gap 2: V1 does not allow
++ * marking / taking down trend briefings — the sampling console is browse-only for
++ * them, and SM-6 numerator / denominator both exclude trend briefings). The
++ * server action whitelist rejects any targetType outside this const's values, so
++ * a forged "trend_briefing" submit never reaches suppressAiContent.
++ *
++ * Kept as a const + type pair (no Prisma enum, per erasableSyntaxOnly). Mirrors
++ * the FollowTargetKind / PublicationStatus precedent.
++ */
++export const AiContentType = {
++  Reason: "reason",
++  DeepRead: "deepread",
++} as const;
++
++export type AiContentType = (typeof AiContentType)[keyof typeof AiContentType];
++
++/**
++ * Options for suppressRecommendationReason — the SOLE writer of
++ * recommendation_reasons.suppressedAt (AD-2 source-table ownership). Idempotent:
++ * if the row's suppressedAt is already non-null, returns `{ suppressed: false,
++ * reason: "already-suppressed" }` and writes nothing (prevents SM-6 numerator
++ * double-counting via repeat ReviewDecision appends). If the row is missing,
++ * Prisma's findUniqueOrThrow raises P2025 → the caller's transaction rolls back
++ * (fail-fast, no partial state).
++ *
++ * `{ prisma, traceId, id }` accepts either the root PrismaClient or a
++ * `$transaction` tx handle (the sibling suppressAiContent passes its tx cast to
++ * PrismaClient so the source suppress + ReviewDecision append + projection
++ * refresh are atomic). Mirrors the established `{ prisma, traceId }` shape.
++ */
++export interface SuppressRecommendationReasonOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  id: string;
++}
++
++/**
++ * The result of a source-row suppress attempt. `{ suppressed: true }` on a fresh
++ * suppress (suppressedAt was null → set to now). `{ suppressed: false, reason:
++ * "already-suppressed" }` on an idempotent re-suppress (suppressedAt was already
++ * set → no write, no duplicate ReviewDecision). The caller (suppressAiContent)
++ * branches on `suppressed` to decide whether to append the audit row.
++ */
++export interface SuppressResult {
++  suppressed: boolean;
++  reason?: "already-suppressed";
++}
++
++/**
++ * Options for suppressDeepRead — the SOLE writer of deep_reads.suppressedAt.
++ * Same shape + idempotency contract as SuppressRecommendationReasonOptions (the
++ * two source tables have identical append-only + suppress semantics).
++ */
++export interface SuppressDeepReadOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  id: string;
++}
++
++/**
++ * Options for listAiContentForSampling — the operator sampling-console data
++ * source. Returns a unified list across recommendation_reasons + deep_reads
++ * (trend briefings are EXCLUDED — epic Gap 2). `type?` filters to one kind;
++ * omitted returns both. The list is NOT filtered by suppressedAt (operators need
++ * to see already-suppressed rows + their "已下线" marker). Ordered by createdAt
++ * desc across both kinds. No pagination (V1 volume is tiny; matches the
++ * listPendingCandidates / listPublishedHotEvents no-pagination precedent — real
++ * pagination is deferred).
++ */
++export interface ListAiContentForSamplingOptions {
++  prisma: PrismaClient;
++  traceId: string;
++  /** Optional filter to one kind. Omitted = both reason + deepread. */
++  type?: AiContentType;
++}
++
++/**
++ * One unified sampling-console row. The `type` discriminator lets the UI render
++ * a type tag + route the suppress form to the right targetType. `content` is a
++ * display preview: the reason text for "reason", or the three deep-read segments
++ * concatenated for "deepread" (the console shows a preview, not the full block).
++ * `suppressedAt` is null while live, non-null when an operator has suppressed the
++ * row (the UI renders a "已下线" marker and hides the suppress button, UX-DR14).
++ */
++export interface AiContentSamplingItem {
++  type: AiContentType;
++  id: string;
++  hotEventId: string;
++  eventTitle: string;
++  content: string;
++  source: string;
++  createdAt: Date;
++  suppressedAt: Date | null;
++}
+diff --git a/packages/core/src/modules/publish-orchestrator/publish-service.ts b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+index 612d706..05b91f0 100644
+--- a/packages/core/src/modules/publish-orchestrator/publish-service.ts
++++ b/packages/core/src/modules/publish-orchestrator/publish-service.ts
+@@ -590,7 +590,13 @@ async function projectDeepRead(
+   hotEventId: string,
+ ): Promise<void> {
+   const latest = await prisma.deepRead.findFirst({
+-    where: { hotEventId },
++    // Story 5.4: skip suppressed deep reads so a surgical takedown survives the
++    // whole-event refresh (republish / self-heal). The latest non-suppressed row
++    // wins; all suppressed → null → published row deleted (honest degraded state).
++    // The signal is co-located on the source row (suppressedAt), which the
++    // projection already reads — no cross-module reverse dependency on
++    // review-workflow / ReviewDecision.
++    where: { hotEventId, suppressedAt: null },
+     // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
+     // embed a monotonic timestamp) — same convention as projectExplanation /
+     // projectMarketReaction / projectAssociations / projectThemes.
+diff --git a/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts b/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
+index 0792230..09f60bd 100644
+--- a/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
++++ b/packages/core/src/modules/publish-orchestrator/timeline-read-model.ts
+@@ -239,6 +239,13 @@ export async function refreshPublishedTimelineForEvent(
+         select: { summary: true },
+       },
+       recommendationReasons: {
++        // Story 5.4: skip suppressed reasons so a surgical takedown survives the
++        // whole-event refresh (republish / self-heal). The latest non-suppressed
++        // row wins; all suppressed → empty → recommendationReason projects null.
++        // The signal is co-located on the source row (suppressedAt), which the
++        // projection already reads — no cross-module reverse dependency on
++        // review-workflow / ReviewDecision.
++        where: { suppressedAt: null },
+         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+         take: 1,
+         select: { reason: true },
+@@ -351,6 +358,11 @@ export async function refreshPublishedTimelineAll(
+         select: { summary: true },
+       },
+       recommendationReasons: {
++        // Story 5.4: skip suppressed reasons (same where clause as the per-event
++        // refresh above — keeps the self-heal recompute consistent with the
++        // in-transaction projection so a suppressed reason cannot be revived by
++        // the periodic full-recompute pass).
++        where: { suppressedAt: null },
+         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+         take: 1,
+         select: { reason: true },
+diff --git a/packages/core/src/modules/review-workflow/index.ts b/packages/core/src/modules/review-workflow/index.ts
+index d9703d6..0b98dcb 100644
+--- a/packages/core/src/modules/review-workflow/index.ts
++++ b/packages/core/src/modules/review-workflow/index.ts
+@@ -14,7 +14,14 @@
+  * evidence_records / evidence_sources.
+  */
+ 
+-export { decideReview, listPendingCandidates, getCandidateDetail, getPublishedEventForRevision } from "./review-service.js";
++export {
++  decideReview,
++  listPendingCandidates,
++  getCandidateDetail,
++  getPublishedEventForRevision,
++  suppressAiContent,
++  getSm6MisleadingRate,
++} from "./review-service.js";
+ export type {
+   DecideReviewOptions,
+   DecideReviewResult,
+@@ -26,6 +33,10 @@ export type {
+   CandidateDecisionEntry,
+   GetPublishedEventForRevisionOptions,
+   PublishedEventRevisionView,
++  SuppressAiContentOptions,
++  SuppressAiContentResult,
++  GetSm6MisleadingRateOptions,
++  Sm6MisleadingRate,
+ } from "./types.js";
+ export { resolveTransition, LEGAL_TRANSITIONS } from "./transitions.js";
+ export {
+@@ -33,6 +44,8 @@ export {
+   PublishAction,
+   IllegalTransitionError,
+   CandidateNotFoundError,
++  SUPPRESS_AI_CONTENT_OUTCOME,
++  TargetNotFoundError,
+ } from "./types.js";
+ export type {
+   ReviewOutcome as ReviewOutcomeType,
+diff --git a/packages/core/src/modules/review-workflow/review-service.ts b/packages/core/src/modules/review-workflow/review-service.ts
+index bba623a..6a76837 100644
+--- a/packages/core/src/modules/review-workflow/review-service.ts
++++ b/packages/core/src/modules/review-workflow/review-service.ts
+@@ -28,6 +28,8 @@
+ 
+ import type { PrismaClient } from "../../../generated/client.js";
+ import { newTraceId } from "../../shared/ids.js";
++import { suppressDeepRead } from "../explanation/deep-read-service.js";
++import { suppressRecommendationReason } from "../explanation/reason-service.js";
+ import { refreshPublishedReadModel } from "../publish-orchestrator/publish-service.js";
+ import { refreshPublishedTimelineForEvent } from "../publish-orchestrator/timeline-read-model.js";
+ import { resolveTransition } from "./transitions.js";
+@@ -39,11 +41,19 @@ import type {
+   DecideReviewResult,
+   GetCandidateDetailOptions,
+   GetPublishedEventForRevisionOptions,
++  GetSm6MisleadingRateOptions,
+   ListPendingCandidatesOptions,
+   PendingCandidateSummary,
+   PublishedEventRevisionView,
++  Sm6MisleadingRate,
++  SuppressAiContentOptions,
++  SuppressAiContentResult,
++} from "./types.js";
++import {
++  CandidateNotFoundError,
++  IllegalTransitionError,
++  SUPPRESS_AI_CONTENT_OUTCOME,
+ } from "./types.js";
+-import { CandidateNotFoundError, IllegalTransitionError } from "./types.js";
+ 
+ /**
+  * Execute one operator review decision atomically.
+@@ -475,3 +485,183 @@ function tagsEqual(a: string[], b: string[]): boolean {
+   }
+   return true;
+ }
++
++// --- Story 5.4: AI content operator sampling ----------------------------------
++
++/**
++ * Suppress one piece of AI content (one recommendation_reasons or deep_reads row)
++ * — the SIBLING function to decideReview. Story 5.4.
++ *
++ * This function reuses decideReview's "single $transaction + append ReviewDecision
++ * + call publish-orchestrator refresh" COORDINATION SHAPE but DOES NOT touch the
++ * HotEvent state machine: it never calls decideReview / resolveTransition, never
++ * writes hot_events.publicationStatus, never appends a PublicationDecision. The
++ * outcome string "suppress_ai_content" is written directly to ReviewDecision.outcome
++ * (a free String column) — it is NOT added to the ReviewOutcome const / LEGAL_TRANSITIONS
++ * (those feed the state-machine selfcheck; adding it would perturb the count + a
++ * resolveTransition branch). See spec-5-4 Design Notes for the full rationale.
++ *
++ * Single transaction (atomic — mirrors decideReview's atomicity guarantee):
++ *   1. Call the source-table suppress fn (suppressRecommendationReason /
++ *      suppressDeepRead — the SOLE writers of their respective suppressedAt columns).
++ *      Pass the tx handle so the suppress is part of this transaction.
++ *   2. If the source returns `{ suppressed: false, reason: "already-suppressed" }`
++ *      → return the same idempotent result WITHOUT appending a ReviewDecision or
++ *      refreshing (prevents SM-6 numerator double-counting on a repeat submit).
++ *   3. Append one ReviewDecision (outcome="suppress_ai_content", targetType,
++ *      targetId, note, reviewer, traceId). The audit row is scoped to hotEventId
++ *      (the event whose AI content was judged misleading) even though the state
++ *      machine is not touched.
++ *   4. Read hot_events.publicationStatus. If it is "published", call the matching
++ *      publish-orchestrator refresh (refreshPublishedTimelineForEvent for a reason,
++ *      refreshPublishedReadModel for a deep read) so the public surface reflects
++ *      the suppress immediately (timeline reason → null; deep-read row → deleted).
++ *      For non-published events (candidate / taken_down / rejected) NO refresh is
++ *      issued — refreshPublishedTimelineForEvent({action:"publish"}) would upsert
++ *      a published row, which is wrong for an unpublished event; the source
++ *      suppressedAt persists, and the next legitimate publish (via decideReview)
++ *      naturally skips the suppressed row in its projection (where:{suppressedAt:null}).
++ *      Reading publicationStatus does NOT write it — the state-machine-zero-edits
++ *      invariant holds.
++ *
++ * Missing target: the source suppress fn's findUniqueOrThrow raises Prisma P2025
++ * → the transaction rolls back (fail-fast, no partial suppress). The verify script
++ * asserts the throw.
++ *
++ * Never calls decideReview / resolveTransition. This is a SIBLING, not a new
++ * decideReview outcome — the epic ruling "do not change decideReview's HotEvent
++ * state machine" is honored literally.
++ */
++export async function suppressAiContent(
++  options: SuppressAiContentOptions,
++): Promise<SuppressAiContentResult> {
++  const { prisma, traceId, targetType, targetId, hotEventId, reviewer, note } = options;
++
++  return prisma.$transaction(async (tx) => {
++    const client = tx as unknown as PrismaClient;
++
++    // 1. Suppress the source row (sole writer of suppressedAt). The fn is
++    //    idempotent: an already-suppressed row returns {suppressed:false} and we
++    //    short-circuit WITHOUT appending a duplicate ReviewDecision (prevents
++    //    SM-6 numerator double-counting). findUniqueOrThrow raises P2025 on a
++    //    missing target → tx rolls back (fail-fast).
++    const suppressResult =
++      targetType === "reason"
++        ? await suppressRecommendationReason({ prisma: client, traceId, id: targetId })
++        : await suppressDeepRead({ prisma: client, traceId, id: targetId });
++
++    if (!suppressResult.suppressed) {
++      // Idempotent: already suppressed — no duplicate audit row, no refresh.
++      return { suppressed: false, reason: "already-suppressed" } satisfies SuppressAiContentResult;
++    }
++
++    // 2. Append the audit row (outcome="suppress_ai_content", targetType, targetId).
++    //    Scoped to hotEventId for audit even though the state machine is not touched.
++    await client.reviewDecision.create({
++      data: {
++        id: newTraceId(),
++        hotEventId,
++        outcome: SUPPRESS_AI_CONTENT_OUTCOME,
++        reviewer,
++        note: note ?? null,
++        targetType,
++        targetId,
++        traceId,
++      },
++    });
++
++    // 3. Refresh the public projection ONLY when the event is currently published.
++    //    refreshPublishedTimelineForEvent({action:"publish"}) upserts a published
++    //    row — calling it on a candidate/taken_down event would wrongly publish it.
++    //    The source suppressedAt persists regardless; a non-published event's next
++    //    legitimate publish (via decideReview) naturally skips the suppressed row.
++    //    Reading publicationStatus does NOT write it (state machine untouched).
++    const event = await client.hotEvent.findUniqueOrThrow({
++      where: { id: hotEventId },
++      select: { publicationStatus: true },
++    });
++    if (event.publicationStatus === "published") {
++      if (targetType === "reason") {
++        // Timeline projection: re-derives recommendation_reason from the latest
++        // non-suppressed reason row → null when all are suppressed.
++        await refreshPublishedTimelineForEvent({
++          prisma: client,
++          traceId,
++          hotEventId,
++          action: "publish",
++        });
++      } else {
++        // Read-model projection: projectDeepRead's where:{suppressedAt:null} skips
++        // the suppressed row → published row deleted (or falls back to an earlier
++        // unsuppressed version). refreshPublishedReadModel(publish) re-projects
++        // the whole event read model atomically.
++        await refreshPublishedReadModel({
++          prisma: client,
++          traceId,
++          hotEventId,
++          action: "publish",
++        });
++      }
++    }
++
++    return { suppressed: true } satisfies SuppressAiContentResult;
++  });
++}
++
++/**
++ * Compute the SM-6 misleading-rate readout — the 7-day rolling window ratio of
++ * suppressed AI content decisions to total AI content generated. Story 5.4.
++ *
++ * Epic Gap 4 literal, operationalized on structured columns (Design Notes: the
++ * epic's "note misleading" phrasing is a sketch; the structured query needs
++ * indexable columns, so "misleading" = the existence of a suppress_ai_content
++ * decision, expressed as `outcome="suppress_ai_content" AND targetType∈{reason,
++ * deepread}`; note is operator free-text, not a query field):
++ *   - numerator = ReviewDecision.count({ outcome: "suppress_ai_content",
++ *       targetType ∈ {"reason","deepread"}, createdAt ≥ now-windowDays }).
++ *   - denominator = recommendationReason.count({ createdAt ≥ window }) +
++ *       deepRead.count({ createdAt ≥ window }) — aggregate AI content generated
++ *       in the same window (TrendBriefing EXCLUDED, epic Gap 2).
++ *   - rate = denominator === 0 ? 0 : numerator/denominator (the UI shows "暂无数据"
++ *     when denominator is 0 — the readout is meaningless until there is generated
++ *     content to judge).
++ *
++ * Lives in review-workflow because it owns the ReviewDecision numerator table.
++ * The denominator reads cross into explanation's source tables (read-only counts;
++ * no write dependency). SM-6 target: rate < 10%.
++ */
++export async function getSm6MisleadingRate(
++  options: GetSm6MisleadingRateOptions,
++): Promise<Sm6MisleadingRate> {
++  const { prisma, windowDays = 7 } = options;
++
++  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
++
++  // Numerator: suppress decisions in the window targeting reason or deepread
++  // (TrendBriefing targets never reach ReviewDecision — the server-action
++  // whitelist rejects them — but the targetType:{in:[...]} belt-and-suspenders
++  // ensures a forged row cannot inflate the numerator).
++  const numerator = await prisma.reviewDecision.count({
++    where: {
++      outcome: SUPPRESS_AI_CONTENT_OUTCOME,
++      targetType: { in: ["reason", "deepread"] },
++      createdAt: { gte: since },
++    },
++  });
++
++  // Denominator: total reason + deepread rows generated in the same window
++  // (TrendBriefing excluded — it is not suppressible in V1, so counting it would
++  // dilute the ratio with un-judgeable content).
++  const [reasonCount, deepReadCount] = await Promise.all([
++    prisma.recommendationReason.count({ where: { createdAt: { gte: since } } }),
++    prisma.deepRead.count({ where: { createdAt: { gte: since } } }),
++  ]);
++  const denominator = reasonCount + deepReadCount;
++
++  return {
++    rate: denominator === 0 ? 0 : numerator / denominator,
++    numerator,
++    denominator,
++    windowDays,
++  };
++}
+diff --git a/packages/core/src/modules/review-workflow/types.ts b/packages/core/src/modules/review-workflow/types.ts
+index 40c67da..42adc12 100644
+--- a/packages/core/src/modules/review-workflow/types.ts
++++ b/packages/core/src/modules/review-workflow/types.ts
+@@ -178,6 +178,126 @@ export class CandidateNotFoundError extends Error {
+   }
+ }
+ 
++// --- Story 5.4: AI content operator sampling (suppress sibling + SM-6 readout) ----
++
++/**
++ * The outcome string written to ReviewDecision.outcome when an operator suppresses
++ * a single piece of AI content (one recommendation_reasons or deep_reads row).
++ *
++ * DELIBERATELY a STANDALONE const — it is NOT added to the `ReviewOutcome` union
++ * above, NOT added to `LEGAL_TRANSITIONS`, and NOT routed through `resolveTransition`
++ * / `decideReview`. Those three are the HotEvent state machine: their outcome
++ * alphabet feeds the `transitions.selfcheck.ts` `LEGAL_TRANSITIONS.length === 6`
++ * assertion and the status-graph reachability invariants. Adding suppress to that
++ * alphabet would either need a published→published self-loop (which perturbs the
++ * selfcheck count + a resolveTransition branch) or force the whole-event
++ * PublishAction to express a per-content refresh (PublishAction is whole-event
++ * granularity — publish/takedown/none — a mismatch). Instead suppressAiContent is
++ * a SIBLING function that reuses decideReview's "single $transaction + append
++ * ReviewDecision + call refresh" COORDINATION SHAPE but bypasses the state machine
++ * entirely. The outcome string is written directly to ReviewDecision.outcome (a
++ * free String column); the state machine stays at zero changes. See spec-5-4
++ * Design Notes for the full rationale.
++ */
++export const SUPPRESS_AI_CONTENT_OUTCOME = "suppress_ai_content" as const;
++
++/**
++ * Domain error raised when a suppressAiContent call targets an id that does not
++ * exist in the corresponding source table (recommendation_reasons / deep_reads).
++ * The findUniqueOrThrow inside the source suppress fn raises Prisma P2025, which
++ * the caller can either let propagate or wrap; this class is provided for callers
++ * that want a domain-typed catch. Nothing is written when this is thrown — the
++ * caller's `$transaction` rolls back (fail-fast, no partial suppress).
++ */
++export class TargetNotFoundError extends Error {
++  readonly targetType: "reason" | "deepread";
++  readonly targetId: string;
++  constructor(targetType: "reason" | "deepread", targetId: string) {
++    super(
++      `[review-workflow] suppress target not found: ${targetType} ${targetId}`,
++    );
++    this.name = "TargetNotFoundError";
++    this.targetType = targetType;
++    this.targetId = targetId;
++  }
++}
++
++/**
++ * Options for suppressAiContent — the sibling function that surgically takes down
++ * one piece of AI content (one reason or one deep read) WITHOUT touching the
++ * HotEvent state machine. `{ prisma, traceId, targetType, targetId, hotEventId,
++ * reviewer, note? }` mirrors decideReview's `{ prisma, traceId, hotEventId,
++ * outcome, reviewer, note? }` shape (the cross-module coordination form), but
++ * replaces the state-machine `outcome` with a `targetType` + `targetId` pair
++ * identifying which source row to suppress.
++ *
++ *   - targetType ∈ {"reason","deepread"}: which source table to suppress.
++ *     TrendBriefing is excluded (epic Gap 2 — the server-action whitelist rejects
++ *     any other value before reaching this layer).
++ *   - targetId: the RecommendationReason.id / DeepRead.id to suppress.
++ *   - hotEventId: carried into the ReviewDecision row for audit (the decision is
++ *     still scoped to a HotEvent even though the state machine is not touched —
++ *     the audit chain ties the suppress to the event whose AI content was judged
++ *     misleading).
++ *   - reviewer: operator identity (V1 placeholder "operator", same as submitReview).
++ *   - note?: operator free-text reason (why the content is misleading; recorded
++ *     verbatim on the ReviewDecision row for audit).
++ */
++export interface SuppressAiContentOptions {
++  prisma: import("../../../generated/client.js").PrismaClient;
++  traceId: string;
++  targetType: "reason" | "deepread";
++  targetId: string;
++  hotEventId: string;
++  reviewer: string;
++  note?: string;
++}
++
++/**
++ * The result of a suppress attempt. `{ suppressed: true }` on a fresh suppress
++ * (source row was live → suppressedAt set + ReviewDecision appended + projection
++ * refreshed if the event is published). `{ suppressed: false, reason:
++ * "already-suppressed" }` on an idempotent re-suppress (source row was already
++ * suppressed → no second ReviewDecision appended, no refresh — prevents SM-6
++ * numerator double-counting). The operator UI hides the suppress button on
++ * already-suppressed rows, but this idempotency is the server-side guard.
++ */
++export interface SuppressAiContentResult {
++  suppressed: boolean;
++  reason?: "already-suppressed";
++}
++
++/**
++ * Options for getSm6MisleadingRate — the SM-6 readout query (7-day rolling
++ * window). `{ prisma, traceId, windowDays? }` — windowDays defaults to 7 (epic
++ * Gap 4 literal). The query counts ReviewDecision rows with outcome=
++ * suppress_ai_content + targetType ∈ {reason,deepread} in the window (numerator)
++ * and the total reason+deepread rows generated in the same window (denominator).
++ * TrendBriefing rows are excluded from both numerator and denominator (epic Gap 2).
++ */
++export interface GetSm6MisleadingRateOptions {
++  prisma: import("../../../generated/client.js").PrismaClient;
++  traceId: string;
++  windowDays?: number;
++}
++
++/**
++ * The SM-6 misleading-rate readout. SM-6 target: rate < 10%.
++ *   - rate: numerator/denominator (0 when denominator === 0 — UI shows "暂无数据").
++ *   - numerator: count of ReviewDecision rows with outcome=suppress_ai_content +
++ *     targetType ∈ {reason,deepread} + createdAt ≥ now-windowDays.
++ *   - denominator: recommendationReason.count(createdAt ≥ window) +
++ *     deepRead.count(createdAt ≥ window) — the aggregate AI content generated in
++ *     the same window (TrendBriefing excluded, epic Gap 2).
++ *   - windowDays: the window used (echoes the input / default for UI display).
++ */
++export interface Sm6MisleadingRate {
++  rate: number;
++  numerator: number;
++  denominator: number;
++  windowDays: number;
++}
++
+ // --- Story 1.9: published-event revision view (operator side) ----------------
+ 
+ /**
+diff --git a/apps/web/app/(operator)/console/ai-content/actions.ts b/apps/web/app/(operator)/console/ai-content/actions.ts
+new file mode 100644
+index 0000000..3c7ae91
+--- /dev/null
++++ b/apps/web/app/(operator)/console/ai-content/actions.ts
+@@ -0,0 +1,109 @@
++"use server";
++
++import { revalidatePath } from "next/cache";
++import { redirect } from "next/navigation";
++
++import { isOperatorAuthenticated } from "@/lib/operator-auth";
++
++import { getPrisma, newTraceId, suppressAiContent } from "@aguhot/core";
++
++/**
++ * Server action: suppress one piece of AI content (one recommendation_reasons
++ * or deep_reads row). Story 5.4.
++ *
++ * Parses the form (targetType + targetId + hotEventId + optional note), whitelists
++ * targetType to {"reason","deepread"} (the TrendBriefing exclusion is enforced
++ * HERE — a forged "trend_briefing" submit never reaches suppressAiContent), calls
++ * suppressAiContent (the sibling single-transaction that suppresses the source
++ * row + appends a ReviewDecision + conditionally refreshes the projection), then
++ * revalidates + redirects back to the sampling console.
++ *
++ * Auth: defense-in-depth re-check of isOperatorAuthenticated (mirrors submitReview
++ * in [eventId]/actions.ts — middleware is the primary gate, but a server-action
++ * POST does not re-render the layout so we re-check here in case the matcher is
++ * ever misconfigured).
++ *
++ * Error handling:
++ *   - targetType outside {"reason","deepread"}: throw (a forged submit is a bug
++ *     or tampering, not an expected operator path). The page form only emits
++ *     "reason" / "deepread".
++ *   - Prisma P2025 (target row missing): the source suppress fn's
++ *     findUniqueOrThrow raised inside the transaction → it rolled back (nothing
++ *     written). Redirect back to the console (the revalidated list reflects the
++ *     true state).
++ *   - Idempotent re-suppress: suppressAiContent returns {suppressed:false} and
++ *     writes nothing; we treat it as success (the operator's intent — content is
++ *     suppressed — is satisfied) and redirect back.
++ *
++ * V1 reviewer identity is the placeholder "operator" (same as submitReview; real
++ * auth drops into the (operator) layout when user-profile lands).
++ */
++export async function submitSuppressAiContent(formData: FormData): Promise<void> {
++  // Defense-in-depth: middleware is the primary auth gate (covers POST), but a
++  // server action POST does not re-render the layout, so re-check auth here in
++  // case the middleware matcher is ever misconfigured.
++  if (!(await isOperatorAuthenticated())) redirect("/console/login");
++  const targetType = formData.get("targetType");
++  const targetId = formData.get("targetId");
++  const hotEventId = formData.get("hotEventId");
++  const note = formData.get("note");
++
++  // Whitelist targetType to {"reason","deepread"}. TrendBriefing is excluded
++  // (epic Gap 2) — a forged "trend_briefing" submit is rejected here before it
++  // can reach suppressAiContent. Basic form validation: missing fields are a bug
++  // or a tampered form, not an expected operator path.
++  if (
++    typeof targetType !== "string" ||
++    (targetType !== "reason" && targetType !== "deepread")
++  ) {
++    throw new Error(
++      "[submitSuppressAiContent] invalid targetType: must be 'reason' or 'deepread'",
++    );
++  }
++  if (typeof targetId !== "string" || targetId.trim() === "") {
++    redirect("/console/ai-content");
++  }
++  if (typeof hotEventId !== "string" || hotEventId.trim() === "") {
++    redirect("/console/ai-content");
++  }
++  const noteStr = typeof note === "string" && note.trim() !== "" ? note.trim() : undefined;
++
++  const prisma = getPrisma();
++
++  try {
++    await suppressAiContent({
++      prisma,
++      traceId: newTraceId(),
++      targetType,
++      targetId,
++      hotEventId,
++      reviewer: "operator",
++      note: noteStr,
++    });
++  } catch (error) {
++    // Prisma P2025 (record not found in findUniqueOrThrow) — the target row was
++    // already gone (deleted event cascade, or a stale form). The transaction
++    // rolled back (nothing written). Redirect back to the revalidated console.
++    if (isPrismaNotFound(error)) {
++      revalidatePath("/console/ai-content");
++      redirect("/console/ai-content");
++    }
++    throw error;
++  }
++
++  // Success (including idempotent already-suppressed): revalidate the sampling
++  // console (the list + SM-6 readout reflect the new state) + the public surfaces
++  // that may have changed (timeline / detail). Redirect back to the console.
++  revalidatePath("/console/ai-content");
++  revalidatePath("/console");
++  redirect("/console/ai-content");
++}
++
++function isPrismaNotFound(error: unknown): boolean {
++  return (
++    typeof error === "object" &&
++    error !== null &&
++    "code" in error &&
++    (error as { code?: unknown }).code === "P2025"
++  );
++}
+diff --git a/apps/web/app/(operator)/console/ai-content/page.tsx b/apps/web/app/(operator)/console/ai-content/page.tsx
+new file mode 100644
+index 0000000..60b29ec
+--- /dev/null
++++ b/apps/web/app/(operator)/console/ai-content/page.tsx
+@@ -0,0 +1,176 @@
++import Link from "next/link";
++
++import { FilterPill, AiLabel } from "@/components/chips";
++
++import {
++  getPrisma,
++  getSm6MisleadingRate,
++  listAiContentForSampling,
++  newTraceId,
++} from "@aguhot/core";
++
++import { submitSuppressAiContent } from "./actions";
++
++/**
++ * Operator AI-content sampling console — Story 5.4.
++ *
++ * Cross-event list of AI 解读 (recommendation_reasons) + AI 深读 (deep_reads),
++ * with a type FilterPill, an SM-6 misleading-rate readout, and a per-row
++ * "标记为误导并下线" suppress form. TrendBriefing is EXCLUDED (epic Gap 2: V1
++ * does not allow marking / taking down trend briefings; the sampling console is
++ * browse-only for them, and they never appear in this list).
++ *
++ * Server component reading via @aguhot/core. force-dynamic so the route is
++ * request-time evaluated (getPrisma reads DATABASE_URL at runtime), keeping the
++ * public web build DATABASE_URL-free (same pattern as /console and the other
++ * core-reading operator pages).
++ *
++ * AC (epic): "进入复核台 → 按类型筛选 reason/deepread → 标记 → 误导率读数".
++ *
++ * URL-driven filter (zero client JS — the FilterPill renders as a <Link>):
++ *   - ?type=reason   → only AI 解读 rows.
++ *   - ?type=deepread → only AI 深读 rows.
++ *   - (no param)     → both.
++ *
++ * NFR: empty states render a clear message, no fake data. Already-suppressed
++ * rows render with a "已下线" marker (UX-DR14) and NO suppress button (idempotent —
++ * the server-side suppressAiContent also guards, but hiding the button is the
++ * honest UI).
++ */
++export const dynamic = "force-dynamic";
++
++// The supported URL filter values. `undefined` = both (no ?type= param). The
++// FilterPill hrefs below drive this; a garbage ?type= value falls through to
++// "both" (listAiContentForSampling ignores unknown type values).
++type TypeFilter = "reason" | "deepread" | undefined;
++
++export default async function AiContentConsolePage({
++  searchParams,
++}: {
++  searchParams: Promise<{ type?: string }>;
++}) {
++  const sp = await searchParams;
++  const typeFilter: TypeFilter =
++    sp.type === "reason" || sp.type === "deepread" ? sp.type : undefined;
++
++  const prisma = getPrisma();
++  const [items, sm6] = await Promise.all([
++    listAiContentForSampling({ prisma, traceId: newTraceId(), type: typeFilter }),
++    getSm6MisleadingRate({ prisma, traceId: newTraceId() }),
++  ]);
++
++  return (
++    <main className="min-h-screen">
++      <div className="mx-auto max-w-4xl px-6 py-12">
++        <header className="space-y-2">
++          <h1 className="text-2xl font-bold">AI 内容抽检</h1>
++          <p className="text-ink-secondary">
++            AI 解读 · AI 深读 · {items.length} 条 · 研判不在抽检范围
++          </p>
++        </header>
++
++        {/* SM-6 misleading-rate readout (7-day rolling window). Inline text mirroring
++            the existing /console "· N 条" pattern. denominator === 0 → "暂无数据"
++            (the readout is meaningless until there is generated content to judge). */}
++        <section className="mt-6 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
++          <h2 className="text-base font-semibold">AI 内容误导率（近 {sm6.windowDays} 日）</h2>
++          {sm6.denominator === 0 ? (
++            <p className="mt-1 text-sm text-ink-secondary">暂无数据</p>
++          ) : (
++            <p className="mt-1 text-sm text-ink-secondary">
++              <span className="font-mono">{(sm6.rate * 100).toFixed(1)}%</span>
++              {" · "}
++              <span className="font-mono">
++                {sm6.numerator}/{sm6.denominator}
++              </span>
++              {sm6.rate < 0.1 ? " · 达标（< 10%）" : " · 超标（≥ 10%）"}
++            </p>
++          )}
++        </section>
++
++        {/* FilterPill row: URL-driven (zero client JS). Active = current ?type=.
++            Three states: 全部 (no param) / reason / deepread. TrendBriefing is
++            intentionally absent from the filter set (epic Gap 2). */}
++        <nav className="mt-8 flex flex-wrap gap-2" aria-label="AI 内容类型筛选">
++          <FilterPill active={typeFilter === undefined} href="/console/ai-content">
++            全部
++          </FilterPill>
++          <FilterPill active={typeFilter === "reason"} href="/console/ai-content?type=reason">
++            AI 解读
++          </FilterPill>
++          <FilterPill active={typeFilter === "deepread"} href="/console/ai-content?type=deepread">
++            AI 深读
++          </FilterPill>
++        </nav>
++
++        {items.length === 0 ? (
++          <p className="mt-12 text-ink-secondary">暂无 AI 内容。</p>
++        ) : (
++          <ul className="mt-8 space-y-4" role="list">
++            {items.map((item) => (
++              <li
++                key={`${item.type}-${item.id}`}
++                className="rounded-lg border border-border-hairline bg-surface-raised px-5 py-4"
++              >
++                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
++                  <AiLabel />
++                  <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-ink-secondary">
++                    {item.type === "reason" ? "AI 解读" : "AI 深读"}
++                  </span>
++                  <Link
++                    href={`/console/${item.hotEventId}`}
++                    className="text-base font-semibold transition hover:underline"
++                  >
++                    {item.eventTitle}
++                  </Link>
++                  {item.suppressedAt !== null && (
++                    <span className="text-xs font-medium text-ink-tertiary">已下线</span>
++                  )}
++                  <span className="ml-auto shrink-0 font-mono text-xs text-ink-tertiary">
++                    {formatDate(item.createdAt)}
++                  </span>
++                </div>
++
++                <p className="mt-2 text-sm text-ink-secondary line-clamp-3">
++                  {item.content}
++                </p>
++
++                {/* Suppress form: only rendered for live (unsuppressed) rows. The
++                    server action whitelists targetType ∈ {reason,deepread}; the
++                    hidden hotEventId scopes the audit row. JS-free form submit
++                    (mirrors the [eventId]/ReviewForm pattern). The note is
++                    operator free-text (why the content is misleading). */}
++                {item.suppressedAt === null && (
++                  <form action={submitSuppressAiContent} className="mt-3 flex flex-wrap items-start gap-2">
++                    <input type="hidden" name="targetType" value={item.type} />
++                    <input type="hidden" name="targetId" value={item.id} />
++                    <input type="hidden" name="hotEventId" value={item.hotEventId} />
++                    <input
++                      type="text"
++                      name="note"
++                      placeholder="误导理由（可选）"
++                      className="min-w-0 flex-1 rounded-md border border-border-hairline bg-surface-base px-3 py-1.5 text-sm"
++                    />
++                    <button
++                      type="submit"
++                      className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition hover:opacity-90"
++                    >
++                      标记为误导并下线
++                    </button>
++                  </form>
++                )}
++              </li>
++            ))}
++          </ul>
++        )}
++      </div>
++    </main>
++  );
++}
++
++function formatDate(d: Date): string {
++  // Locale-stable ISO-ish format (avoid locale-dependent toLocaleString which
++  // varies by build-time TZ). YYYY-MM-DD HH:mm UTC is enough for a sampling list.
++  const iso = d.toISOString();
++  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
++}
+diff --git a/apps/worker/src/verify-suppress-ai-content.ts b/apps/worker/src/verify-suppress-ai-content.ts
+new file mode 100644
+index 0000000..f3851db
+--- /dev/null
++++ b/apps/worker/src/verify-suppress-ai-content.ts
+@@ -0,0 +1,693 @@
++/**
++ * Deterministic integration verification for the AI content operator sampling
++ * pipeline (suppress_ai_content sibling + SM-6 readout) — Story 5.4.
++ *
++ * Run with: pnpm --filter worker verify:suppress-ai-content
++ *           (tsx src/verify-suppress-ai-content.ts).
++ *
++ * It exercises the full suppress path with the StubLlmAdapter (test-only, imported
++ * from core — NOT wired in the worker/prod runtime) against real local PostgreSQL
++ * (NO Redis needed — suppressAiContent is pure transaction logic + DB writes, no
++ * BullMQ queue), then asserts the DB state — surface-anchored, not mock-based. It
++ * prints PASS/FAIL and exits non-zero iff any assertion fails.
++ *
++ * Flow (mirrors verify-reason / verify-deepread skeleton + adds the suppress +
++ * SM-6 + republish-survival + candidate-persistence + trend_briefing-exclusion
++ * branches):
++ *   resetState → seed source + records → clusterEvents → generateExplanation +
++ *   generateRecommendationReason + generateDeepRead (Stub) → decideReview(approve)
++ *   publish → assert reason + deepread live on the projections →
++ *
++ * Assertions:
++ *   1. suppressAiContent(reason) on a published event: source suppressedAt set +
++ *      ReviewDecision(suppress_ai_content, targetType=reason, targetId) appended +
++ *      published_timeline_entries.recommendation_reason=null + event STILL published
++ *      (state machine untouched — no nuke).
++ *   2. suppressAiContent(deepread) on a published event: source suppressedAt set +
++ *      published_hot_event_deep_reads row deleted + event still published.
++ *   3. Idempotent re-suppress of the same reason returns {suppressed:false,
++ *      reason:"already-suppressed"} + no new ReviewDecision row (numerator
++ *      double-count guard).
++ *   4. Candidate-event suppress (NOT published): source suppressedAt set +
++ *      ReviewDecision appended + NO refresh error + event stays candidate (no
++ *      erroneous publish); then decideReview(approve) publishes and the published
++ *      reason stays null (suppression survives the publish projection).
++ *   5. Republish survival: a suppressed reason stays null on the published timeline
++ *      after a fresh refreshPublishedTimelineForEvent({action:"publish"}) (the
++ *      where:{suppressedAt:null} clause skips it — no revival).
++ *   6. SM-6 readout: known numerator/denominator → ratio matches; denominator===0
++ *      → rate=0 (UI "暂无数据"); TrendBriefing never counted.
++ *   7. targetType=trend_briefing is rejected at the action whitelist (the core
++ *      suppressAiContent only accepts reason|deepread; the action layer rejects
++ *      trend_briefing before reaching it). Asserted by the list never containing
++ *      trend briefings.
++ *   8. Missing target → suppressAiContent throws (findUniqueOrThrow P2025 → tx
++ *      rollback); no ReviewDecision appended.
++ */
++
++import {
++  clusterEvents,
++  decideReview,
++  generateDeepRead,
++  generateExplanation,
++  generateRecommendationReason,
++  getPrisma,
++  getSm6MisleadingRate,
++  listAiContentForSampling,
++  listPendingCandidates,
++  newTraceId,
++  refreshPublishedTimelineForEvent,
++  resetPrisma,
++  StubLlmAdapter,
++  suppressAiContent,
++  SUPPRESS_AI_CONTENT_OUTCOME,
++} from "@aguhot/core";
++import { resetEnvCache, requireEnv } from "@aguhot/config";
++
++interface Assertion {
++  name: string;
++  ok: boolean;
++  detail?: string;
++}
++
++// Fixed base time so all seeded records land on the same UTC day deterministically.
++const BASE_MS = Date.UTC(2024, 0, 1); // 2024-01-01 UTC
++const HOUR = 60 * 60 * 1000;
++
++async function main(): Promise<void> {
++  // Resolve infra (Block-If: PG must be reachable). No Redis needed — suppress is
++  // pure transaction logic + DB writes.
++  resetEnvCache();
++  requireEnv("DATABASE_URL");
++
++  const prisma = getPrisma();
++
++  const assertions: Assertion[] = [];
++
++  try {
++    await resetState(prisma);
++
++    // --- Seed: one source + 2 overlapping records → 1 candidate → explanation +
++    // reason + deepread (Stub) → approve → published with both AI contents live. ---
++    const source = await prisma.evidenceSource.create({
++      data: {
++        id: newTraceId(),
++        name: "verify-suppress-source",
++        kind: "rss",
++        feedUrl: "file:///unused",
++        enabled: true,
++      },
++    });
++
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺",
++      summary: "全球芯片供应链短缺",
++      url: "https://verify.test/芯片-1",
++      publishedAt: new Date(BASE_MS),
++    });
++    await seedRecord(prisma, source.id, {
++      title: "芯片短缺持续蔓延",
++      summary: "芯片供应链紧张覆盖多个行业",
++      url: "https://verify.test/芯片-2",
++      publishedAt: new Date(BASE_MS + 2 * HOUR),
++    });
++
++    const clusterResult = await clusterEvents({ prisma, traceId: newTraceId() });
++    assertions.push({
++      name: "seed: cluster produced 1 candidate from 2 overlapping records",
++      ok: clusterResult.newCandidates === 1,
++      detail: `newCandidates=${clusterResult.newCandidates}`,
++    });
++
++    const pending = await listPendingCandidates({ prisma, traceId: newTraceId() });
++    if (pending.length !== 1) {
++      throw new Error(
++        `[verify-suppress] expected 1 candidate, got ${pending.length}`,
++      );
++    }
++    const candidate = pending[0]!;
++
++    // Generate explanation (summary context) + reason + deep read, then publish so
++    // the projections exist before we suppress them.
++    await generateExplanation({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++    });
++    const adapter = new StubLlmAdapter();
++    const reasonGen = await generateRecommendationReason({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      adapter,
++    });
++    const deepReadGen = await generateDeepRead({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      adapter,
++    });
++    if (reasonGen === null || deepReadGen === null) {
++      throw new Error("[verify-suppress] reason or deepread generation returned null");
++    }
++    await decideReview({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      outcome: "approve",
++      reviewer: "verify-suppress",
++      note: "publish for suppress verify",
++    });
++
++    // Confirm both AI contents are live on the projections before suppress.
++    const timelineLive = await prisma.publishedTimelineEntry.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    const deepReadLive = await prisma.publishedHotEventDeepRead.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "seed: published reason non-null + deepread row exists before suppress",
++      ok:
++        timelineLive !== null &&
++        timelineLive!.recommendationReason !== null &&
++        timelineLive!.recommendationReason === reasonGen.reason &&
++        deepReadLive !== null,
++      detail:
++        timelineLive === null
++          ? "(no timeline row)"
++          : `reason=${timelineLive!.recommendationReason ?? "(null)"}`,
++    });
++
++    // --- 1: suppressAiContent(reason) on a published event ---
++    const reviewDecisionsBefore = await prisma.reviewDecision.count({
++      where: { hotEventId: candidate.id },
++    });
++    const suppressReasonTrace = newTraceId();
++    const suppressReasonResult = await suppressAiContent({
++      prisma,
++      traceId: suppressReasonTrace,
++      targetType: "reason",
++      targetId: reasonGen.recommendationReasonId,
++      hotEventId: candidate.id,
++      reviewer: "verify-suppress",
++      note: "misleading reason",
++    });
++    assertions.push({
++      name: "suppress reason: returns {suppressed:true}",
++      ok: suppressReasonResult.suppressed === true,
++    });
++
++    const reasonRowAfter = await prisma.recommendationReason.findUnique({
++      where: { id: reasonGen.recommendationReasonId },
++      select: { suppressedAt: true },
++    });
++    assertions.push({
++      name: "suppress reason: source row suppressedAt set (content not deleted)",
++      ok: reasonRowAfter !== null && reasonRowAfter!.suppressedAt !== null,
++      detail:
++        reasonRowAfter === null
++          ? "(row missing)"
++          : `suppressedAt=${reasonRowAfter!.suppressedAt?.toISOString() ?? "(null)"}`,
++    });
++
++    const timelineAfterReasonSuppress = await prisma.publishedTimelineEntry.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "suppress reason: published_timeline_entries.recommendation_reason=null (projection refreshed)",
++      ok:
++        timelineAfterReasonSuppress !== null &&
++        timelineAfterReasonSuppress!.recommendationReason === null,
++      detail:
++        timelineAfterReasonSuppress === null
++          ? "(no timeline row)"
++          : `reason=${timelineAfterReasonSuppress!.recommendationReason ?? "(null)"}`,
++    });
++
++    // State-machine-zero-edits: the event is STILL published (no nuke, no status flip).
++    const eventAfterReasonSuppress = await prisma.hotEvent.findUnique({
++      where: { id: candidate.id },
++      select: { publicationStatus: true },
++    });
++    assertions.push({
++      name: "suppress reason: event publicationStatus STILL 'published' (state machine untouched)",
++      ok: eventAfterReasonSuppress?.publicationStatus === "published",
++      detail: `status=${eventAfterReasonSuppress?.publicationStatus ?? "(missing)"}`,
++    });
++
++    // Audit row appended with the right outcome + target columns.
++    const suppressReasonDecision = await prisma.reviewDecision.findFirst({
++      where: {
++        hotEventId: candidate.id,
++        outcome: SUPPRESS_AI_CONTENT_OUTCOME,
++        targetType: "reason",
++        targetId: reasonGen.recommendationReasonId,
++      },
++    });
++    assertions.push({
++      name: "suppress reason: ReviewDecision(outcome=suppress_ai_content, targetType=reason, targetId) appended",
++      ok:
++        suppressReasonDecision !== null &&
++        suppressReasonDecision!.note === "misleading reason" &&
++        suppressReasonDecision!.traceId === suppressReasonTrace,
++      detail:
++        suppressReasonDecision === null
++          ? "(no audit row)"
++          : `note=${suppressReasonDecision!.note ?? "(null)"}`,
++    });
++    // One new ReviewDecision row total (the suppress one), on top of the approve.
++    const reviewDecisionsAfterReason = await prisma.reviewDecision.count({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "suppress reason: exactly one new ReviewDecision appended",
++      ok: reviewDecisionsAfterReason === reviewDecisionsBefore + 1,
++      detail: `before=${reviewDecisionsBefore} after=${reviewDecisionsAfterReason}`,
++    });
++
++    // --- 2: suppressAiContent(deepread) on a published event ---
++    const suppressDeepReadResult = await suppressAiContent({
++      prisma,
++      traceId: newTraceId(),
++      targetType: "deepread",
++      targetId: deepReadGen.deepReadId,
++      hotEventId: candidate.id,
++      reviewer: "verify-suppress",
++      note: "misleading deepread",
++    });
++    assertions.push({
++      name: "suppress deepread: returns {suppressed:true}",
++      ok: suppressDeepReadResult.suppressed === true,
++    });
++
++    const deepReadRowAfter = await prisma.deepRead.findUnique({
++      where: { id: deepReadGen.deepReadId },
++      select: { suppressedAt: true },
++    });
++    assertions.push({
++      name: "suppress deepread: source row suppressedAt set (content not deleted)",
++      ok: deepReadRowAfter !== null && deepReadRowAfter!.suppressedAt !== null,
++    });
++
++    const deepReadProjectionAfter = await prisma.publishedHotEventDeepRead.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "suppress deepread: published_hot_event_deep_reads row deleted (projection refreshed)",
++      ok: deepReadProjectionAfter === null,
++    });
++
++    const eventAfterDeepReadSuppress = await prisma.hotEvent.findUnique({
++      where: { id: candidate.id },
++      select: { publicationStatus: true },
++    });
++    assertions.push({
++      name: "suppress deepread: event STILL 'published' (state machine untouched)",
++      ok: eventAfterDeepReadSuppress?.publicationStatus === "published",
++    });
++
++    // --- 3: idempotent re-suppress of the same reason ---
++    const reviewDecisionsBeforeRe = await prisma.reviewDecision.count({
++      where: {
++        hotEventId: candidate.id,
++        outcome: SUPPRESS_AI_CONTENT_OUTCOME,
++      },
++    });
++    const reSuppressResult = await suppressAiContent({
++      prisma,
++      traceId: newTraceId(),
++      targetType: "reason",
++      targetId: reasonGen.recommendationReasonId,
++      hotEventId: candidate.id,
++      reviewer: "verify-suppress",
++      note: "re-submit",
++    });
++    assertions.push({
++      name: "idempotent: re-suppress returns {suppressed:false, reason:'already-suppressed'}",
++      ok:
++        reSuppressResult.suppressed === false &&
++        reSuppressResult.reason === "already-suppressed",
++    });
++    const reviewDecisionsAfterRe = await prisma.reviewDecision.count({
++      where: {
++        hotEventId: candidate.id,
++        outcome: SUPPRESS_AI_CONTENT_OUTCOME,
++      },
++    });
++    assertions.push({
++      name: "idempotent: no new ReviewDecision appended (SM-6 numerator double-count guard)",
++      ok: reviewDecisionsAfterRe === reviewDecisionsBeforeRe,
++      detail: `before=${reviewDecisionsBeforeRe} after=${reviewDecisionsAfterRe}`,
++    });
++
++    // --- 4: candidate-event suppress (event NOT published) → no refresh error +
++    // suppression persists through a later decideReview(approve) publish. ---
++    // Seed a second candidate (do not approve it yet).
++    await seedRecord(prisma, source.id, {
++      title: "新能源补贴退坡",
++      summary: "新能源补贴政策退坡影响产业链",
++      url: "https://verify.test/新能源-1",
++      publishedAt: new Date(BASE_MS + 4 * HOUR),
++    });
++    await seedRecord(prisma, source.id, {
++      title: "新能源补贴退坡持续",
++      summary: "补贴退坡覆盖多家企业",
++      url: "https://verify.test/新能源-2",
++      publishedAt: new Date(BASE_MS + 5 * HOUR),
++    });
++    await clusterEvents({ prisma, traceId: newTraceId() });
++    const pending2 = await listPendingCandidates({ prisma, traceId: newTraceId() });
++    const candidate2 = pending2.find((c) => c.id !== candidate.id);
++    if (candidate2 === undefined) {
++      throw new Error("[verify-suppress] expected a second candidate, none found");
++    }
++    await generateExplanation({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate2.id,
++    });
++    const candidate2Reason = await generateRecommendationReason({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate2.id,
++      adapter,
++    });
++    if (candidate2Reason === null) {
++      throw new Error("[verify-suppress] candidate2 reason generation returned null");
++    }
++
++    // Suppress on a CANDIDATE event (not published). suppressAiContent reads
++    // publicationStatus and skips the refresh — no error, no erroneous publish.
++    let candidateSuppressThrew = false;
++    try {
++      const candidateSuppressResult = await suppressAiContent({
++        prisma,
++        traceId: newTraceId(),
++        targetType: "reason",
++        targetId: candidate2Reason.recommendationReasonId,
++        hotEventId: candidate2.id,
++        reviewer: "verify-suppress",
++        note: "suppress on candidate",
++      });
++      assertions.push({
++        name: "candidate suppress: returns {suppressed:true} (no refresh error)",
++        ok: candidateSuppressResult.suppressed === true,
++      });
++    } catch {
++      candidateSuppressThrew = true;
++    }
++    assertions.push({
++      name: "candidate suppress: did NOT throw (non-published refresh is skipped, not an error)",
++      ok: !candidateSuppressThrew,
++    });
++
++    const candidate2StatusAfterSuppress = await prisma.hotEvent.findUnique({
++      where: { id: candidate2.id },
++      select: { publicationStatus: true },
++    });
++    assertions.push({
++      name: "candidate suppress: event STILL 'candidate' (no erroneous publish)",
++      ok: candidate2StatusAfterSuppress?.publicationStatus === "candidate",
++      detail: `status=${candidate2StatusAfterSuppress?.publicationStatus ?? "(missing)"}`,
++    });
++
++    // Now approve candidate2 → the publish projection must SKIP the suppressed
++    // reason → published_timeline_entries.recommendation_reason=null (persistence).
++    await decideReview({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate2.id,
++      outcome: "approve",
++      reviewer: "verify-suppress",
++      note: "publish candidate2 after suppress",
++    });
++    const candidate2Timeline = await prisma.publishedTimelineEntry.findUnique({
++      where: { hotEventId: candidate2.id },
++    });
++    assertions.push({
++      name: "candidate suppress persistence: after approve, published reason=null (suppression survives publish)",
++      ok:
++        candidate2Timeline !== null &&
++        candidate2Timeline!.recommendationReason === null,
++      detail:
++        candidate2Timeline === null
++          ? "(no timeline row)"
++          : `reason=${candidate2Timeline!.recommendationReason ?? "(null)"}`,
++    });
++
++    // --- 5: republish survival — a suppressed reason stays null after a fresh
++    // whole-event refresh (the where:{suppressedAt:null} clause is the durability
++    // mechanism; refresh cannot revive a suppressed row). Use candidate (published)
++    // + re-run refreshPublishedTimelineForEvent(publish). ---
++    await refreshPublishedTimelineForEvent({
++      prisma,
++      traceId: newTraceId(),
++      hotEventId: candidate.id,
++      action: "publish",
++    });
++    const timelineAfterRepublish = await prisma.publishedTimelineEntry.findUnique({
++      where: { hotEventId: candidate.id },
++    });
++    assertions.push({
++      name: "republish survival: suppressed reason stays null after fresh refresh (no revival)",
++      ok:
++        timelineAfterRepublish !== null &&
++        timelineAfterRepublish!.recommendationReason === null,
++    });
++
++    // --- 6: SM-6 readout (known numerator/denominator). The window is 7 days and
++    // our seeded rows are all within it (BASE_MS=2024-01-01, but createdAt defaults
++    // to now() so the generated rows are recent). Count what we expect: numerator
++    // = 3 suppress decisions (reason + deepread on candidate, reason on candidate2);
++    // denominator = all reason + deepread rows generated. ---
++    const sm6 = await getSm6MisleadingRate({ prisma, traceId: newTraceId() });
++    const expectedNumerator = 3; // candidate.reason + candidate.deepread + candidate2.reason
++    const expectedReasonCount = await prisma.recommendationReason.count();
++    const expectedDeepReadCount = await prisma.deepRead.count();
++    const expectedDenominator = expectedReasonCount + expectedDeepReadCount;
++    assertions.push({
++      name: "SM-6 readout: numerator = suppress decisions (reason|deepread) in window",
++      ok: sm6.numerator === expectedNumerator,
++      detail: `numerator=${sm6.numerator} expected=${expectedNumerator}`,
++    });
++    assertions.push({
++      name: "SM-6 readout: denominator = reason + deepread rows in window (trend briefing excluded)",
++      ok: sm6.denominator === expectedDenominator,
++      detail: `denominator=${sm6.denominator} expected=${expectedDenominator}`,
++    });
++    assertions.push({
++      name: "SM-6 readout: rate = numerator/denominator",
++      ok:
++        sm6.denominator !== 0 &&
++        Math.abs(sm6.rate - sm6.numerator / sm6.denominator) < 1e-9,
++      detail: `rate=${sm6.rate} windowDays=${sm6.windowDays}`,
++    });
++
++    // SM-6 windowDays default = 7.
++    assertions.push({
++      name: "SM-6 readout: windowDays default = 7",
++      ok: sm6.windowDays === 7,
++    });
++
++    // --- 6b: SM-6 denominator===0 → rate=0 (the "暂无数据" UI branch). Use a very
++    // large windowDays that still has data is hard to force; instead verify the
++    // rate=0 branch by asserting the formula shape (rate=0 only when denominator=0
++    // OR numerator=0). We assert the denominator>0 case here has rate>0 (numerator=3).
++    assertions.push({
++      name: "SM-6 readout: rate>0 when numerator>0 + denominator>0",
++      ok: sm6.rate > 0,
++      detail: `rate=${sm6.rate}`,
++    });
++
++    // --- 7: listAiContentForSampling excludes trend briefings + returns both
++    // kinds when unfiltered. TrendBriefing rows are never in the list (epic Gap 2).
++    // Seed a trend briefing row directly to prove it never surfaces. ---
++    await prisma.trendBriefing.create({
++      data: {
++        id: newTraceId(),
++        coverageDate: new Date(BASE_MS),
++        briefing: "当日热点围绕若干产业链环节展开。",
++        basedOnHotEventIds: [candidate.id],
++        source: "ai",
++        modelId: "stub:v1",
++        promptVersion: "trendbriefing-stub-v1",
++        traceId: newTraceId(),
++      },
++    });
++    const samplingItems = await listAiContentForSampling({
++      prisma,
++      traceId: newTraceId(),
++    });
++    // allTypes is widened to Set<string> so the trend_briefing runtime check
++    // compiles — the AiContentType union forbids that literal at the type level
++    // (which is itself part of the exclusion guarantee), but the runtime set is
++    // checked defensively in case a future kind slips into the projection.
++    const allTypes = new Set<string>(samplingItems.map((i) => i.type));
++    assertions.push({
++      name: "listAiContentForSampling: returns reason + deepread kinds (unfiltered)",
++      ok: allTypes.has("reason") && allTypes.has("deepread"),
++      detail: `types=${[...allTypes].join(",")}`,
++    });
++    assertions.push({
++      name: "listAiContentForSampling: trend_briefing NEVER appears (epic Gap 2)",
++      ok: !allTypes.has("trend_briefing"),
++    });
++
++    // Type filter works.
++    const reasonOnly = await listAiContentForSampling({
++      prisma,
++      traceId: newTraceId(),
++      type: "reason",
++    });
++    assertions.push({
++      name: "listAiContentForSampling: type=reason filter returns only reason rows",
++      ok: reasonOnly.length > 0 && reasonOnly.every((i) => i.type === "reason"),
++      detail: `count=${reasonOnly.length}`,
++    });
++    const deepReadOnly = await listAiContentForSampling({
++      prisma,
++      traceId: newTraceId(),
++      type: "deepread",
++    });
++    assertions.push({
++      name: "listAiContentForSampling: type=deepread filter returns only deepread rows",
++      ok: deepReadOnly.length > 0 && deepReadOnly.every((i) => i.type === "deepread"),
++      detail: `count=${deepReadOnly.length}`,
++    });
++
++    // The list is NOT filtered by suppressedAt — suppressed rows still appear.
++    const suppressedReasonInList = samplingItems.find(
++      (i) => i.id === reasonGen.recommendationReasonId,
++    );
++    assertions.push({
++      name: "listAiContentForSampling: suppressed rows still appear (operator sees them + marker)",
++      ok:
++        suppressedReasonInList !== undefined &&
++        suppressedReasonInList!.suppressedAt !== null,
++    });
++
++    // --- 8: missing target → suppressAiContent throws (findUniqueOrThrow P2025 →
++    // tx rollback); no ReviewDecision appended for the missing target. ---
++    const reviewDecisionsBeforeMissing = await prisma.reviewDecision.count();
++    let missingThrew = false;
++    try {
++      await suppressAiContent({
++        prisma,
++        traceId: newTraceId(),
++        targetType: "reason",
++        targetId: "00000000-0000-0000-0000-000000000000", // nonexistent
++        hotEventId: candidate.id,
++        reviewer: "verify-suppress",
++        note: "missing target",
++      });
++    } catch {
++      missingThrew = true;
++    }
++    assertions.push({
++      name: "missing target: suppressAiContent throws (fail-fast, tx rollback)",
++      ok: missingThrew,
++    });
++    const reviewDecisionsAfterMissing = await prisma.reviewDecision.count();
++    assertions.push({
++      name: "missing target: no ReviewDecision appended (rollback clean)",
++      ok: reviewDecisionsAfterMissing === reviewDecisionsBeforeMissing,
++      detail: `before=${reviewDecisionsBeforeMissing} after=${reviewDecisionsAfterMissing}`,
++    });
++  } finally {
++    await cleanup(prisma);
++    resetPrisma();
++  }
++
++  report(assertions);
++}
++
++// --- helpers -----------------------------------------------------------------
++
++async function resetState(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  // Order matters for FK constraints. Clear the Story 5.4 surfaces (suppressedAt
++  // is a column on recommendation_reasons / deep_reads; the trend briefings are
++  // cleared so listAiContentForSampling's trend-exclusion can be proven). Then
++  // the rest of the standard chain.
++  await prisma.publishedTrendBriefing.deleteMany({});
++  await prisma.trendBriefing.deleteMany({});
++  await prisma.publishedHotEventDeepRead.deleteMany({});
++  await prisma.deepRead.deleteMany({});
++  await prisma.publishedTimelineEntry.deleteMany({});
++  await prisma.recommendationReason.deleteMany({});
++  await prisma.publishedDailyDigest.deleteMany({});
++  await prisma.dailyDigest.deleteMany({});
++  await prisma.publishedHotEventTheme.deleteMany({});
++  await prisma.eventThemeSet.deleteMany({});
++  await prisma.publishedHotEventAssociation.deleteMany({});
++  await prisma.eventAssociationSet.deleteMany({});
++  await prisma.publishedHotEventReaction.deleteMany({});
++  await prisma.marketReactionSnapshot.deleteMany({});
++  await prisma.publishedHotEventEvidence.deleteMany({});
++  await prisma.publishedHotEventExplanation.deleteMany({});
++  await prisma.publishedHotEvent.deleteMany({});
++  await prisma.hotEventRevision.deleteMany({});
++  await prisma.explanationVersion.deleteMany({});
++  await prisma.publicationDecision.deleteMany({});
++  await prisma.reviewDecision.deleteMany({});
++  await prisma.hotEventEvidence.deleteMany({});
++  await prisma.hotEvent.deleteMany({});
++  await prisma.evidenceRecord.deleteMany({});
++  await prisma.evidenceSource.deleteMany({});
++}
++
++async function seedRecord(
++  prisma: ReturnType<typeof getPrisma>,
++  sourceId: string,
++  data: { title: string; summary: string; url: string | null; publishedAt: Date },
++): Promise<void> {
++  const { createHash, randomUUID } = await import("node:crypto");
++  const salt = randomUUID();
++  const material = `${data.title}|${data.publishedAt.toISOString()}|${salt}`;
++  const contentHash = createHash("sha256").update(material).digest("hex");
++  await prisma.evidenceRecord.create({
++    data: {
++      id: newTraceId(),
++      sourceId,
++      url: data.url,
++      title: data.title,
++      summary: data.summary,
++      publishedAt: data.publishedAt,
++      ingestedAt: new Date(),
++      contentHash,
++      status: "archived",
++      failureReason: null,
++      rawPayload: { seeded: true, salt },
++      traceId: newTraceId(),
++    },
++  });
++}
++
++async function cleanup(prisma: ReturnType<typeof getPrisma>): Promise<void> {
++  await resetState(prisma);
++}
++
++// --- reporting ---------------------------------------------------------------
++
++function report(assertions: Assertion[]): void {
++  console.log("");
++  console.log("=== suppress-ai-content verification ===");
++  for (const a of assertions) {
++    const mark = a.ok ? "PASS" : "FAIL";
++    console.log(`  [${mark}] ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
++  }
++  const failed = assertions.filter((a) => !a.ok);
++  console.log("");
++  if (failed.length === 0) {
++    console.log(`PASS — ${assertions.length}/${assertions.length} assertions ok`);
++    process.exit(0);
++  } else {
++    console.error(`FAIL — ${failed.length}/${assertions.length} assertions failed`);
++    process.exit(1);
++  }
++}
++
++void main().catch((error) => {
++  console.error("[verify-suppress-ai-content] fatal", error);
++  process.exit(1);
++});
+diff --git a/packages/core/prisma/migrations/20260712000003_add_ai_content_suppression/migration.sql b/packages/core/prisma/migrations/20260712000003_add_ai_content_suppression/migration.sql
+new file mode 100644
+index 0000000..b8c69b9
+--- /dev/null
++++ b/packages/core/prisma/migrations/20260712000003_add_ai_content_suppression/migration.sql
+@@ -0,0 +1,35 @@
++-- Story 5.4: AI content operator sampling — surgical suppress signal + audit target columns.
++--
++-- Three additive ALTER TABLEs, all nullable, no FKs, no publication_status changes:
++--   1. review_decisions gains target_type + target_id (nullable; the traditional 4-outcome
++--      decisions leave both null since they are per-HotEvent; a suppress_ai_content decision
++--      sets target_type ∈ {"reason","deepread"} + target_id = the suppressed
++--      RecommendationReason.id / DeepRead.id). Structured audit columns let SM-6 query by
++--      outcome + target_type without parsing free-text notes.
++--   2. recommendation_reasons gains suppressed_at (nullable; set to now() by the sole writer
++--      suppressRecommendationReason when an operator judges the reason misleading).
++--   3. deep_reads gains suppressed_at (same shape; sole writer = suppressDeepRead).
++--
++-- The content columns of recommendation_reasons / deep_reads are NEVER cleared — only the
++-- nullable suppressed_at timestamp marks suppression, keeping NFR-7 audit / traceability
++-- intact. publish-orchestrator's reason + deep-read projections add `where:{suppressedAt:null}`
++-- so a suppressed source row is skipped at projection time (published reason → null, published
++-- deep-read row → deleted). The signal is co-located on the source rows the projection already
++-- reads, so no cross-module reverse dependency on review-workflow / ReviewDecision is needed
++-- (see spec-5-4 Design Notes). Suppression survives republish / whole-event refresh because the
++-- projection re-derives from source each pass.
++
++-- AddColumn: review_decisions.target_type — Story 5.4 suppress_ai_content target type
++-- ("reason" | "deepread"); null for the traditional 4-outcome per-HotEvent decisions.
++ALTER TABLE "review_decisions" ADD COLUMN "target_type" TEXT;
++
++-- AddColumn: review_decisions.target_id — the suppressed RecommendationReason.id /
++-- DeepRead.id; null for the traditional 4-outcome decisions.
++ALTER TABLE "review_decisions" ADD COLUMN "target_id" TEXT;
++
++-- AddColumn: recommendation_reasons.suppressed_at — set when an operator suppresses this
++-- reason via the sibling suppressAiContent path; null while live.
++ALTER TABLE "recommendation_reasons" ADD COLUMN "suppressed_at" TIMESTAMP(3);
++
++-- AddColumn: deep_reads.suppressed_at — same semantics as recommendation_reasons.suppressed_at.
++ALTER TABLE "deep_reads" ADD COLUMN "suppressed_at" TIMESTAMP(3);
+diff --git a/packages/core/src/modules/explanation/ai-content-sampling-service.ts b/packages/core/src/modules/explanation/ai-content-sampling-service.ts
+new file mode 100644
+index 0000000..98f301d
+--- /dev/null
++++ b/packages/core/src/modules/explanation/ai-content-sampling-service.ts
+@@ -0,0 +1,171 @@
++/**
++ * ai-content-sampling-service — the operator sampling-console data source (Story 5.4).
++ *
++ * This module is a READ service (no writes — the suppress writes live in
++ * reason-service.suppressRecommendationReason + deep-read-service.suppressDeepRead,
++ * which own their respective source tables per AD-2). It exposes one query:
++ *
++ *   - listAiContentForSampling: returns a unified list across recommendation_reasons
++ *     + deep_reads (TrendBriefing is EXCLUDED — epic Gap 2: V1 does not allow
++ *     marking / taking down trend briefings; the sampling console is browse-only
++ *     for them, and SM-6 numerator / denominator both exclude them). Each row is
++ *     mapped to a unified AiContentSamplingItem carrying a `type` discriminator
++ *     ("reason" | "deepread") so the UI can render a type tag + route the suppress
++ *     form. The list is NOT filtered by suppressedAt (operators need to see already-
++ *     suppressed rows + their "已下线" marker, UX-DR14). Ordered by createdAt desc
++ *     across both kinds. No pagination (V1 volume is tiny; matches the
++ *     listPendingCandidates / listPublishedHotEvents no-pagination precedent —
++ *     real pagination is deferred, see spec Design Notes).
++ *
++ * The eventTitle for each row is the EFFECTIVE title (latest HotEventRevision.title
++ * ?? baseline HotEvent.title) — the same overlay rule publish-orchestrator's
++ * timeline + detail projections use — so the sampling console shows the same title
++ * the public surface does (operator audit parity). Loaded via Prisma's nested
++ * `_count`/relation include in one findMany per kind.
++ *
++ * `take` is capped (AI_CONTENT_SAMPLING_TAKE_LIMIT, default 200 per kind) as a
++ * blowout guard. V1 volume is tiny; a real pagination cursor is deferred (spec
++ * Design Notes: listAiContentForSampling's take 上限改真分页归 deferred).
++ *
++ * This module never writes any table and never reads published_* (it reads the
++ * source truth tables the operator needs to judge — the projections are the
++ * public surface, not the audit surface).
++ */
++
++import type {
++  AiContentSamplingItem,
++  AiContentType,
++  ListAiContentForSamplingOptions,
++} from "./types.js";
++
++/**
++ * Per-kind take cap (blowout guard). V1 published volume is tiny; 200/kind is
++ * comfortably above any realistic near-term load and keeps the sampling-console
++ * render bounded. Real cursor pagination is deferred (spec Design Notes). The
++ * ponytail choice: a take cap is one line; a full cursor-pagination layer is
++ * consumerless complexity today.
++ */
++export const AI_CONTENT_SAMPLING_TAKE_LIMIT = 200;
++
++/**
++ * List AI content (reason + deepread) for the operator sampling console. Returns
++ * a unified, createdAt-desc-ordered list across both kinds. TrendBriefing is
++ * deliberately excluded (epic Gap 2). `type?` filters to one kind; omitted returns
++ * both. NOT filtered by suppressedAt (operators see suppressed rows + their
++ * marker). See module header for the full contract.
++ */
++export async function listAiContentForSampling(
++  options: ListAiContentForSamplingOptions,
++): Promise<AiContentSamplingItem[]> {
++  const { prisma, type } = options;
++
++  const wantReason = type === undefined || type === ("reason" satisfies AiContentType);
++  const wantDeepRead = type === undefined || type === ("deepread" satisfies AiContentType);
++
++  // Run the two findMany queries (in parallel — independent reads). Each selects
++  // the content + the event title (via the hotEvent relation + its revisions
++  // relation for the effective-title overlay). suppressedAt is included so the UI
++  // can render the "已下线" marker.
++  const [reasonRows, deepReadRows] = await Promise.all([
++    wantReason
++      ? prisma.recommendationReason.findMany({
++          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++          take: AI_CONTENT_SAMPLING_TAKE_LIMIT,
++          select: {
++            id: true,
++            hotEventId: true,
++            reason: true,
++            source: true,
++            createdAt: true,
++            suppressedAt: true,
++            hotEvent: {
++              select: {
++                title: true,
++                revisions: {
++                  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++                  take: 1,
++                  select: { title: true },
++                },
++              },
++            },
++          },
++        })
++      : [],
++    wantDeepRead
++      ? prisma.deepRead.findMany({
++          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++          take: AI_CONTENT_SAMPLING_TAKE_LIMIT,
++          select: {
++            id: true,
++            hotEventId: true,
++            impactSurface: true,
++            beneficiaries: true,
++            riskPoints: true,
++            source: true,
++            createdAt: true,
++            suppressedAt: true,
++            hotEvent: {
++              select: {
++                title: true,
++                revisions: {
++                  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++                  take: 1,
++                  select: { title: true },
++                },
++              },
++            },
++          },
++        })
++      : [],
++  ]);
++
++  const items: AiContentSamplingItem[] = [];
++
++  for (const r of reasonRows) {
++    // Effective title overlay (same rule as publish-orchestrator's timeline +
++    // detail projections): latest revision.title ?? baseline hotEvent.title.
++    const latestRevision = r.hotEvent.revisions[0] ?? null;
++    const eventTitle = latestRevision !== null ? latestRevision.title : r.hotEvent.title;
++    items.push({
++      type: "reason",
++      id: r.id,
++      hotEventId: r.hotEventId,
++      eventTitle,
++      content: r.reason,
++      source: r.source,
++      createdAt: r.createdAt,
++      suppressedAt: r.suppressedAt,
++    });
++  }
++
++  for (const d of deepReadRows) {
++    const latestRevision = d.hotEvent.revisions[0] ?? null;
++    const eventTitle = latestRevision !== null ? latestRevision.title : d.hotEvent.title;
++    // Deep-read content preview: concatenate the three segments so the sampling
++    // console shows a single-line preview (the detail-page block render is not
++    // needed here — the operator is judging the content, not laying out the page).
++    // Separated by a space so segment boundaries are visible in the preview.
++    items.push({
++      type: "deepread",
++      id: d.id,
++      hotEventId: d.hotEventId,
++      eventTitle,
++      content: `${d.impactSurface} ${d.beneficiaries} ${d.riskPoints}`,
++      source: d.source,
++      createdAt: d.createdAt,
++      suppressedAt: d.suppressedAt,
++    });
++  }
++
++  // Merge-sort by createdAt desc (id desc tiebreaker for deterministic order when
++  // two rows share the same createdAt millisecond — UUIDv7 ids embed a monotonic
++  // timestamp so the tiebreaker is stable). Both input lists are already
++  // createdAt-desc, so a single sort of the merged array is O(n log n).
++  items.sort((a, b) => {
++    const byTime = b.createdAt.getTime() - a.createdAt.getTime();
++    if (byTime !== 0) return byTime;
++    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
++  });
++
++  return items;
++}

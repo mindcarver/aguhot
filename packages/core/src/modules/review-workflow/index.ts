@@ -14,7 +14,14 @@
  * evidence_records / evidence_sources.
  */
 
-export { decideReview, listPendingCandidates, getCandidateDetail, getPublishedEventForRevision } from "./review-service.js";
+export {
+  decideReview,
+  listPendingCandidates,
+  getCandidateDetail,
+  getPublishedEventForRevision,
+  suppressAiContent,
+  getSm6MisleadingRate,
+} from "./review-service.js";
 export type {
   DecideReviewOptions,
   DecideReviewResult,
@@ -26,6 +33,10 @@ export type {
   CandidateDecisionEntry,
   GetPublishedEventForRevisionOptions,
   PublishedEventRevisionView,
+  SuppressAiContentOptions,
+  SuppressAiContentResult,
+  GetSm6MisleadingRateOptions,
+  Sm6MisleadingRate,
 } from "./types.js";
 export { resolveTransition, LEGAL_TRANSITIONS } from "./transitions.js";
 export {
@@ -33,6 +44,8 @@ export {
   PublishAction,
   IllegalTransitionError,
   CandidateNotFoundError,
+  SUPPRESS_AI_CONTENT_OUTCOME,
+  TargetNotFoundError,
 } from "./types.js";
 export type {
   ReviewOutcome as ReviewOutcomeType,

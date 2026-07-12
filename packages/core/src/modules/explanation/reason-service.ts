@@ -43,6 +43,8 @@ import type {
   GenerateRecommendationReasonResult,
   LlmReasonResult,
   RecommendationReasonRecord,
+  SuppressRecommendationReasonOptions,
+  SuppressResult,
 } from "./types.js";
 
 /**
@@ -319,6 +321,61 @@ export async function getLatestRecommendationReason(
     promptVersion: latest.promptVersion,
     createdAt: latest.createdAt,
   };
+}
+
+// --- Story 5.4: suppress (operator sampling — surgical takedown of one reason) ---
+
+/**
+ * Suppress one recommendation_reasons row by setting its `suppressedAt` to now.
+ * Story 5.4. This module is the SOLE writer of recommendation_reasons.suppressedAt
+ * (AD-2 source-table ownership — the content columns are never cleared, only this
+ * nullable metadata timestamp marks suppression; NFR-7 audit / traceability intact).
+ *
+ * Idempotent (AC "已抑制目标再次标记"): if `suppressedAt` is already non-null, returns
+ * `{ suppressed: false, reason: "already-suppressed" }` and writes nothing. This
+ * prevents a repeat operator submit from appending a second ReviewDecision (which
+ * would double-count the SM-6 numerator). The caller (review-workflow's sibling
+ * suppressAiContent) branches on `suppressed` to decide whether to append the audit
+ * row + trigger the projection refresh.
+ *
+ * Missing row: findUniqueOrThrow raises Prisma P2025 → the caller's `$transaction`
+ * rolls back (fail-fast, no partial suppress). The spec's TargetNotFoundError path
+ * lets P2025 propagate; the verify script asserts the throw.
+ *
+ * Accepts the root PrismaClient OR a `$transaction` tx handle. review-workflow's
+ * suppressAiContent passes its `tx as unknown as PrismaClient` so the source
+ * suppress + ReviewDecision append + (conditional) timeline projection refresh are
+ * atomic — mirroring decideReview's established in-transaction cross-module shape.
+ * publish-orchestrator's timeline projection adds `where:{suppressedAt:null}`, so
+ * once this sets the timestamp the next refreshPublishedTimelineForEvent
+ * (republish / whole-event refresh / self-heal) skips this row → published reason
+ * goes null (or falls back to an earlier unsuppressed version). The signal is
+ * co-located on the source row the projection already reads, so no cross-module
+ * reverse dependency on review-workflow / ReviewDecision is needed.
+ */
+export async function suppressRecommendationReason(
+  options: SuppressRecommendationReasonOptions,
+): Promise<SuppressResult> {
+  const { prisma, id } = options;
+
+  // findUniqueOrThrow so a missing target raises P2025 cleanly → tx rollback. We
+  // only need suppressedAt to decide idempotency; the content columns stay put.
+  const existing = await prisma.recommendationReason.findUniqueOrThrow({
+    where: { id },
+    select: { suppressedAt: true },
+  });
+
+  // Idempotent: already suppressed → no-op, signal the caller not to append a
+  // duplicate ReviewDecision (prevents SM-6 numerator double-counting).
+  if (existing.suppressedAt !== null) {
+    return { suppressed: false, reason: "already-suppressed" };
+  }
+
+  await prisma.recommendationReason.update({
+    where: { id },
+    data: { suppressedAt: new Date() },
+  });
+  return { suppressed: true };
 }
 
 // --- validation ---------------------------------------------------------------

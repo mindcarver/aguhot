@@ -1038,3 +1038,27 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-3-digest-trend-briefing.md`
   summary: 6 类子串黑名单对合法金融词汇（持仓/增持/主力/一定 等）的 false-positive——研判现为其第 3 个消费者（reason/deepread/trendbriefing），真实 provider 接入时统一调
   evidence: `passesRecommendationGuardrail` 为原始子串匹配（`reason-service.ts`），无 CJK 词界。研判段落更易触发（如「存在一定的不确定性」命中「一定」）。V1 Stub 文案已避开（dev 将示例「一定延续性」改为「延续性」）；5.2 deferred 已登记同类。3 个 AI 内容表面（reason/deepread/trendbriefing）共用此 guardrail，真实 provider 接入时需统一调（提升到 shared + 改名 + 词界感知，或按表面差异化白名单）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: 并发 suppressAiContent 同一 targetId 竞态可致 SM-6 分子双计（幂等失效）；条件 update 守卫
+  evidence: `suppressRecommendationReason`/`suppressDeepRead`（explanation 模块）先 `findUniqueOrThrow` 读 `suppressedAt`、再 `update`。两条并发 suppress 同 target：皆读到 `suppressedAt=null` → 皆 update → 皆 append `ReviewDecision`，幂等返回值失序、SM-6 分子翻倍。V1 运营为共享单身份、低并发，概率低；硬化 = `update({where:{id, suppressedAt:null}, data:{suppressedAt:now}})` 查 `count===1`，或 DB 唯一/行锁。对齐 5.3 deferred 的「并发 refresh 非原子」同类。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: suppressAiContent 未校验 targetId 归属的 hotEventId === 入参 hotEventId（跨事件错配致审计归属错）
+  evidence: `suppressAiContent`（review-workflow）按 `targetId` 直接抑制源行（正确），但 `ReviewDecision.hotEventId` 取自入参。伪造 form 传他事件 targetId + 本事件 hotEventId → 源行正确抑制、审计行挂错事件。SM-6 分子按 outcome+targetType 计、不键 hotEventId（口径不受影响），仅 per-event 审计链错。可信运营共享身份、低威胁；硬化 = suppress 前校验源行 hotEventId。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: suppress 与并发 takedown 竞态：publicationStatus 读后无 FOR UPDATE，takedown 提交后 suppress 的 refresh(publish) 可能为已 taken_down 事件重建 published 行（ghost publication）
+  evidence: `suppressAiContent` 读 `publicationStatus` 与调 refresh 非原子（无 SELECT FOR UPDATE）。窄窗口内 takedown 提交 → suppress 仍按读到 published 调 `refreshPublishedTimelineForEvent({action:"publish"})` upsert published 行。V1 低并发、概率窄；硬化 = FOR UPDATE 锁状态或 refresh 前复检。对齐既有 concurrency-hardening defer 类。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: `suppress_ai_content` 未进 `ReviewOutcome` 联合体——未来按 4 值 exhaustive narrow 的消费者会撞未处理值
+  evidence: 本 story 故意将 outcome 串独立为 `SUPPRESS_AI_CONTENT_OUTCOME`、不进 `ReviewOutcome` const（保状态机 selfcheck `LEGAL_TRANSITIONS.length===6` 不动，照 epic「不改 decideReview 状态机」）。代价：未来若新增按 `ReviewOutcome` exhaustive switch 的消费者（ETL/分析/UI），`suppress_ai_content` 行命中 default。当前无此类消费者（grep 确认、verify 全绿）；未来硬化 = 加 guarded exhaustive 检查或文档化第 5 值。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: `submitSuppressAiContent` 的 `note` 字段无长度上限（镜像既有 `submitReview` note 先例）
+  evidence: `apps/web/app/(operator)/console/ai-content/actions.ts` 仅 trim note、无 cap/sanitize，直写 `ReviewDecision.note`。既有 `submitReview` 同形（既有缺口）。本 story 未引入新缺口、但复制到新字段；统一硬化时一并加 `NOTE_MAX_LENGTH` cap（含 reason/deepread 等所有 note 入口）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: SM-6 查询 + 投影 `where:{suppressedAt:null}` 缺索引（`review_decisions(outcome,target_type,created_at)`、reasons/deepreads `suppressed_at`）
+  evidence: 迁移 `20260712000003_add_ai_content_suppression` 加 4 nullable 列无索引。`getSm6MisleadingRate` 按 `outcome+targetType+createdAt` 过滤、两处投影按 `suppressedAt:null` 过滤。V1 运营决策/AI 内容量级低、全扫可承；规模上行后加部分索引（`WHERE suppressed_at IS NULL` / `WHERE outcome='suppress_ai_content'`）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: deepread 抑制触发 `refreshPublishedReadModel({action:"publish"})` 全 7 块重投影（仅 deepread 实变）
+  evidence: `suppressAiContent` 对 deepread 抑制后调 whole-event read-model refresh（publish-orchestrator 无 public 的「只刷 deepread」入口，`projectDeepRead` 私有）。原子性正确但成本 = 事件级全量重投影。V1 量级无感；优化 = 暴露窄域 deepread refresh 入口（publish-orchestrator 新 sibling）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
+  summary: `listAiContentForSampling` take:200/kind 后 JS 合并未再截断 + 静默溢出（>200/kind 旧项不可见）
+  evidence: `ai-content-sampling-service.ts` 每类 `findMany({take:200})` 后按 createdAt desc 合并。单类 >200 时溢出静默丢、无 truncated 信号，运营抽检覆盖有盲区。V1 量级够（带 ponytail 注释）；规模上行改真分页（cursor/offset）+ truncated 标记，对齐 spec Design Notes 已登记的「分页归 deferred」。

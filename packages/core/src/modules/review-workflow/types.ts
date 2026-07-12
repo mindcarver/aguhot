@@ -178,6 +178,126 @@ export class CandidateNotFoundError extends Error {
   }
 }
 
+// --- Story 5.4: AI content operator sampling (suppress sibling + SM-6 readout) ----
+
+/**
+ * The outcome string written to ReviewDecision.outcome when an operator suppresses
+ * a single piece of AI content (one recommendation_reasons or deep_reads row).
+ *
+ * DELIBERATELY a STANDALONE const — it is NOT added to the `ReviewOutcome` union
+ * above, NOT added to `LEGAL_TRANSITIONS`, and NOT routed through `resolveTransition`
+ * / `decideReview`. Those three are the HotEvent state machine: their outcome
+ * alphabet feeds the `transitions.selfcheck.ts` `LEGAL_TRANSITIONS.length === 6`
+ * assertion and the status-graph reachability invariants. Adding suppress to that
+ * alphabet would either need a published→published self-loop (which perturbs the
+ * selfcheck count + a resolveTransition branch) or force the whole-event
+ * PublishAction to express a per-content refresh (PublishAction is whole-event
+ * granularity — publish/takedown/none — a mismatch). Instead suppressAiContent is
+ * a SIBLING function that reuses decideReview's "single $transaction + append
+ * ReviewDecision + call refresh" COORDINATION SHAPE but bypasses the state machine
+ * entirely. The outcome string is written directly to ReviewDecision.outcome (a
+ * free String column); the state machine stays at zero changes. See spec-5-4
+ * Design Notes for the full rationale.
+ */
+export const SUPPRESS_AI_CONTENT_OUTCOME = "suppress_ai_content" as const;
+
+/**
+ * Domain error raised when a suppressAiContent call targets an id that does not
+ * exist in the corresponding source table (recommendation_reasons / deep_reads).
+ * The findUniqueOrThrow inside the source suppress fn raises Prisma P2025, which
+ * the caller can either let propagate or wrap; this class is provided for callers
+ * that want a domain-typed catch. Nothing is written when this is thrown — the
+ * caller's `$transaction` rolls back (fail-fast, no partial suppress).
+ */
+export class TargetNotFoundError extends Error {
+  readonly targetType: "reason" | "deepread";
+  readonly targetId: string;
+  constructor(targetType: "reason" | "deepread", targetId: string) {
+    super(
+      `[review-workflow] suppress target not found: ${targetType} ${targetId}`,
+    );
+    this.name = "TargetNotFoundError";
+    this.targetType = targetType;
+    this.targetId = targetId;
+  }
+}
+
+/**
+ * Options for suppressAiContent — the sibling function that surgically takes down
+ * one piece of AI content (one reason or one deep read) WITHOUT touching the
+ * HotEvent state machine. `{ prisma, traceId, targetType, targetId, hotEventId,
+ * reviewer, note? }` mirrors decideReview's `{ prisma, traceId, hotEventId,
+ * outcome, reviewer, note? }` shape (the cross-module coordination form), but
+ * replaces the state-machine `outcome` with a `targetType` + `targetId` pair
+ * identifying which source row to suppress.
+ *
+ *   - targetType ∈ {"reason","deepread"}: which source table to suppress.
+ *     TrendBriefing is excluded (epic Gap 2 — the server-action whitelist rejects
+ *     any other value before reaching this layer).
+ *   - targetId: the RecommendationReason.id / DeepRead.id to suppress.
+ *   - hotEventId: carried into the ReviewDecision row for audit (the decision is
+ *     still scoped to a HotEvent even though the state machine is not touched —
+ *     the audit chain ties the suppress to the event whose AI content was judged
+ *     misleading).
+ *   - reviewer: operator identity (V1 placeholder "operator", same as submitReview).
+ *   - note?: operator free-text reason (why the content is misleading; recorded
+ *     verbatim on the ReviewDecision row for audit).
+ */
+export interface SuppressAiContentOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  targetType: "reason" | "deepread";
+  targetId: string;
+  hotEventId: string;
+  reviewer: string;
+  note?: string;
+}
+
+/**
+ * The result of a suppress attempt. `{ suppressed: true }` on a fresh suppress
+ * (source row was live → suppressedAt set + ReviewDecision appended + projection
+ * refreshed if the event is published). `{ suppressed: false, reason:
+ * "already-suppressed" }` on an idempotent re-suppress (source row was already
+ * suppressed → no second ReviewDecision appended, no refresh — prevents SM-6
+ * numerator double-counting). The operator UI hides the suppress button on
+ * already-suppressed rows, but this idempotency is the server-side guard.
+ */
+export interface SuppressAiContentResult {
+  suppressed: boolean;
+  reason?: "already-suppressed";
+}
+
+/**
+ * Options for getSm6MisleadingRate — the SM-6 readout query (7-day rolling
+ * window). `{ prisma, traceId, windowDays? }` — windowDays defaults to 7 (epic
+ * Gap 4 literal). The query counts ReviewDecision rows with outcome=
+ * suppress_ai_content + targetType ∈ {reason,deepread} in the window (numerator)
+ * and the total reason+deepread rows generated in the same window (denominator).
+ * TrendBriefing rows are excluded from both numerator and denominator (epic Gap 2).
+ */
+export interface GetSm6MisleadingRateOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+  windowDays?: number;
+}
+
+/**
+ * The SM-6 misleading-rate readout. SM-6 target: rate < 10%.
+ *   - rate: numerator/denominator (0 when denominator === 0 — UI shows "暂无数据").
+ *   - numerator: count of ReviewDecision rows with outcome=suppress_ai_content +
+ *     targetType ∈ {reason,deepread} + createdAt ≥ now-windowDays.
+ *   - denominator: recommendationReason.count(createdAt ≥ window) +
+ *     deepRead.count(createdAt ≥ window) — the aggregate AI content generated in
+ *     the same window (TrendBriefing excluded, epic Gap 2).
+ *   - windowDays: the window used (echoes the input / default for UI display).
+ */
+export interface Sm6MisleadingRate {
+  rate: number;
+  numerator: number;
+  denominator: number;
+  windowDays: number;
+}
+
 // --- Story 1.9: published-event revision view (operator side) ----------------
 
 /**

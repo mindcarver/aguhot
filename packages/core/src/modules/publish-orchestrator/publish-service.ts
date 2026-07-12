@@ -590,7 +590,13 @@ async function projectDeepRead(
   hotEventId: string,
 ): Promise<void> {
   const latest = await prisma.deepRead.findFirst({
-    where: { hotEventId },
+    // Story 5.4: skip suppressed deep reads so a surgical takedown survives the
+    // whole-event refresh (republish / self-heal). The latest non-suppressed row
+    // wins; all suppressed → null → published row deleted (honest degraded state).
+    // The signal is co-located on the source row (suppressedAt), which the
+    // projection already reads — no cross-module reverse dependency on
+    // review-workflow / ReviewDecision.
+    where: { hotEventId, suppressedAt: null },
     // createdAt desc, then id desc as a deterministic tiebreaker (UUIDv7 ids
     // embed a monotonic timestamp) — same convention as projectExplanation /
     // projectMarketReaction / projectAssociations / projectThemes.

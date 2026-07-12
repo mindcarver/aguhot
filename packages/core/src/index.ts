@@ -96,8 +96,15 @@ export type {
 } from "./modules/event-assembly/types.js";
 
 // review-workflow module (Story 1.6 — the publish gate; Story 1.9 — republish +
-// operator revision view).
-export { decideReview, listPendingCandidates, getCandidateDetail, getPublishedEventForRevision } from "./modules/review-workflow/review-service.js";
+// operator revision view; Story 5.4 — suppressAiContent sibling + SM-6 readout).
+export {
+  decideReview,
+  listPendingCandidates,
+  getCandidateDetail,
+  getPublishedEventForRevision,
+  suppressAiContent,
+  getSm6MisleadingRate,
+} from "./modules/review-workflow/review-service.js";
 export type {
   DecideReviewOptions,
   DecideReviewResult,
@@ -109,6 +116,10 @@ export type {
   CandidateDecisionEntry,
   GetPublishedEventForRevisionOptions,
   PublishedEventRevisionView,
+  SuppressAiContentOptions,
+  SuppressAiContentResult,
+  GetSm6MisleadingRateOptions,
+  Sm6MisleadingRate,
 } from "./modules/review-workflow/types.js";
 export { resolveTransition, LEGAL_TRANSITIONS } from "./modules/review-workflow/transitions.js";
 export {
@@ -116,6 +127,8 @@ export {
   PublishAction,
   IllegalTransitionError,
   CandidateNotFoundError,
+  SUPPRESS_AI_CONTENT_OUTCOME,
+  TargetNotFoundError,
 } from "./modules/review-workflow/types.js";
 export type {
   ReviewOutcome as ReviewOutcomeType,
@@ -228,12 +241,16 @@ export {
 export {
   generateRecommendationReason,
   getLatestRecommendationReason,
+  suppressRecommendationReason,
   passesRecommendationGuardrail,
   RECOMMENDATION_REASON_MAX_LENGTH,
   RECOMMENDATION_FORBIDDEN_PHRASES,
   generateDeepRead,
   getLatestDeepRead,
+  suppressDeepRead,
   DEEP_READ_SEGMENT_MAX_LENGTH,
+  listAiContentForSampling,
+  AI_CONTENT_SAMPLING_TAKE_LIMIT,
   StubLlmAdapter,
   STUB_RECOMMENDATION_REASON,
   STUB_DEEP_READ,
@@ -241,6 +258,7 @@ export {
 } from "./modules/explanation/index.js";
 export {
   ExplanationSource,
+  AiContentType,
 } from "./modules/explanation/types.js";
 export type {
   ExplanationSource as ExplanationSourceType,
@@ -264,6 +282,12 @@ export type {
   GenerateDeepReadOptions,
   GenerateDeepReadResult,
   DeepReadRecord,
+  AiContentType as AiContentTypeType,
+  SuppressRecommendationReasonOptions,
+  SuppressDeepReadOptions,
+  SuppressResult,
+  ListAiContentForSamplingOptions,
+  AiContentSamplingItem,
 } from "./modules/explanation/types.js";
 
 // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +

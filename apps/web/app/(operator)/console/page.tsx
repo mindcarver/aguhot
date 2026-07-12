@@ -40,6 +40,25 @@ export default async function ConsolePage() {
           </p>
         </header>
 
+        {/* Story 5.4: AI content sampling console entry. Cross-event list of AI
+            解读 + AI 深读 with a type filter, an SM-6 misleading-rate readout,
+            and a per-row suppress form. Research briefings are browse-only (not
+            listed / not suppressible in V1). */}
+        <section className="mt-8">
+          <Link
+            href="/console/ai-content"
+            className="block rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition hover:border-ink-secondary"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <h2 className="text-base font-semibold">AI 内容抽检（reason / 深读）</h2>
+              <span className="shrink-0 text-sm text-ink-secondary">进入 →</span>
+            </div>
+            <p className="mt-1 text-sm text-ink-secondary">
+              抽检 AI 解读与 AI 深读 · 标记误导并下线 · 误导率读数
+            </p>
+          </Link>
+        </section>
+
         {candidates.length === 0 ? (
           <p className="mt-12 text-ink-secondary">暂无待复核候选。</p>
         ) : (

@@ -17,6 +17,7 @@
     "verify:reason": "tsx src/verify-reason.ts",
     "verify:deepread": "tsx src/verify-deepread.ts",
     "verify:trendbriefing": "tsx src/verify-trendbriefing.ts",
+    "verify:suppress-ai-content": "tsx src/verify-suppress-ai-content.ts",
     "verify:revision": "tsx src/verify-revision.ts",
     "verify:merge-split": "tsx src/verify-merge-split.ts",
     "verify:timeline": "tsx src/verify-timeline.ts",

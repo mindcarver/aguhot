@@ -230,9 +230,18 @@ model HotEventEvidence {
 model ReviewDecision {
   id        String   @id // UUIDv7, assigned in application code (newTraceId)
   hotEventId String  @map("hot_event_id")
-  outcome   String // ReviewOutcome union value ("approve"|"reject"|"takedown")
+  outcome   String // ReviewOutcome union value ("approve"|"reject"|"takedown"|"republish") OR the sibling "suppress_ai_content" outcome (Story 5.4 — written directly to this free-String column, NOT added to the ReviewOutcome const / state machine)
   reviewer  String // operator identity (V1: placeholder; real auth deferred)
   note      String? // optional operator note
+  // Story 5.4 — suppress_ai_content target. Nullable: the traditional 4-outcome
+  // decisions leave both null (the decision is per-HotEvent, identified by
+  // hotEventId). A suppress_ai_content decision sets targetType ∈ {"reason",
+  // "deepread"} + targetId = the suppressed RecommendationReason.id /
+  // DeepRead.id (structured audit: which generated AI content was judged
+  // misleading + which exact source row). Kept as a free String (no TS enum, per
+  // erasableSyntaxOnly); the AiContentType const lives in the explanation module.
+  targetType String? @map("target_type")
+  targetId   String? @map("target_id")
   traceId   String? @map("trace_id")
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -842,6 +851,18 @@ model RecommendationReason {
   source        String // ExplanationSource union value ("ai" in V1)
   modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
   promptVersion String   @map("prompt_version") // prompt template version (e.g. "reason-stub-v1")
+  // Story 5.4 — suppression timestamp. Nullable metadata: null while the row is
+  // live, set to now() by suppressRecommendationReason (the SOLE writer of this
+  // column) when an operator judges the reason misleading and suppresses it via
+  // the sibling suppressAiContent path. The content columns are NEVER cleared
+  // (NFR-7 audit / traceability intact); only this timestamp marks suppression.
+  // publish-orchestrator's timeline projection adds `where:{suppressedAt:null}`
+  // so a suppressed reason is skipped at projection time → published_timeline_
+  // entries.recommendation_reason goes null (or falls back to an earlier
+  // unsuppressed version). The signal is co-located on the source row (which the
+  // projection already reads) so no cross-module reverse dependency on
+  // review-workflow / ReviewDecision is needed (see spec-5-4 Design Notes).
+  suppressedAt  DateTime? @map("suppressed_at")
   traceId       String?  @map("trace_id")
   createdAt     DateTime @default(now()) @map("created_at")
 
@@ -880,6 +901,11 @@ model DeepRead {
   source        String // ExplanationSource union value ("ai" in V1)
   modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
   promptVersion String   @map("prompt_version") // prompt template version (e.g. "deepread-stub-v1")
+  // Story 5.4 — suppression timestamp. Nullable metadata; same semantics as
+  // RecommendationReason.suppressedAt (sole writer = suppressDeepRead; content
+  // columns never cleared; projection skips via where:{suppressedAt:null}). See
+  // the RecommendationReason comment + spec-5-4 Design Notes for the rationale.
+  suppressedAt  DateTime? @map("suppressed_at")
   traceId       String?  @map("trace_id")
   createdAt     DateTime @default(now()) @map("created_at")
 

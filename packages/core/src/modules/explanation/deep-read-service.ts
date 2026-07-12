@@ -52,6 +52,8 @@ import type {
   GenerateDeepReadOptions,
   GenerateDeepReadResult,
   LlmDeepReadResult,
+  SuppressDeepReadOptions,
+  SuppressResult,
 } from "./types.js";
 
 /**
@@ -258,6 +260,51 @@ export async function getLatestDeepRead(
     promptVersion: latest.promptVersion,
     createdAt: latest.createdAt,
   };
+}
+
+// --- Story 5.4: suppress (operator sampling — surgical takedown of one deep read) ---
+
+/**
+ * Suppress one deep_reads row by setting its `suppressedAt` to now. Story 5.4.
+ * This module is the SOLE writer of deep_reads.suppressedAt (AD-2 source-table
+ * ownership — content columns never cleared, only this nullable metadata timestamp
+ * marks suppression; NFR-7 audit / traceability intact). Same shape + idempotency
+ * contract as suppressRecommendationReason in reason-service (the two source tables
+ * have identical append-only + suppress semantics).
+ *
+ * Idempotent: if `suppressedAt` is already non-null, returns `{ suppressed: false,
+ * reason: "already-suppressed" }` and writes nothing (prevents SM-6 numerator
+ * double-counting via repeat ReviewDecision appends). Missing row raises Prisma
+ * P2025 via findUniqueOrThrow → caller's `$transaction` rolls back (fail-fast).
+ *
+ * Accepts the root PrismaClient OR a `$transaction` tx handle. review-workflow's
+ * suppressAiContent passes its `tx as unknown as PrismaClient` so the source
+ * suppress + ReviewDecision append + (conditional) read-model refresh are atomic.
+ * publish-orchestrator's deep-read projection (projectDeepRead) adds
+ * `where:{suppressedAt:null}`, so once this sets the timestamp the next
+ * refreshPublishedReadModel (republish / whole-event refresh / self-heal) skips
+ * this row → published deep-read row deleted (or falls back to an earlier
+ * unsuppressed version).
+ */
+export async function suppressDeepRead(
+  options: SuppressDeepReadOptions,
+): Promise<SuppressResult> {
+  const { prisma, id } = options;
+
+  const existing = await prisma.deepRead.findUniqueOrThrow({
+    where: { id },
+    select: { suppressedAt: true },
+  });
+
+  if (existing.suppressedAt !== null) {
+    return { suppressed: false, reason: "already-suppressed" };
+  }
+
+  await prisma.deepRead.update({
+    where: { id },
+    data: { suppressedAt: new Date() },
+  });
+  return { suppressed: true };
 }
 
 // --- validation ---------------------------------------------------------------
