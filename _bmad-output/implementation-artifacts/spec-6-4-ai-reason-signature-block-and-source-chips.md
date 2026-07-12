@@ -2,7 +2,8 @@
 title: 'AI 解读实线签名块 + 来源 chip 外显 (6.4)'
 type: 'feature'
 created: '2026-07-12'
-status: 'ready-for-dev'
+status: 'review'
+baseline_commit: '5b44c79'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
 context:
@@ -97,3 +98,33 @@ warnings: []
 
 **Manual checks:**
 - 目视确认 AI 解读实线分隔、AiLabel「AI 解读」、字号 < 标题；关联来源 chip；展开 `<details>` 见 chip 列表；reason 为 null 时不渲染。
+
+## Dev Agent Record
+
+### Implementation Plan
+- `EditorialReasonBlock` (NEW): server component. Solid `border-t border-border-hairline` separator + `<AiLabel>` ("AI" badge) + reason `<p>` (body-sm ink-secondary). Self-guards null/empty reason → returns null (no orphan hairline, no AiLabel, NFR-2). Weight ≤ factual title (h3 17px ink-1 semibold): the hairline SEPARATES (signature feel) without RAISING weight (PRD §10 / UX-DR8). Naming: slot is「AI 解读」(not reverted to reference「推荐理由」, PM P5); visible badge is the generic AiLabel "AI" (shared with detail page / daily — not changed).
+- `SourceChipList` (NEW): server component. Renders `来源 {count}` chip (surface-base + hairline border + ink-primary + font-mono) replacing the 4.2/6.3 evidence `<dl>`. Honest-data boundary: `published_timeline` carries only `evidenceCount` + representative `sourceName` (no per-source list) — so the chip shows COUNT only; the reference site's `关联讨论 N 条` + multiple per-source chips are NOT replicated (would fabricate; NFR-2). Multi-source chips deferred (need a per-source read path). The representative sourceName is the card's byline (6.3) + the fold chip — not duplicated here.
+- `TimelineCard` (MODIFY): inline AI slot → `<EditorialReasonBlock reason={recommendationReason} />` (removed `hasRecommendation` local — block self-guards); evidence `<dl>` → `<SourceChipList count={entry.evidenceCount} />`; fold disclosure body → chip row (representative `{sourceName}` chip + `+{count-1}` chip if count>1 + 「· 完整证据时间线请见详情页」 guide). `AiLabel` import removed (now via EditorialReasonBlock); `cn` retained (fold summary).
+- `timeline.spec` (MODIFY): card reading-order test `locator("dl")` → `getByText(/来源 \d+/)` (SourceChipList chip, 半导体 count 2 →「来源 2」); fold disclosure test `toContainText(/精选自 2 条证据源/)` → `toContainText(/完整证据时间线请见详情页/)` + `toContainText(/\+1/)` (chip row + guide). AI-slot-null test unchanged (EditorialReasonBlock null guard preserves "no AI text when reason null").
+
+### Debug Log
+- Visual verification: home `/` needs DATABASE_URL (500 without DB). Recreated the DB-free scratch route `dev-timeline-preview` with mock `PublishedTimelineEntry` (reasons on 3 entries, null on 2, all folded ≥2 sources) rendering the REAL components. Verified: EditorialReasonBlock solid-hairline signature block renders for reason'd entries (weight visibly ≤ title), absent for null-reason entries; SourceChipList `来源 N` chip replaces dl; fold disclosure chip row (sourceName + `+N` + guide). Scratch DELETED after capture.
+- `AiLabel` renders "AI" (not "AI 解读") — it's the generic badge shared across all AI content surfaces (detail page 深读, daily 研判). The「AI 解读」is the timeline slot's conceptual name (specs/comments); the visible badge stays "AI" for consistency. Not changing AiLabel (would mislabel other surfaces).
+
+### Completion Notes
+- **Typecheck + lint + prettier:** all green.
+- **Visual verification (scratch route, DB-free mock, deleted after):** EditorialReasonBlock solid-hairline signature block (AI badge + reason, weight ≤ title); SourceChipList `来源 N` chip; null-reason entries have no block; fold disclosure chip row. Matches `demo-ui-redesign.html` `.ai-block` / `.e-chips`. See `_bmad-output/dev-6-4-signature.png`.
+- **E2E:** NOT run — no `DATABASE_URL`. `timeline.spec` updated for the 2 broken assertions (dl→SourceChipList, fold body→chips); `home.spec` has no card assertions (Story 1.1 only). Execution deferred to a DB-equipped env (6.5 收口).
+- **Token/architecture:** `globals.css` untouched; no schema/read-model/AD change (Epic 6 scope invariant holds).
+- **Guardrails:** AI 解读 weight ≤ factual title (body-sm ink-secondary < h3 17px ink-1); naming「AI 解读」not reverted; NFR-2 (null→no render, no fabricated per-source chips / 精选分); UX-DR8 (hairline separates without raising weight).
+
+## File List
+- `apps/web/app/(public)/_components/editorial-reason-block.tsx` — NEW (solid-hairline signature block: AiLabel + reason, self-guard null, weight ≤ factual)
+- `apps/web/app/(public)/_components/source-chip-list.tsx` — NEW (`来源 {count}` chip, replaces evidence dl; multi-source chips deferred — no per-source data)
+- `apps/web/app/(public)/_components/timeline-card.tsx` — MODIFY (inline AI slot → EditorialReasonBlock; evidence dl → SourceChipList; fold body → chip row; AiLabel import removed)
+- `apps/web/e2e/timeline.spec.ts` — MODIFY (card reading-order `dl`→`来源 \d+` chip; fold body `精选自 N 条`→ chip row + guide)
+- `apps/web/app/(public)/dev-timeline-preview/` — CREATED then DELETED (scratch visual verification, DB-free mock; removed before commit)
+
+## Change Log
+- 2026-07-12: Story 6.4 implemented — EditorialReasonBlock (solid-hairline AI 解读 signature, weight ≤ factual) + SourceChipList (`来源 N` chip) + fold chip row; integrated into TimelineCard. typecheck + lint + prettier green; visual verified via DB-free scratch (deleted); e2e deferred (no DB, 6.5 收口). Status → review.
+
