@@ -53,6 +53,8 @@
 
 import { Queue, Worker, type Job } from "bullmq";
 
+import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
+
 import { getRedis } from "./connection.js";
 
 export const RECOMMENDATION_REASON_QUEUE_NAME = "recommendation-reason";
@@ -80,9 +82,7 @@ export function getRecommendationReasonQueue(): Queue {
  * Enqueue one recommendation-reason job. Returns the job so callers (e.g. the
  * verify script) can await its completion.
  */
-export async function enqueueRecommendationReason(
-  traceId: string,
-): Promise<Job> {
+export async function enqueueRecommendationReason(traceId: string): Promise<Job> {
   const q = getRecommendationReasonQueue();
   // Prune completed/failed jobs so Redis does not grow unbounded as
   // recommendation-reason runs accumulate (keep a short tail for operator
@@ -125,23 +125,18 @@ export function registerRecommendationReasonWorker(): Worker {
   const worker = new Worker(
     RECOMMENDATION_REASON_QUEUE_NAME,
     async (job: Job) => {
-      const {
-        getPrisma,
-        generateRecommendationReason,
-        refreshPublishedTimelineForEvent,
-      } = await import("@aguhot/core");
+      const { getPrisma, generateRecommendationReason, refreshPublishedTimelineForEvent } =
+        await import("@aguhot/core");
       const prisma = getPrisma();
       const data = job.data as RecommendationReasonJobData;
 
-      // V1 HONESTY RULE: no real LLM provider is wired (procurement deferred).
-      // With no adapter, generateRecommendationReason cannot run — it would
-      // return null and write nothing. We skip and report it as skipped so the
-      // caller knows the pipeline ran but produced no reasons (honest
-      // degradation). StubLlmAdapter is test-only and is NOT imported here.
-      //
-      // ponytail: real provider wired when procured — V1 no adapter, prod
-      // degrades honestly.
-      const adapter = undefined;
+      // Resolve the LLM adapter from env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
+      // When env is unset (provider not procured) → undefined → the no-op path
+      // below (honest degradation, the unchanged 5.1 default). When env is set
+      // → OpenAiCompatibleLlmAdapter → reasons flow through. StubLlmAdapter is
+      // test-only and is NOT imported here (apps/worker resolves the real adapter
+      // or none — never the stub).
+      const adapter = resolveLlmAdapter();
       if (adapter === undefined) {
         // No DB scan on the no-op path: the return value is fire-and-forget
         // (no caller consumes it — enqueueRecommendationReason does not await a
@@ -149,9 +144,6 @@ export function registerRecommendationReasonWorker(): Worker {
         // full-table anti-join for nothing. Mirrors daily-digest-queue's no-
         // adapter return. SM-7 coverage is measured off the published read
         // model, not from this job's return.
-        //
-        // ponytail: real provider wired when procured — V1 no adapter, prod
-        // degrades honestly.
         return { generated: 0, considered: 0, skipped: 0 };
       }
 
@@ -203,10 +195,7 @@ export function registerRecommendationReasonWorker(): Worker {
           // land here. The event stays at null (absent card slot) — the next
           // worker run naturally retries (no retry loop here; retry is deferred
           // per spec Never).
-          console.error(
-            `[recommendation-reason-worker] failed for hotEvent ${ev.id}`,
-            error,
-          );
+          console.error(`[recommendation-reason-worker] failed for hotEvent ${ev.id}`, error);
         }
       }
       return { generated, considered: pending.length };

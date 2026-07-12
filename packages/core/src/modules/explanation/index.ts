@@ -23,7 +23,12 @@
  * appends here + triggers the existing projections).
  */
 
-export { generateExplanation, getLatestExplanation, derivePartitions, saveExplanation } from "./explain-service.js";
+export {
+  generateExplanation,
+  getLatestExplanation,
+  derivePartitions,
+  saveExplanation,
+} from "./explain-service.js";
 export {
   generateRecommendationReason,
   getLatestRecommendationReason,
@@ -48,6 +53,8 @@ export {
   STUB_DEEP_READ,
   STUB_TREND_BRIEFING,
 } from "./stub-llm-adapter.js";
+export { OpenAiCompatibleLlmAdapter } from "./openai-compatible-llm-adapter.js";
+export type { OpenAiCompatibleLlmAdapterOptions } from "./openai-compatible-llm-adapter.js";
 export { ExplanationSource, AiContentType } from "./types.js";
 export type {
   ExplanationSource as ExplanationSourceType,

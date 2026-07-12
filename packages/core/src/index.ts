@@ -181,9 +181,7 @@ export {
   SHANGHAI_OFFSET_MIN,
 } from "./modules/publish-orchestrator/session-tag.js";
 export type { RefreshPublishedReadModelOptions } from "./modules/publish-orchestrator/publish-service.js";
-export {
-  TimelineSessionTag,
-} from "./modules/publish-orchestrator/types.js";
+export { TimelineSessionTag } from "./modules/publish-orchestrator/types.js";
 export type {
   RefreshPublishedTimelineForEventOptions,
   RefreshPublishedTimelineAllOptions,
@@ -255,11 +253,10 @@ export {
   STUB_RECOMMENDATION_REASON,
   STUB_DEEP_READ,
   STUB_TREND_BRIEFING,
+  OpenAiCompatibleLlmAdapter,
 } from "./modules/explanation/index.js";
-export {
-  ExplanationSource,
-  AiContentType,
-} from "./modules/explanation/types.js";
+export { ExplanationSource, AiContentType } from "./modules/explanation/types.js";
+export type { OpenAiCompatibleLlmAdapterOptions } from "./modules/explanation/index.js";
 export type {
   ExplanationSource as ExplanationSourceType,
   ExplanationPartitions,
@@ -300,7 +297,11 @@ export {
   deriveSignals,
   StubMarketDataAdapter,
 } from "./modules/market-reaction/index.js";
-export { ReactionTone, ReactionSource, ReactionDimension } from "./modules/market-reaction/index.js";
+export {
+  ReactionTone,
+  ReactionSource,
+  ReactionDimension,
+} from "./modules/market-reaction/index.js";
 export type {
   ReactionTone as ReactionToneType,
   ReactionSource as ReactionSourceType,

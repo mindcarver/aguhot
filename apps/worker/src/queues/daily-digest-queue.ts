@@ -53,6 +53,8 @@
 
 import { Queue, Worker, type Job } from "bullmq";
 
+import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
+
 import { getRedis } from "./connection.js";
 
 export const DAILY_DIGEST_QUEUE_NAME = "daily-digest";
@@ -87,10 +89,7 @@ export function getDailyDigestQueue(): Queue {
  * data to JSON; Date objects lose fidelity across the Redis boundary, so the
  * caller passes a Date and we serialize it here).
  */
-export async function enqueueDailyDigest(
-  traceId: string,
-  coverageDate: Date,
-): Promise<Job> {
+export async function enqueueDailyDigest(traceId: string, coverageDate: Date): Promise<Job> {
   const q = getDailyDigestQueue();
   // Prune completed/failed jobs so Redis does not grow unbounded as daily-
   // digest runs accumulate (keep a short tail for operator inspection).
@@ -166,7 +165,12 @@ export function registerDailyDigestWorker(): Worker {
       // union) so either path can be wired independently while the other stays
       // undefined (spec AC: 研判与日报互不阻塞).
       const digestAdapter = undefined;
-      const llmAdapter = undefined;
+      // LLM adapter resolved from env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
+      // When set → trend briefing (Story 5.3) flows; when unset → undefined →
+      // honest degradation (the unchanged 5.3 default). digestAdapter stays
+      // undefined (daily-digest provider is a separate deferred procurement,
+      // NOT the LLM — 研判与日报互不阻塞, spec AC).
+      const llmAdapter = resolveLlmAdapter();
       if (digestAdapter === undefined && llmAdapter === undefined) {
         return { generated: 0, considered: 1, skipped: 1 };
       }
@@ -231,10 +235,7 @@ export function registerDailyDigestWorker(): Worker {
         // failing coverageDate leaves a degraded state (missing briefing / missing
         // digest); the next worker run naturally retries (retry-loop deferred —
         // spec Never).
-        console.error(
-          `[daily-digest-worker] failed for coverageDate ${data.coverageDate}`,
-          error,
-        );
+        console.error(`[daily-digest-worker] failed for coverageDate ${data.coverageDate}`, error);
         throw error;
       }
     },

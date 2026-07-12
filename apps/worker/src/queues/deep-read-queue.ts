@@ -64,6 +64,8 @@
 
 import { Queue, Worker, type Job } from "bullmq";
 
+import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
+
 import { getRedis } from "./connection.js";
 
 export const DEEP_READ_QUEUE_NAME = "deep-read";
@@ -137,23 +139,17 @@ export function registerDeepReadWorker(): Worker {
       const data = job.data as DeepReadJobData;
 
       // V1 HONESTY RULE: no real LLM provider is wired (procurement deferred).
-      // With no adapter, generateDeepRead cannot run — it would return null and
-      // write nothing. We skip and report it as skipped so the caller knows the
-      // pipeline ran but produced no deep reads (honest degradation). StubLlmAdapter
-      // is test-only and is NOT imported here.
-      //
-      // ponytail: real provider wired when procured — V1 no adapter, prod degrades
-      // honestly.
-      const adapter = undefined;
+      // Resolve the LLM adapter from env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
+      // When env is unset → undefined → no-op path below (honest degradation, the
+      // unchanged 5.2 default). When set → OpenAiCompatibleLlmAdapter → deep reads
+      // flow through. StubLlmAdapter is test-only and is NOT imported here.
+      const adapter = resolveLlmAdapter();
       if (adapter === undefined) {
         // No DB scan on the no-op path: the return value is fire-and-forget (no
         // caller consumes it — enqueueDeepRead does not await a structured result),
         // so a pending-count query here would be a per-job full-table anti-join for
         // nothing. Mirrors recommendation-reason-queue's no-adapter return. Coverage
         // is measured off the published read model, not from this job's return.
-        //
-        // ponytail: real provider wired when procured — V1 no adapter, prod degrades
-        // honestly.
         return { generated: 0, considered: 0, skipped: 0 };
       }
 
@@ -203,10 +199,7 @@ export function registerDeepReadWorker(): Worker {
           // adapter; only guardrail/DB errors land here. The event stays at null
           // (detail page shows "AI 深读生成中。") — the next worker run naturally
           // retries (no retry loop here; retry is deferred per spec Never).
-          console.error(
-            `[deep-read-worker] failed for hotEvent ${ev.id}`,
-            error,
-          );
+          console.error(`[deep-read-worker] failed for hotEvent ${ev.id}`, error);
         }
       }
       return { generated, considered: pending.length };
