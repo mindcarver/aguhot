@@ -96,4 +96,22 @@ development_status:
   6-3-timeline-borderless-editorial-column: done
   6-4-ai-reason-signature-block-and-source-chips: done
   6-5-visual-alignment-e2e-and-event-card: done
-  epic-6-retrospective: optional
+  epic-6-retrospective: done
+
+action_items:
+  - epic: 6
+    action: "在 DB 环境跑全 e2e（home/timeline/search/navigation/a11y/design/themes）验证视觉重构无回归"
+    owner: "dev/infra"
+    status: open
+  - epic: 6
+    action: "建立 local PG (aguhot_dev) 或 CI DB，解决系统性 deferred-e2e"
+    owner: "dev/infra"
+    status: open
+  - epic: 6
+    action: "排查 Next/Turbopack dev server JSON parse 崩溃；考虑非 Turbopack dev"
+    owner: "dev"
+    status: open
+  - epic: 6
+    action: "把 Epic 6 新组件 + 无边框纵栏模式 formalize 到 /design showcase"
+    owner: "UX/dev"
+    status: open
