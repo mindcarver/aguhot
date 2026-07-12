@@ -107,21 +107,24 @@ export function EventCard({
   const followRef: FollowRef = { kind: "hot_event", hotEventId };
 
   return (
-    // relative + pr-16 on the Link so the FollowButton (absolute top-right) has
-    // a positioning context and never underlaps the card content.
-    <li className="relative rounded-lg border border-border-hairline bg-surface-raised">
+    // Story 6.5: borderless + hairline separator (aligns with TimelineCard,
+    // UX-DR4/DR16 —全站视觉统一). `relative` retained so the FollowButton
+    // (absolute top-right) has a positioning context. `border-t` (not a
+    // surrounding border) + `first:border-t-0` gives the list its separator;
+    // `hover:bg-surface-base` is the row affordance (replaces the 1.7
+    // `rounded-lg border bg-surface-raised` card chrome).
+    <li className="relative border-t border-border-hairline first:border-t-0 transition-colors hover:bg-surface-base">
       {/*
         Whole-card link (Story 1.8): the entire card body is wrapped in a Link so
         the card is one click target to the detail page. block + padding on the
-        Link keeps the hit area the full card; the existing chip/meta layout is
-        unchanged. hover:bg-surface-muted gives a subtle hover affordance that
-        works with the bg-surface-raised base. Story 3.2 adds pr-16 (only when
-        the FollowButton is rendered) so the top-right button never overlaps.
+        Link keeps the hit area the full row; the existing chip/meta layout is
+        unchanged. Story 3.2 adds pr-16 (only when the FollowButton is
+        rendered) so the top-right button never overlaps.
       */}
       <Link
         href={`/events/${hotEventId}`}
         className={cn(
-          "block rounded-lg px-5 py-4 hover:bg-surface-muted",
+          "block px-5 py-4",
           // Reserve top-right space only when the FollowButton is actually
           // rendered; /search reuses this card without follow props and would
           // otherwise show an empty ~64px gap.

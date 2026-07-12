@@ -2,11 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { FilterPill } from "@/components/chips";
-import {
-  getPrisma,
-  newTraceId,
-  searchPublished,
-} from "@aguhot/core";
+import { getPrisma, newTraceId, searchPublished } from "@aguhot/core";
 
 import { EventCard } from "../_components/event-card";
 import { TimelineCard } from "../_components/timeline-card";
@@ -98,17 +94,13 @@ export default async function SearchPage({ searchParams }: PageProps) {
     return (
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="space-y-4">
-          <h1 className="text-4xl font-bold tracking-tight text-ink-primary">
-            搜索
-          </h1>
+          <h1 className="text-4xl font-bold tracking-tight text-ink-primary">搜索</h1>
           <p className="text-lg text-ink-secondary">搜索热点事件与主题。</p>
         </header>
         <section className="mt-8">
           <SearchBox />
         </section>
-        <p className="mt-8 text-sm text-ink-tertiary">
-          输入关键词搜索热点事件与主题。
-        </p>
+        <p className="mt-8 text-sm text-ink-tertiary">输入关键词搜索热点事件与主题。</p>
       </div>
     );
   }
@@ -120,9 +112,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
   const result = await searchPublished({ prisma, traceId, query: q });
 
   const hasHits =
-    result.events.length > 0 ||
-    result.themes.length > 0 ||
-    result.timeline.length > 0;
+    result.events.length > 0 || result.themes.length > 0 || result.timeline.length > 0;
 
   // No-match state (AC2): honest no-result feedback + a path back home + an
   // in-place SearchBox so the reader can change keywords.
@@ -130,17 +120,13 @@ export default async function SearchPage({ searchParams }: PageProps) {
     return (
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="space-y-4">
-          <h1 className="text-4xl font-bold tracking-tight text-ink-primary">
-            搜索
-          </h1>
+          <h1 className="text-4xl font-bold tracking-tight text-ink-primary">搜索</h1>
         </header>
         <section className="mt-8">
           <SearchBox defaultValue={q} />
         </section>
         <div className="mt-12 space-y-3">
-          <p className="text-ink-secondary">
-            未找到与「{q}」相关的热点或主题。
-          </p>
+          <p className="text-ink-secondary">未找到与「{q}」相关的热点或主题。</p>
           <Link
             href="/"
             className="inline-flex items-center min-h-11 rounded-full bg-brand px-3 py-1 text-sm text-brand-foreground"
@@ -157,9 +143,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
       <header className="space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight text-ink-primary">
-          搜索
-        </h1>
+        <h1 className="text-4xl font-bold tracking-tight text-ink-primary">搜索</h1>
       </header>
 
       {/* Persistent search box so the reader can refine the query in place. */}
@@ -173,7 +157,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
             热点事件 ({result.events.length})
           </h2>
-          <ul role="list" className="mt-4 space-y-3">
+          <ul role="list" className="mt-4">
             {result.events.map((ev) => (
               <EventCard
                 key={ev.hotEventId}
@@ -205,7 +189,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
             时间流 ({result.timeline.length})
           </h2>
-          <ul role="list" className="mt-4 space-y-3">
+          <ul role="list" className="mt-4">
             {result.timeline.map((h) => (
               <TimelineCard key={h.entry.id} entry={h.entry} />
             ))}
@@ -222,10 +206,7 @@ export default async function SearchPage({ searchParams }: PageProps) {
           </h2>
           <div className="mt-4 flex flex-wrap gap-2">
             {result.themes.map((th) => (
-              <FilterPill
-                key={th.slug}
-                href={`/topics/${encodeURIComponent(th.slug)}`}
-              >
+              <FilterPill key={th.slug} href={`/topics/${encodeURIComponent(th.slug)}`}>
                 {th.label}
                 {/* Visible count for sighted readers + a visually-hidden unit so
                     a screen reader announces the count meaningfully (e.g.

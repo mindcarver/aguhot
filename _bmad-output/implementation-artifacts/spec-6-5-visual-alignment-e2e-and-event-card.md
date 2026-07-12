@@ -2,7 +2,8 @@
 title: '视觉对齐 E2E 与设计页同步 + event-card 无边框化 (6.5)'
 type: 'feature'
 created: '2026-07-12'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '9871695'
 sprint_change_proposal: '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12.md'
 visual_spec: '_bmad-output/demo-ui-redesign.html'
 context:
@@ -98,3 +99,41 @@ warnings: []
 
 **Manual checks:**
 - 目视全站与 `demo-ui-redesign.html` 一致；搜索页 event-card 无边框；hover/focus/reduced-motion 行为正常。
+
+## Dev Agent Record
+
+### Implementation Plan
+- `event-card.tsx` (MODIFY): borderless + hairline separator (aligns with TimelineCard, UX-DR4/DR16). `<li>` from `relative rounded-lg border border-border-hairline bg-surface-raised` → `relative border-t border-border-hairline first:border-t-0 transition-colors hover:bg-surface-base`. Link from `block rounded-lg px-5 py-4 hover:bg-surface-muted` → `block px-5 py-4` (hover now on `<li>`). `relative` retained (FollowButton absolute positioning, 3.2). Title `<h2>`, ranking chip, meta dl UNCHANGED (borderless is the only visual change; reading order + whole-card click preserved).
+- `search.spec.ts` (MODIFY): two `getByRole("complementary")` assertions (the V1 left-rail aside, removed in 6.1) → `getByRole("banner")` (the 6.1 sticky top-bar header). Line ~566 (AC3 desktop keyboard SearchBox) + line ~702 (no-regression /search nav visible). Comments synced. The `@search` EventCard link assertions are unaffected (borderless doesn't change the `/events/{id}` link).
+- `main-line-band.tsx` (DELETE): orphaned since 6.2 (NumberedHotList replaced it; no code imports — only comment references in page.tsx / numbered-hot-list.tsx, which remain as historical context). Deletion coupled with the 6.2 timeline.spec band-test rewrite (already done in 6.2).
+- E2E coverage: `home.spec` (Story 1.1 masthead — no band/card assertions, no change needed), `navigation.spec` (6.1 rewrote for banner/dialog — done), `a11y.spec` (landmark-agnostic Tab sequence + skip-link + SearchBox INPUT + nav-link outline — 6.1 updated comment; no functional change needed), `design.spec` / `themes.spec` (6.1-6.4 didn't touch /design or tokens — no change needed). `timeline.spec` updated in 6.2/6.3/6.4. The only stale assertions were search.spec's `complementary` (fixed here).
+
+### Debug Log
+- Token/architecture diff校验: `git diff apps/web/app/globals.css` = empty (token zero change ✓); `git diff packages/core/prisma/schema.prisma` = empty (architecture zero change ✓). Epic 6 scope invariant holds across all 5 stories.
+- Visual verification: event-card renders on /search + /favorites (both DB-backed). Created DB-free scratch `dev-eventcard-preview` rendering `<EventCard>` (no follow props, /search form) with mock data. Verified borderless + hairline separators + hover affordance. Scratch DELETED after capture.
+- E2E not run (no DATABASE_URL — home `/` 500s, `@search`/`@timeline`/`@a11y` suites need DB). Same prerequisite gap as 6.1-6.4. Spec assertions updated to match the new UI; execution deferred to a DB-equipped env.
+
+### Completion Notes
+- **Typecheck + lint + prettier:** all green.
+- **Token/architecture:** `globals.css` + `prisma/schema.prisma` zero diff (verified) — Epic 6 scope invariant holds.
+- **Visual verification (scratch, DB-free, deleted):** event-card borderless + hairline, aligns with TimelineCard. See `_bmad-output/dev-6-5-eventcard.png`.
+- **E2E:** NOT run — no `DATABASE_URL`. search.spec's 2 stale `complementary` assertions fixed (→ `banner`); home/design/themes/navigation/a11y specs require no changes (6.1 already handled nav; the rest are landmark-agnostic or untouched). Execution deferred to a DB-equipped env.
+- **Cleanup:** `main-line-band.tsx` deleted (orphaned since 6.2).
+- **Guardrails:** AI 解读 weight ≤ factual (unchanged from 6.4); red/green only market semantics (no market chips on event-card); no carousel; FollowButton sibling + whole-card click preserved (3.2/1.8).
+
+## File List
+- `apps/web/app/(public)/_components/event-card.tsx` — MODIFY (bordered card → borderless + hairline, align TimelineCard; `relative` + FollowButton sibling + whole-card Link preserved)
+- `apps/web/e2e/search.spec.ts` — MODIFY (2× `getByRole("complementary")` → `banner`; comments synced — 6.1 top-nav)
+- `apps/web/app/(public)/_components/main-line-band.tsx` — DELETE (orphaned since 6.2; no imports)
+- `apps/web/app/(public)/dev-eventcard-preview/` — CREATED then DELETED (scratch visual verification, DB-free mock; removed before commit)
+
+## Change Log
+- 2026-07-12: Story 6.5 implemented — event-card borderless (align TimelineCard); search.spec `complementary`→`banner`; main-line-band.tsx deleted (orphaned). token/architecture zero-diff verified. typecheck + lint + prettier green; visual verified (scratch, deleted); e2e deferred (no DB). Status → review. **Epic 6 complete (6.1-6.5 all done).**
+- 2026-07-12: Codex review follow-up (1 finding, addressed) — P2: event-card's `<ul>` callers (`/search` 热点事件 + 时间流 lists, `/favorites` live-events list) still used `space-y-3`, leaving 12px gaps before every hairline instead of contiguous separators. Removed `space-y-3` from the 3 EventCard/TimelineCard lists (search/page.tsx ×2, favorites/page.tsx ×1); kept `space-y-3` on the bordered theme/offline rows (not event-card, out of 6.5 scope). typecheck + lint + prettier green; token/arch diff still empty.
+
+## Review Triage Log
+
+### 2026-07-12 — Codex review (working-tree, 6.5 diff)
+- **[P2] caller `space-y-3` broke contiguous hairlines** — ADDRESSED. event-card became a `border-t` row, but `/search` (热点事件 list `search/page.tsx:176` + 时间流 list `:208`) and `/favorites` (live-events list `favorites/page.tsx:136`) `<ul>`s still carried `space-y-3` → 12px whitespace before every hairline, not the contiguous column the home TimelineCard list uses. Removed `space-y-3` from those 3 lists (border-t self-separates, mirroring the 6.3 home TimelineCard `<ul>`). The bordered theme rows (`favorites:156`) + offline rows (`favorites:192`) KEEP `space-y-3` — they are not event-card (custom bordered `<li>`, out of 6.5 scope).
+
+

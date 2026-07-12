@@ -133,7 +133,7 @@ export default async function FavoritesPage() {
                 // Live events reuse EventCard (3.2 already carries the
                 // FollowButton as a DOM sibling of the whole-card Link, so the
                 // card is both the detail entry point AND the unfollow affordance).
-                <ul role="list" className="space-y-3">
+                <ul role="list">
                   {view.liveEvents.map((e) => (
                     <EventCard
                       key={e.hotEventId}
@@ -197,9 +197,7 @@ export default async function FavoritesPage() {
                   >
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-ink-tertiary">
-                          该热点已下线
-                        </span>
+                        <span className="font-semibold text-ink-tertiary">该热点已下线</span>
                         <span className="rounded-full bg-surface-base px-2 py-0.5 text-xs text-ink-tertiary">
                           已下线
                         </span>
@@ -222,9 +220,7 @@ export default async function FavoritesPage() {
                   >
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-ink-tertiary">
-                          该主题已下线
-                        </span>
+                        <span className="font-semibold text-ink-tertiary">该主题已下线</span>
                         <span className="rounded-full bg-surface-base px-2 py-0.5 text-xs text-ink-tertiary">
                           已下线
                         </span>

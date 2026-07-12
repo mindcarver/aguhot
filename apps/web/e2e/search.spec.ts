@@ -135,16 +135,16 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     themeRankingQuery = seeded.themeRankingQuery;
   });
 
-  test("AC1 标题命中：/search?q={titleQuery} 含 EventCard 链 /events/{titleHitId}", async ({ page }) => {
+  test("AC1 标题命中：/search?q={titleQuery} 含 EventCard 链 /events/{titleHitId}", async ({
+    page,
+  }) => {
     const response = await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
     expect(response, "/search should respond").not.toBeNull();
     expect(response!.status(), "/search status should be 200").toBe(200);
 
     // The 「热点事件」 section heading renders.
     const main = page.getByRole("main");
-    await expect(
-      main.getByRole("heading", { level: 2, name: /热点事件/ }),
-    ).toBeVisible();
+    await expect(main.getByRole("heading", { level: 2, name: /热点事件/ })).toBeVisible();
 
     // The title-hit event's EventCard link is present in the 热点事件 section.
     // Story 4.4: scope to the 热点事件 section because the same event also
@@ -162,7 +162,9 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await expect(page.getByText(titleHitTitle).first()).toBeVisible();
   });
 
-  test("AC2 时间流标题命中 (Story 4.4)：/search?q={titleQuery} 含 时间流 区块 + TimelineCard 整卡链 /events/{titleHitId}", async ({ page }) => {
+  test("AC2 时间流标题命中 (Story 4.4)：/search?q={titleQuery} 含 时间流 区块 + TimelineCard 整卡链 /events/{titleHitId}", async ({
+    page,
+  }) => {
     // Story 4.4: the seeded event A is published via decideReview(approve),
     // which writes a published_timeline_entries row in-transaction (4.1 method
     // A). The timeline entry's title is the SAME effective HotEvent title that
@@ -177,9 +179,7 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
 
     // The 「时间流」 section heading renders (scoped to <main> to exclude nav).
     const main = page.getByRole("main");
-    await expect(
-      main.getByRole("heading", { level: 2, name: /时间流/ }),
-    ).toBeVisible();
+    await expect(main.getByRole("heading", { level: 2, name: /时间流/ })).toBeVisible();
 
     // The timeline section's TimelineCard carries a whole-card Link to the
     // title-hit event's detail page. Scope to the 时间流 section so this does
@@ -189,16 +189,16 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     const timelineSection = main.locator("section", {
       has: main.getByRole("heading", { level: 2, name: /^时间流/ }),
     });
-    const timelineCardLink = timelineSection.locator(
-      `a[href="/events/${titleHitId}"]`,
-    );
+    const timelineCardLink = timelineSection.locator(`a[href="/events/${titleHitId}"]`);
     await expect(
       timelineCardLink,
       "TimelineCard whole-card link to /events/{titleHitId} should render in the 时间流 section",
     ).toBeVisible();
   });
 
-  test("AC2 时间流摘要命中 (Story 4.4 I/O-matrix, tier 1)：/search?q={summaryQuery} 含 时间流 TimelineCard 链 /events/{summaryHitId} 且排于标题层之后", async ({ page }) => {
+  test("AC2 时间流摘要命中 (Story 4.4 I/O-matrix, tier 1)：/search?q={summaryQuery} 含 时间流 TimelineCard 链 /events/{summaryHitId} 且排于标题层之后", async ({
+    page,
+  }) => {
     // Story 4.4 I/O-matrix row "时间流 summary 命中 (tier 1)": summaryQuery「稀土」
     // matches event A's timeline TITLE (tier 0, 稀土芯片短缺...) AND event B's
     // timeline SUMMARY (tier 1 — the seed-only timeline-row summary upsert in
@@ -218,9 +218,7 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     });
 
     // The summary-hit event's TimelineCard Link renders in the 时间流 section.
-    const summaryTimelineLink = timelineSection.locator(
-      `a[href="/events/${summaryHitId}"]`,
-    );
+    const summaryTimelineLink = timelineSection.locator(`a[href="/events/${summaryHitId}"]`);
     await expect(
       summaryTimelineLink,
       "summary-hit TimelineCard link should render in the 时间流 section",
@@ -244,7 +242,9 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     ).toBeLessThan(summaryIdx);
   });
 
-  test("AC1 摘要命中：/search?q={summaryQuery} 含 EventCard 链 /events/{summaryHitId}", async ({ page }) => {
+  test("AC1 摘要命中：/search?q={summaryQuery} 含 EventCard 链 /events/{summaryHitId}", async ({
+    page,
+  }) => {
     const response = await page.goto(`/search?q=${encodeURIComponent(summaryQuery)}`);
     expect(response!.status(), "summary-hit search status should be 200").toBe(200);
 
@@ -262,23 +262,23 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await expect(eventLink).toBeVisible();
   });
 
-  test("AC1 主题命中：/search?q={themeQuery} 含 FilterPill 链 /topics/{themeSlug}", async ({ page }) => {
+  test("AC1 主题命中：/search?q={themeQuery} 含 FilterPill 链 /topics/{themeSlug}", async ({
+    page,
+  }) => {
     const response = await page.goto(`/search?q=${encodeURIComponent(themeQuery)}`);
     expect(response!.status(), "theme-hit search status should be 200").toBe(200);
 
     // The 「主题」 section heading renders.
-    await expect(
-      page.getByRole("heading", { level: 2, name: /主题/ }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: /主题/ })).toBeVisible();
 
     // The theme FilterPill link to /topics/{slug} is present.
-    const themeLink = page.locator(
-      `a[href="/topics/${encodeURIComponent(themeSlug)}"]`,
-    );
+    const themeLink = page.locator(`a[href="/topics/${encodeURIComponent(themeSlug)}"]`);
     await expect(themeLink).toBeVisible();
   });
 
-  test("AC1 相关性分层排序：tieringQuery 同时命中标题（旧）+ 摘要（新）→ 标题层在前", async ({ page }) => {
+  test("AC1 相关性分层排序：tieringQuery 同时命中标题（旧）+ 摘要（新）→ 标题层在前", async ({
+    page,
+  }) => {
     // The shared tiering word 「稀土」 hits event X (tieringTitleHitId) in its
     // TITLE (tier 0) AND event Y (tieringSummaryHitId) only in its explanation
     // SUMMARY (tier 1). X is OLDER than Y. Relevance tiering must render X
@@ -356,7 +356,9 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     ).toBeLessThan(olderIdx);
   });
 
-  test("AC1 主题排序 (T2)：themeRankingQuery 两主题命中 → memberCount 高者在前", async ({ page }) => {
+  test("AC1 主题排序 (T2)：themeRankingQuery 两主题命中 → memberCount 高者在前", async ({
+    page,
+  }) => {
     // T2: the shared theme word 「芯片」 hits TWO theme slugs — slug A
     // (chip-supply-chain, memberCount=1) and slug B (chip-design, memberCount=2).
     // memberCount DESC ranking is the ONLY observable signal (both match the
@@ -366,12 +368,8 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     expect(response!.status(), "theme-ranking search status should be 200").toBe(200);
 
     const main = page.getByRole("main");
-    const slugALink = main.locator(
-      `a[href="/topics/${encodeURIComponent(themeRankingSlugA)}"]`,
-    );
-    const slugBLink = main.locator(
-      `a[href="/topics/${encodeURIComponent(themeRankingSlugB)}"]`,
-    );
+    const slugALink = main.locator(`a[href="/topics/${encodeURIComponent(themeRankingSlugA)}"]`);
+    const slugBLink = main.locator(`a[href="/topics/${encodeURIComponent(themeRankingSlugB)}"]`);
     await expect(
       slugALink,
       `theme slug A (${themeRankingSlugA}, members=${themeRankingMemberCountA}) should render`,
@@ -396,7 +394,9 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     ).toBeLessThan(idxA);
   });
 
-  test("AC2 无结果反馈：/search?q={bogus} 含「未找到」+ 返回首页链 + SearchBox", async ({ page }) => {
+  test("AC2 无结果反馈：/search?q={bogus} 含「未找到」+ 返回首页链 + SearchBox", async ({
+    page,
+  }) => {
     // Use a query that will not match any seeded corpus.
     const response = await page.goto("/search?q=不存在的词xyz123");
     expect(response!.status(), "no-match search status should be 200").toBe(200);
@@ -443,12 +443,8 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await expect(page.getByText(/未找到/)).toHaveCount(0);
 
     // No results sections render.
-    await expect(
-      page.getByRole("heading", { level: 2, name: /热点事件/ }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("heading", { level: 2, name: /^主题/ }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 2, name: /热点事件/ })).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 2, name: /^主题/ })).toHaveCount(0);
   });
 
   test("大小写不敏感（拉丁）：q=gpu 与 q=GPU 均命中 latinHitId 事件", async ({ page }) => {
@@ -477,7 +473,9 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     ).toBeVisible();
   });
 
-  test("超长 query 截断（信任边界）：200 字符 → 200 + 无结果反馈 + 回显 ≤ 128 字符", async ({ page }) => {
+  test("超长 query 截断（信任边界）：200 字符 → 200 + 无结果反馈 + 回显 ≤ 128 字符", async ({
+    page,
+  }) => {
     // parseSearchQuery truncates to MAX_QUERY_LEN (128) before matching. A
     // 200-char query of a repeated uncommon character yields zero hits (the
     // truncated 128-char string is still gibberish) AND the echoed query in the
@@ -497,7 +495,10 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await expect(feedback).toBeVisible();
     const feedbackText = (await feedback.textContent()) ?? "";
     const match = feedbackText.match(/未找到与「([^」]*)」/);
-    expect(match, "feedback text should contain the echoed query in corner brackets").not.toBeNull();
+    expect(
+      match,
+      "feedback text should contain the echoed query in corner brackets",
+    ).not.toBeNull();
     // match[1] is `string | undefined` under noUncheckedIndexedAccess; guard with
     // a TS-visible runtime check so the narrowing flows to the assertions below.
     const echoed = match?.[1];
@@ -560,17 +561,22 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
       echoed129.length,
       `129-char query must be truncated to exactly 128 (got ${echoed129.length})`,
     ).toBe(128);
-    expect(echoed129, "129-char echoed query must equal the first 128 chars").toBe(overByOne.slice(0, 128));
+    expect(echoed129, "129-char echoed query must equal the first 128 chars").toBe(
+      overByOne.slice(0, 128),
+    );
   });
 
-  test("AC3 桌面键盘提交：aside SearchBox 输入 → Enter → /search?q=… 含结果", async ({ page }) => {
-    // Desktop viewport so the left-rail aside + its SearchBox are visible.
+  test("AC3 桌面键盘提交：顶部窄条 SearchBox 输入 → Enter → /search?q=… 含结果", async ({
+    page,
+  }) => {
+    // Desktop viewport so the top-bar banner + its SearchBox are visible.
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
 
-    // The desktop aside SearchBox input is visible.
-    const aside = page.getByRole("complementary");
-    const searchInput = aside.locator('input[name="q"]').first();
+    // The desktop top-bar SearchBox input is visible (Story 6.1: nav moved
+    // from a left-rail aside to a sticky top-bar <header role=banner>).
+    const banner = page.getByRole("banner");
+    const searchInput = banner.locator('input[name="q"]').first();
     await expect(searchInput).toBeVisible();
 
     // Type the title query + submit via Enter (native form submission).
@@ -584,9 +590,7 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     const eventsSection = main.locator("section", {
       has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
     });
-    await expect(
-      eventsSection.locator(`a[href="/events/${titleHitId}"]`),
-    ).toBeVisible();
+    await expect(eventsSection.locator(`a[href="/events/${titleHitId}"]`)).toBeVisible();
   });
 
   test("AC3 移动触控提交：抽屉内 SearchBox 可见、输入 + 提交可达 /search?q=…", async ({ page }) => {
@@ -619,9 +623,7 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     const eventsSection = main.locator("section", {
       has: main.getByRole("heading", { level: 2, name: /^热点事件/ }),
     });
-    await expect(
-      eventsSection.locator(`a[href="/events/${titleHitId}"]`),
-    ).toBeVisible();
+    await expect(eventsSection.locator(`a[href="/events/${titleHitId}"]`)).toBeVisible();
   });
 
   test("返回恢复：/search?q={titleQuery} → event → BackLink 落回含 q= 的 URL", async ({ page }) => {
@@ -703,18 +705,21 @@ test.describe("热点与主题搜索 (Story 3.1) @search", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`/search?q=${encodeURIComponent(titleQuery)}`);
 
-    // The public shell nav (aside) is present — /search is inside the (public)
-    // route group.
-    const aside = page.getByRole("complementary");
-    await expect(aside).toBeVisible();
+    // The public shell nav (top-bar banner) is present — /search is inside the
+    // (public) route group. (Story 6.1: nav moved from left-rail aside to
+    // sticky top-bar <header role=banner>.)
+    const banner = page.getByRole("banner");
+    await expect(banner).toBeVisible();
 
     // The primary nav entries are reachable from /search.
-    await expect(aside.getByRole("link", { name: "首页" }).first()).toBeVisible();
-    await expect(aside.getByRole("link", { name: "日报" }).first()).toBeVisible();
-    await expect(aside.getByRole("link", { name: "主题" }).first()).toBeVisible();
+    await expect(banner.getByRole("link", { name: "首页" }).first()).toBeVisible();
+    await expect(banner.getByRole("link", { name: "日报" }).first()).toBeVisible();
+    await expect(banner.getByRole("link", { name: "主题" }).first()).toBeVisible();
   });
 
-  test("下线事件不命中（AD-3/AD-8）：takedown 后再搜该事件链接消失 [LAST — 修改 DB]", async ({ page }) => {
+  test("下线事件不命中（AD-3/AD-8）：takedown 后再搜该事件链接消失 [LAST — 修改 DB]", async ({
+    page,
+  }) => {
     // This test is run LAST in the serial describe because it MUTATES the DB:
     // it takes down a DEDICATED seeded event (takedownHitId) used by no other
     // test. refreshPublishedReadModel({ action: "takedown" }) deletes all of its
