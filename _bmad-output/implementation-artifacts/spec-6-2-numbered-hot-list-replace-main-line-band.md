@@ -117,11 +117,22 @@ warnings: []
 - **Guardrails:** NFR-2 (empty→no render, no fabricated「精选分」); reuses saliency read (no new field); UX-DR16 (borderless editorial form).
 
 ## File List
-- `apps/web/app/(public)/_components/numbered-hot-list.tsx` — NEW (ordered list, top-5 saliency, relative time, replaces MainLineBand)
+- `apps/web/app/(public)/_components/numbered-hot-list.tsx` — NEW (ordered list, top-5 saliency, relative time, replaces MainLineBand; subtitle「多信源热度排序」— Codex P2 fix, drops inaccurate「随时间消退」decay claim)
 - `apps/web/app/(public)/page.tsx` — MODIFY (`<MainLineBand>` → `<NumberedHotList>`; import + JSDoc reference updated; page-level empty guard dropped — NumberedHotList self-guards)
-- `apps/web/app/(public)/_components/main-line-band.tsx` — UNCHANGED (orphaned, no imports; kept per spec — deletion deferred to Story 6.5 coupled with timeline.spec rewrite)
+- `apps/web/e2e/timeline.spec.ts` — MODIFY (Codex P1: band test → numbered-hot-list test — region「当前热点」, top-5, 4 li, no reason tags; empty-state test region updated; seed/header comments synced)
+- `apps/web/app/(public)/_components/main-line-band.tsx` — UNCHANGED (orphaned, no imports; kept per spec — deletion deferred to Story 6.5)
 - `apps/web/app/(public)/dev-hotlist-preview/` — CREATED then DELETED (scratch visual verification, DB-free mock; removed before commit)
 
 ## Change Log
 - 2026-07-12: Story 6.2 implemented — MainLineBand replaced by NumberedHotList (编号式「当前热点」排行, UX-DR16); reuses listPublishedHotEvents saliency read (no new read model); top-5 + relative time. typecheck + lint + prettier green; visual verified via DB-free scratch (deleted); e2e deferred (no DB, 6.5 收口). main-line-band.tsx orphaned, deletion deferred to 6.5. Status → review.
+- 2026-07-12: Codex review follow-up — P1 (timeline.spec band test updated for NumberedHotList: region「当前热点」, top-5, 4 li, no reason tags; empty-state + comments synced) + P2 (subtitle「多信源热度 · 随时间消退」→「多信源热度排序」— the decay claim was inaccurate; listPublishedHotEvents orders by evidenceCount DESC + latestEvidenceAt DESC, no time-decay). typecheck + lint + prettier green.
+
+## Review Triage Log
+
+### 2026-07-12 — Codex review (working-tree, 6.2+6.3 diff)
+Findings touching 6.2:
+- **[P1] timeline.spec band test guaranteed-fail** — ADDRESSED. The `@timeline` band test asserted region「今日重点 / 市场主线」+ top-3 li; NumberedHotList replaced both. Updated: region→「当前热点」, top-3→top-5 (4 seeded events → 4 li, 稀土 no longer drops), reason-tag absence assertions kept (NumberedHotList carries none — pins the intentional drop). Empty-state independence test + file-header/seed comments synced. (Originally deferred to 6.5; Codex correctly flagged a guaranteed-failing committed suite — moved the timeline.spec update into 6.2/6.3 rather than leaving it broken.)
+- **[P2] subtitle「随时间消退」misrepresents algorithm** — ADDRESSED. `listPublishedHotEvents` orders by `evidenceCount DESC, latestEvidenceAt DESC` (no time-decay — an older high-evidence event stays ranked first). Subtitle changed「多信源热度 · 随时间消退」→「多信源热度排序」(accurate, NFR-2: don't misrepresent). The「随时间消退」copy was copied verbatim from the reference site without checking aguhot's algorithm.
+- **[P2] multi-date grouping unreachable** — see spec-6-3 (page.tsx grouping; acknowledged there, kept as future-proof).
+
 

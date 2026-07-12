@@ -129,11 +129,22 @@ warnings: []
 - **Guardrails:** AI 解读 weight ≤ factual title (4.2 inline form, body-sm ink-secondary; 6.4 will formalize); NFR-2 null→no-slot; 4.2 fold disclosure sibling pattern preserved; UX-DR15 (no carousel); reduced-motion honored.
 
 ## File List
-- `apps/web/app/(public)/_components/timeline-card.tsx` — REWRITE (bordered card → 3-column borderless entry: rail + navy vertical rule + body; HH:mm lead; source promoted; hover bg; fold `<details>` sibling preserved)
-- `apps/web/app/(public)/_components/date-section-divider.tsx` — NEW (tradeDate → editorial date header with weekday + non-trading annotation)
+- `apps/web/app/(public)/_components/timeline-card.tsx` — REWRITE (bordered card → 3-column borderless entry: rail + navy vertical rule + body; HH:mm lead; source promoted; hover bg; fold `<details>` sibling preserved; title `<h2>`→`<h3>` — Codex P2 heading-hierarchy fix)
+- `apps/web/app/(public)/_components/date-section-divider.tsx` — NEW (tradeDate → editorial date header with weekday + non-trading annotation; `<h3>`→`<h2>` — Codex P2 heading-hierarchy fix: date section ranks above card titles)
 - `apps/web/app/(public)/page.tsx` — MODIFY (group filteredEntries by tradeDate; render DateSectionDivider + TimelineCard per date section)
+- `apps/web/e2e/timeline.spec.ts` — MODIFY (Codex P1: card reading-order test — timestamp `/UTC$/`→`/^\d{2}:\d{2}$/` (HH:mm), card heading `level: 2`→`level: 3`)
 - `apps/web/app/(public)/dev-timeline-preview/` — CREATED then DELETED (scratch visual verification, DB-free mock; removed before commit)
 
 ## Change Log
 - 2026-07-12: Story 6.3 implemented — TimelineCard reworked to borderless 3-column editorial entry (UX-DR4b/DR16); DateSectionDivider added; page groups by tradeDate. typecheck + lint + prettier green; visual verified via DB-free scratch (deleted); e2e deferred (no DB, 6.5 收口). Status → review.
+- 2026-07-12: Codex review follow-up — P1 (timeline.spec card test: UTC→HH:mm regex, heading level 2→3) + P2 heading hierarchy (DateSectionDivider h3→h2, TimelineCard title h2→h3 → H1→H2(当前热点/date)→H3(card), no H1→H3 skip when hot list empty). typecheck + lint + prettier green.
+
+## Review Triage Log
+
+### 2026-07-12 — Codex review (working-tree, 6.2+6.3 diff)
+Findings touching 6.3:
+- **[P1] timeline.spec card reading-order test guaranteed-fail** — ADDRESSED. The `@timeline` card test asserted timestamp `/UTC$/` + card `heading level: 2`; 6.3 changed timestamp to HH:mm (no UTC suffix) and (after the P2 fix below) card title to `<h3>`. Updated: `/UTC$/`→`/^\d{2}:\d{2}$/`, `level: 2`→`level: 3`. (Moved out of 6.5 deferral — Codex correctly flagged guaranteed-fail.)
+- **[P2] heading hierarchy inverted (date h3 < card h2)** — ADDRESSED. DateSectionDivider was `<h3>`, TimelineCard title was `<h2>` → screen-reader heading nav promoted each event above its date section; and if the hot-events list was empty, the page jumped H1→H3. Fixed: DateSectionDivider h3→h2, TimelineCard title h2→h3. Hierarchy is now H1 (masthead) → H2 (「当前热点」+ date sections) → H3 (card titles). No H1→H3 skip (date h2 fills the gap when hot list is empty).
+- **[P2] multi-date grouping unreachable** — ACKNOWLEDGED, KEPT with rationale. `listPublishedTimeline({ prisma, traceId, sessionTag })` defaults to the latest trade_date (one date), so `filteredEntries` typically holds one Map key → one date section. The grouping is NOT dead code: it renders the current-date header (useful context「7 月 12 日 · 周六（非交易日）」) and is future-proof for when the read supports a date range (load-more / date-span filter — a logged future feature). Rejecting Codex's "supply a bounded multi-date feed before grouping": forcing a read-model change to justify the grouping would be scope creep; the single-date header alone justifies the divider. The multi-date path is correct (verified via scratch with 2 tradeDates) — it's just not exercised by the default read yet.
+
 
