@@ -112,6 +112,14 @@ export class OpenAiCompatibleLlmAdapter implements LLMAdapter {
           temperature: 0.3,
           max_tokens: maxTokens,
         }),
+        // ponytail: 120s hard cap. gpt-5.5 is a reasoning model that occasionally
+        // stalls on a single call indefinitely; without a timeout the
+        // recommendation-reason worker hangs on that one call and never reaches
+        // the remaining events. 120s is generous for any single chat() — reason
+        // (~80 tok) is usually <15s, deepRead/trendBriefing (≤600 tok) stay well
+        // under. A timed-out call throws here → caught below → returns null →
+        // that event degrades honestly (no AI content), the worker moves on.
+        signal: AbortSignal.timeout(120_000),
       });
     } catch {
       // Network error / DNS / timeout → honest degradation (no fabricated content).
