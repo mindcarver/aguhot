@@ -195,13 +195,27 @@ export function TimelineCard({ entry }: TimelineCardProps) {
 }
 
 /**
- * Locale-stable HH:mm format. Avoids locale-dependent toLocaleString so the
- * timestamp stays consistent across build-time TZ and runtime TZ. The
- * `published_timeline.occurredAt` is a UTC instant; `toISOString().slice(11,16)`
- * yields the UTC HH:mm. V1 displays UTC time (the 4.2 formatDateTime showed
- * full `YYYY-MM-DD HH:mm UTC`; 6.3 drops to HH:mm per UX-DR4b — the date
- * context now lives in the DateSectionDivider, the per-entry time is HH:mm).
+ * Asia/Shanghai (Beijing) HH:mm, so the displayed time matches the paired
+ * session tag (盘前 / 盘中 / 盘后) — which is itself derived from the Shanghai
+ * framing of the same instant. Showing UTC HH:mm made a post-close (盘后)
+ * entry read as e.g. "07:35" (UTC) instead of "15:35" (Beijing). Intl
+ * DateTimeFormat is TZ-aware and DST-free for Asia/Shanghai, so this is
+ * correct regardless of the host process timezone. Mirrors the
+ * toShanghaiParts pattern in packages/core/.../session-tag.ts. Date context
+ * lives in the DateSectionDivider; per-entry time is HH:mm (UX-DR4b).
  */
 function formatHHmm(d: Date): string {
-  return d.toISOString().slice(11, 16);
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const map = new Map<string, string>();
+  for (const part of fmt.formatToParts(d)) map.set(part.type, part.value);
+  // hour12:false still emits "24" for midnight in some ICU builds; normalize.
+  const hourRaw = Number.parseInt(map.get("hour") ?? "0", 10);
+  const hour = (hourRaw === 24 ? 0 : hourRaw).toString().padStart(2, "0");
+  const minute = (map.get("minute") ?? "0").padStart(2, "0");
+  return `${hour}:${minute}`;
 }
