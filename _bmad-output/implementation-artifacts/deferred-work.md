@@ -1062,3 +1062,9 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-5-4-ai-content-operator-sampling.md`
   summary: `listAiContentForSampling` take:200/kind 后 JS 合并未再截断 + 静默溢出（>200/kind 旧项不可见）
   evidence: `ai-content-sampling-service.ts` 每类 `findMany({take:200})` 后按 createdAt desc 合并。单类 >200 时溢出静默丢、无 truncated 信号，运营抽检覆盖有盲区。V1 量级够（带 ponytail 注释）；规模上行改真分页（cursor/offset）+ truncated 标记，对齐 spec Design Notes 已登记的「分页归 deferred」。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-timeline-card-summary-clamp.md`
+  summary: 真实源下 EvidenceRecord.summary（RSS `<description>`）仍是整篇文章正文——本次只在卡片显示层截断，源头未截；详情页证据行与搜索索引仍吃全文
+  evidence: 卡片 `summary` = explain 投影 `deriveSummary`（explain-service.ts）= 标题＋最新 EvidenceRecord.summary，后者直接存 RSS `<description>`（rss-adapter.ts:77 `summary: optionalString(item.description)`）。财经/RSSHub 源里 `<description>` 常是全文。本次仅在 `timeline-card.tsx` 摘要 `<p>` 加 `line-clamp-3`（纯显示层）；`/events/[hotEventId]` 证据时间线 `row.summary`（page.tsx:421）与搜索索引（index.ts 索引 published_timeline summary）仍贴全文。根治 = 在 ingest / deriveSummary 层产出真摘要（LLM digest 管线，用户已明确列为另一个 story，本次不做）。review Blind Hunter F5。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-timeline-card-summary-clamp.md`
+  summary: 卡片 `line-clamp-3` 无 E2E 验证——seed 摘要 10–20 字永不触发截断，现有 timeline.spec.ts 只断言可见
+  evidence: `timeline.spec.ts` 唯一相关断言是摘要 `<p>` `.toBeVisible()`，line-clamp 前后都过（clamp 文本仍在 DOM）；`seed-timeline.ts` 摘要均 10–20 字、不足 3 行，clamp 在所有测试里是 no-op。clamp 实际生效路径（长摘要 → 卡片高度有界、详情页仍全文）零覆盖。应并入既有视觉对齐 E2E（spec-6-5-visual-alignment-e2e-and-event-card.md）：加一条 >400 字摘要的 seed，断言卡片高度有界。review Blind Hunter F2。

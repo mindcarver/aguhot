@@ -39,7 +39,13 @@ import { SourceChipList } from "./source-chip-list";
  *     that. 1px (not 3px) so a column of entries stays light.
  *   - Body: source name (ink-secondary, promoted to a first-class scan
  *     element) → title (ink-primary semibold, factual anchor) → multi-line
- *     summary (body-sm ink-secondary, density allowed) → evidence count →
+ *     summary (body-sm ink-secondary, `line-clamp-3` preview — the card
+ *     `summary` is the explain projection's `deriveSummary` (title ＋ latest
+ *     EvidenceRecord.summary), and EvidenceRecord.summary is the RSS
+ *     `<description>`, which for 财经/RSSHub feeds is often the full article
+ *     body; the card shows a 3-line excerpt, full text on the detail page,
+ *     matching the reference site's "excerpt, not full paste" form) →
+ *     evidence count →
  *     AI 解读 slot (4.2 inline form; Story 6.4 upgrades to a solid-hairline
  *     signature `EditorialReasonBlock`).
  *
@@ -123,7 +129,9 @@ export function TimelineCard({ entry }: TimelineCardProps) {
           <div className="text-[13px] text-ink-secondary">{sourceName}</div>
           <h3 className="mt-1 text-[17px] font-semibold leading-snug text-ink-primary">{title}</h3>
           {summary !== "" ? (
-            <p className="mt-1 text-sm leading-relaxed text-ink-secondary">{summary}</p>
+            <p className="mt-1 line-clamp-3 text-sm leading-relaxed text-ink-secondary">
+              {summary}
+            </p>
           ) : null}
 
           {/*
