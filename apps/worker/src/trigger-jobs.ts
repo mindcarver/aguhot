@@ -1,0 +1,11 @@
+import { Queue } from "bullmq";
+import { getRedis } from "./queues/connection.js";
+const redis = getRedis();
+const tl = new Queue("publish-timeline", { connection: redis });
+const rr = new Queue("recommendation-reason", { connection: redis });
+await tl.add("publish-timeline", { traceId: "manual-trigger" });
+console.log("✓ publish-timeline enqueued");
+await rr.add("recommendation-reason", { traceId: "manual-trigger" });
+console.log("✓ recommendation-reason enqueued");
+await redis.quit();
+process.exit(0);
