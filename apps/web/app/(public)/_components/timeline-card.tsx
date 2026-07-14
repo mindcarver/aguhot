@@ -6,7 +6,7 @@ import {
   type TimelineSessionTagType,
 } from "@aguhot/core";
 
-import { cn } from "@/lib/utils";
+import { cn, stripTags } from "@/lib/utils";
 
 import { EditorialReasonBlock } from "./editorial-reason-block";
 import { SourceChipList } from "./source-chip-list";
@@ -127,10 +127,10 @@ export function TimelineCard({ entry }: TimelineCardProps) {
         */}
         <div className="flex-1 border-l border-brand py-3 pl-[18px]">
           <div className="text-[13px] text-ink-secondary">{sourceName}</div>
-          <h3 className="mt-1 text-[17px] font-semibold leading-snug text-ink-primary">{title}</h3>
+          <h3 className="mt-1 text-[17px] font-semibold leading-snug text-ink-primary">{stripTags(title)}</h3>
           {summary !== "" ? (
             <p className="mt-1 line-clamp-3 text-sm leading-relaxed text-ink-secondary">
-              {summary}
+              {stripTags(summary)}
             </p>
           ) : null}
 

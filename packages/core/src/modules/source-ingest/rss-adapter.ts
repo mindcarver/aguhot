@@ -82,8 +82,25 @@ function toEvidenceItem(item: RssItem): EvidenceItem {
 
 function optionalString(value: string | undefined): string | null {
   if (value === undefined) return null;
-  const trimmed = value.trim();
+  // Some RSS sources (notably RSSHub's eastmoney search route) embed highlight
+  // markup like `两大存储<em>芯片</em>巨头` in titles/descriptions. Strip it at
+  // the ingest boundary so stored evidence + everything downstream (cluster
+  // titles, published read models, search index) stays plain text.
+  const stripped = stripMarkup(value);
+  const trimmed = stripped.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+/** Remove `<...>` tag runs + decode the common HTML entities feeds emit. */
+function stripMarkup(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
 }
 
 function parseDate(value: string | undefined): Date | null {
