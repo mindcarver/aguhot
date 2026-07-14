@@ -35,6 +35,7 @@ import { Queue, Worker, type Job } from "bullmq";
 
 import { getRedis } from "./connection.js";
 import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
+import { resolveDigestAdapter } from "../digest-adapter-resolver.js";
 
 export const PIPELINE_REFRESH_QUEUE_NAME = "pipeline-refresh";
 export const PIPELINE_REFRESH_JOB_NAME = "pipeline-refresh";
@@ -79,6 +80,10 @@ export async function schedulePipelineRefreshSelfHeal(): Promise<void> {
   );
 }
 
+function utcDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
 /**
  * Register the pipeline-refresh Worker. Each job runs the full chain by calling
  * the domain generators directly. Per-stage errors are isolated (logged + skipped)
@@ -96,6 +101,10 @@ export function registerPipelineRefreshWorker(): Worker {
         clusterEvents,
         generateExplanation,
         generateRecommendationReason,
+        generateDailyDigest,
+        generateTrendBriefing,
+        refreshPublishedDailyDigest,
+        refreshPublishedTrendBriefing,
         refreshPublishedTimelineAll,
       } = await import("@aguhot/core");
       const prisma = getPrisma();
@@ -183,7 +192,46 @@ export function registerPipelineRefreshWorker(): Worker {
       }
       log("approve", `published ${published}/${toApprove.length}`);
 
-      // 6. publish-timeline (re-derive the feed read model).
+      // 6. daily-digest + trend-briefing for the latest evidence day (the /daily
+      // page). digest needs the digest adapter (LLM_* env); trend-briefing needs
+      // the LLM adapter. Either undefined → that part degrades honestly. Both are
+      // coverageDate-keyed (the day of the latest published evidence).
+      const latestEv = await prisma.publishedHotEvent.findFirst({
+        orderBy: { latestEvidenceAt: "desc" },
+        select: { latestEvidenceAt: true },
+      });
+      if (latestEv !== null) {
+        const coverageDate = utcDay(latestEv.latestEvidenceAt);
+        const digestAdapter = resolveDigestAdapter(prisma);
+        if (digestAdapter !== undefined) {
+          try {
+            const r = await generateDailyDigest({ prisma, traceId: tid(), coverageDate, adapter: digestAdapter });
+            if (r !== null) {
+              await refreshPublishedDailyDigest({ prisma, traceId: tid(), coverageDate });
+              log("daily-digest", `entries=${r.entries.length}`);
+            } else {
+              log("daily-digest", "null (no eligible events / adapter empty)");
+            }
+          } catch (e) {
+            log("daily-digest", `ERROR ${e instanceof Error ? e.message : e}`);
+          }
+        } else {
+          log("daily-digest", "skipped (no digest adapter)");
+        }
+        if (llmAdapter !== undefined) {
+          try {
+            const tr = await generateTrendBriefing({ prisma, traceId: tid(), coverageDate, adapter: llmAdapter });
+            if (tr !== null) {
+              await refreshPublishedTrendBriefing({ prisma, traceId: tid(), coverageDate });
+              log("trend-briefing", "done");
+            }
+          } catch (e) {
+            log("trend-briefing", `ERROR ${e instanceof Error ? e.message : e}`);
+          }
+        }
+      }
+
+      // 7. publish-timeline (re-derive the feed read model).
       try {
         await refreshPublishedTimelineAll({ prisma, traceId: tid() });
         log("publish-timeline", "done");

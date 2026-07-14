@@ -447,6 +447,10 @@ export interface DailyDigestEntry {
   conclusion: string;
   latestEvidenceAt: string; // ISO 8601
   evidenceCount: number;
+  /** Editorial category (LLM-assigned). Mirrors digest/types.DailyDigestEntry. */
+  category: string;
+  /** Primary evidence source name (信源 attribution). Mirrors digest/types. */
+  sourceName: string;
 }
 
 /**
