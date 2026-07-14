@@ -43,6 +43,10 @@ import {
   registerPipelineRefreshWorker,
   schedulePipelineRefreshSelfHeal,
 } from "./queues/pipeline-refresh-queue.js";
+import {
+  registerInvestmentTargetsWorker,
+  scheduleInvestmentTargetsSelfHeal,
+} from "./queues/investment-targets-queue.js";
 
 async function main(): Promise<void> {
   // Fail loud and early if infra is missing (Block-If): a worker without DB or
@@ -62,6 +66,7 @@ async function main(): Promise<void> {
   const publishTimelineWorker = registerPublishTimelineWorker();
   const recommendationReasonWorker = registerRecommendationReasonWorker();
   const deepReadWorker = registerDeepReadWorker();
+  const investmentTargetsWorker = registerInvestmentTargetsWorker();
   const pipelineRefreshWorker = registerPipelineRefreshWorker();
 
   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
@@ -69,12 +74,15 @@ async function main(): Promise<void> {
   // ForEvent inside decideReview. Idempotent: upsertJobScheduler replaces any
   // existing schedule with the same key on restart.
   await schedulePublishTimelineSelfHeal();
+  // Wire the investment-targets self-heal (full-auto sweep for events lacking a
+  // candidate pool). Idempotent on restart.
+  await scheduleInvestmentTargetsSelfHeal();
   // Wire the pipeline-refresh self-heal (full ingest→cluster→explain→reason→
   // auto-approve→digest→publish-timeline pass every 10 min). Default-on. Dev
   // auto-approve bypass — prod uses the operator review gate.
   await schedulePipelineRefreshSelfHeal();
 
-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + pipeline-refresh workers registered and running");
+  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh workers registered and running");
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -88,6 +96,7 @@ async function main(): Promise<void> {
       publishTimelineWorker.close(),
       recommendationReasonWorker.close(),
       deepReadWorker.close(),
+      investmentTargetsWorker.close(),
       pipelineRefreshWorker.close(),
     ]);
     await closeRedis();

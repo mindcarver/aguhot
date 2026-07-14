@@ -287,6 +287,32 @@ export type {
   AiContentSamplingItem,
 } from "./modules/explanation/types.js";
 
+// investment-targets module — agent-driven candidate pool (ashare-news-
+// investment-targets skill, 阶段A+B). Owns investment_targets (AD-5 append-only);
+// the same run's 影响面/受益方/风险点 byproduct appends to the explanation module's
+// deep_reads so the existing detail-page deep-read block surfaces it. TargetsAdapter
+// port + service + StubTargetsAdapter (test-only) live here; the concrete SDK-backed
+// HeadlessAgentTargetsAdapter lives in apps/worker (keeps the heavy Claude Agent SDK
+// dep out of the web build). Worker resolves no adapter → prod degrades honestly.
+export {
+  generateInvestmentTargets,
+  getLatestInvestmentTargets,
+  StubTargetsAdapter,
+  STUB_TARGETS,
+  TargetTier,
+} from "./modules/investment-targets/index.js";
+export type {
+  TargetTier as TargetTierType,
+  TargetScores,
+  TargetCandidate,
+  LlmTargetsResult,
+  LlmTargetsArgs,
+  TargetsAdapter,
+  GenerateInvestmentTargetsOptions,
+  GenerateInvestmentTargetsResult,
+  InvestmentTargetRecord,
+} from "./modules/investment-targets/index.js";
+
 // market-reaction module (Story 2.1 — MarketDataAdapter port AD-7 +
 // StubMarketDataAdapter test-only + generateMarketReaction append-only AD-2 +
 // deriveSignals pure two-dimension derivation; V1 worker resolves no adapter →
