@@ -23,6 +23,7 @@
  */
 
 import type { PrismaClient } from "../../../generated/client.js";
+import type { TargetCandidate } from "../investment-targets/types.js";
 
 /**
  * Options for listPublishedHotEvents. `{ prisma, traceId }` mirrors the
@@ -179,6 +180,14 @@ export interface PublishedHotEventDetail {
    * three-segment set (影响面/受益方/风险点) that coexists with explanation.
    */
   deepRead: PublishedHotEventDeepRead | null;
+  /**
+   * The 投资标的池 block (candidate pool). Null when no pool was projected
+   * (investment-targets worker resolved no adapter / generation has not run /
+   * takedown cleared the projection). The detail page renders the honest degraded
+   * state in that case. Distinct from deepRead: this is the structured scored
+   * candidate table; deepRead is the three-segment prose set.
+   */
+  investmentTargets: PublishedHotEventInvestmentTargets | null;
   evidence: PublishedEvidenceRow[];
 }
 
@@ -329,6 +338,23 @@ export interface PublishedHotEventDeepRead {
   /** 风险点 (risk points). Descriptive, never advisory. */
   riskPoints: string;
   /** ExplanationSource union value carried from the latest DeepRead row ("ai" in V1). */
+  source: string;
+  generatedAt: Date;
+}
+
+/**
+ * The projected public 投资标的池 block for one published hot event. Mirrors
+ * published_hot_event_investment_targets. candidates is the Json column cast to
+ * TargetCandidate[] (the investment-targets module's candidate shape). Row
+ * existence = currently published pool. Absent when the worker has not produced
+ * one (V1 degrades honestly) — the detail page shows the degraded state.
+ */
+export interface PublishedHotEventInvestmentTargets {
+  newsConclusion: string;
+  transmissionPath: string;
+  candidates: TargetCandidate[];
+  downgradeNote: string;
+  /** ExplanationSource union value ("ai"). */
   source: string;
   generatedAt: Date;
 }
