@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ListContextMemory } from "./_components/list-context-memory";
 import { PublicNav } from "./_components/public-nav";
+import { SideNav } from "./_components/side-nav";
 
 /**
  * Public shell — Story 6.1 (Epic 6 视觉对齐参考站).
@@ -55,11 +56,21 @@ export default function PublicLayout({ children }: Readonly<{ children: ReactNod
       >
         跳至主要内容
       </a>
-      <PublicNav />
-      <main id="main" tabIndex={-1}>
-        <ListContextMemory />
-        {children}
-      </main>
+      {/*
+        Story 6 (视觉对齐参考站) — two-column shell on md+: sticky left <SideNav>
+        (精选/日报/主题/搜索/收藏) + main content. Below md the sidebar is hidden
+        and <PublicNav> provides the top bar + drawer (mobile nav preserved).
+      */}
+      <div className="md:hidden">
+        <PublicNav />
+      </div>
+      <div className="md:grid md:grid-cols-[220px_1fr]">
+        <SideNav />
+        <main id="main" tabIndex={-1}>
+          <ListContextMemory />
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { AiLabel } from "@/components/chips";
+import { stripTags } from "@/lib/utils";
 import {
+  DAILY_CATEGORIES,
   getPrisma,
   getPublishedDailyDigest,
   getPublishedTrendBriefing,
@@ -66,14 +68,16 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
 
   // Resolve the target coverageDate: a valid ?date= → that date; otherwise the
   // latest published digest's coverageDate (or undefined if no digests exist).
+  // coverageDates is always fetched (cheap) so DigestContent can render the
+  // 前一日/后一日 navigation across published digest days.
+  const coverageDates = await listPublishedDailyDigestCoverageDates({
+    prisma,
+    traceId: newTraceId(),
+  });
   let coverageDate: Date | undefined;
   if (requestedDate !== undefined) {
     coverageDate = requestedDate;
   } else {
-    const coverageDates = await listPublishedDailyDigestCoverageDates({
-      prisma,
-      traceId: newTraceId(),
-    });
     coverageDate = coverageDates[0]?.coverageDate;
   }
 
@@ -134,18 +138,32 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
         <span aria-hidden>←</span> 返回首页
       </Link>
 
-      <header className="mt-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <h1 className="font-display text-4xl font-semibold tracking-tight text-ink-primary">
-            日报
-          </h1>
-          {digest !== null ? <AiLabel /> : null}
+      <header className="mt-4 border-b-2 border-ink-primary pb-4">
+        <div className="text-xs uppercase tracking-[.15em] text-ink-tertiary">
+          DAILY · 每日盘后
         </div>
-        <p className="text-lg text-ink-secondary">AGUHOT · 每日热点精选</p>
+        <h1 className="mt-1 font-display text-4xl font-semibold tracking-tight text-ink-primary">
+          A股日报
+        </h1>
+        <div className="mt-1 font-mono text-xs text-ink-secondary">
+          {digest !== null
+            ? `VOL.${formatDate(digest.coverageDate)} · ${digest.entries.length} STORIES · AGUHOT DAILY`
+            : "AGUHOT · A股日报"}
+        </div>
+        {coverageDate !== undefined ? (
+          <div className="mt-1 text-sm text-ink-secondary">
+            {formatDateCn(coverageDate)}
+          </div>
+        ) : null}
       </header>
 
       {digest !== null ? (
-        <DigestContent digest={digest} trendBriefing={trendBriefing} />
+        <DigestContent
+          digest={digest}
+          trendBriefing={trendBriefing}
+          coverageDates={coverageDates}
+          currentCoverageDate={coverageDate ?? digest.coverageDate}
+        />
       ) : (
         <DegradedContent
           coverageDate={degradedScopeDate}
@@ -173,6 +191,8 @@ export default async function DailyDigestPage({ searchParams }: PageProps) {
 function DigestContent({
   digest,
   trendBriefing,
+  coverageDates,
+  currentCoverageDate,
 }: {
   digest: {
     coverageDate: Date;
@@ -181,71 +201,155 @@ function DigestContent({
     generatedAt: Date;
   };
   trendBriefing: PublishedTrendBriefing | null;
+  coverageDates: ReadonlyArray<{ coverageDate: Date }>;
+  currentCoverageDate: Date;
 }) {
-  return (
-    <section className="mt-10 space-y-4">
-      <dl className="flex flex-wrap gap-x-6 gap-y-1 font-mono text-sm text-ink-tertiary">
-        <div>
-          <dt className="inline">覆盖日期 </dt>
-          <dd className="inline text-ink-primary">
-            {formatDate(digest.coverageDate)}
-          </dd>
-        </div>
-        <div>
-          <dt className="inline">生成时间 </dt>
-          <dd className="inline text-ink-primary">
-            {formatDateTime(digest.generatedAt)}
-          </dd>
-        </div>
-      </dl>
+  // Group entries by category in the fixed taxonomy order; "其它" always last.
+  const byCategory = new Map<string, DailyDigestEntry[]>();
+  for (const cat of DAILY_CATEGORIES) byCategory.set(cat, []);
+  for (const e of digest.entries) {
+    const bucket = byCategory.get(e.category) ?? byCategory.get("其它")!;
+    bucket.push(e);
+  }
+  const sections = DAILY_CATEGORIES.filter((c) => (byCategory.get(c) ?? []).length > 0);
+  const sourceCount = new Set(digest.entries.map((e) => e.sourceName).filter((s) => s !== "")).size;
 
-      {/* AI 趋势研判 (Story 5.3). Renders between the metadata and the event list.
-          The briefing is a single cross-event paragraph grounded in the day's
-          published events (NFR-2). AiLabel marks it as AI-generated (NFR-3). */}
+  // Prev/next across published digest days (descending coverageDates list).
+  const sortedDays = [...coverageDates].map((c) => c.coverageDate.getTime()).sort((a, b) => b - a);
+  const cur = currentCoverageDate.getTime();
+  const idx = sortedDays.indexOf(cur);
+  const prevDay = idx >= 0 && idx + 1 < sortedDays.length ? (sortedDays[idx + 1] ?? null) : null;
+  const nextDay = idx > 0 ? (sortedDays[idx - 1] ?? null) : null;
+
+  return (
+    <section className="mt-8 space-y-6">
+      {/* 今日看点 TOC */}
+      <div className="rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
+        <h2 className="flex items-baseline justify-between text-sm font-semibold text-ink-secondary">
+          <span>今日看点</span>
+          <span className="font-mono text-xs font-normal text-ink-tertiary">
+            {digest.entries.length} 篇报道
+          </span>
+        </h2>
+        <ol className="mt-3 space-y-1.5">
+          {digest.entries.map((e, i) => (
+            <li key={e.hotEventId} className="flex items-baseline gap-2 border-b border-dashed border-border-hairline pb-1.5 last:border-0">
+              <span className="font-mono text-xs text-ink-tertiary">{String(i + 1).padStart(2, "0")}</span>
+              <a href={`/events/${e.hotEventId}`} className="flex-1 text-sm text-ink-primary hover:text-brand">
+                {stripTags(e.title)}
+              </a>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${categoryTone(e.category)}`}>
+                {e.category}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* AI 趋势研判 (Story 5.3). */}
       {trendBriefing !== null ? (
-        <div className="space-y-1.5 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4">
+        <div className="rounded-lg border border-border-hairline border-l-[3px] border-l-accent-warm bg-surface-raised px-5 py-4">
           <div className="flex items-center gap-2">
             <AiLabel />
-            <h2 className="text-sm font-semibold text-ink-secondary">
-              AI 趋势研判
-            </h2>
+            <span className="text-xs font-semibold tracking-wide text-accent-warm">AI 趋势研判 · 当日主线</span>
           </div>
-          <p className="text-sm text-ink-secondary">
-            {trendBriefing.briefing}
-          </p>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-secondary">{trendBriefing.briefing}</p>
         </div>
       ) : (
         <p className="text-sm text-ink-tertiary">AI 趋势研判生成中。</p>
       )}
 
-      <ol className="mt-4 space-y-3">
-        {digest.entries.map((entry) => (
-          <li
-            key={entry.hotEventId}
-            className="rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition-colors hover:bg-surface-muted"
-          >
-            <Link
-              href={`/events/${entry.hotEventId}`}
-              className="block space-y-2"
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <h2 className="text-lg font-semibold text-ink-primary">
-                  {entry.title}
-                </h2>
-                <span className="shrink-0 font-mono text-xs text-ink-tertiary">
-                  {entry.evidenceCount} 来源
-                </span>
-              </div>
-              <p className="text-sm text-ink-secondary">{entry.conclusion}</p>
-              <p className="font-mono text-xs text-ink-tertiary">
-                最近证据 {formatDateTime(new Date(entry.latestEvidenceAt))}
-              </p>
-            </Link>
-          </li>
-        ))}
-      </ol>
+      {/* 分类分节故事卡 */}
+      {sections.map((cat, si) => {
+        const items = byCategory.get(cat)!;
+        return (
+          <section key={cat} className="space-y-3">
+            <h2 className="flex items-center gap-2 border-l-4 border-brand pl-3 font-display text-xl font-semibold text-ink-primary">
+              <span className="font-mono text-xs font-normal text-ink-tertiary">{String(si + 1).padStart(2, "0")}</span>
+              {cat}
+            </h2>
+            {items.map((e) => (
+              <article key={e.hotEventId} className="rounded-lg border border-border-hairline bg-surface-raised px-5 py-4 transition-colors hover:bg-surface-muted">
+                <Link href={`/events/${e.hotEventId}`} className="block space-y-1.5">
+                  <h3 className="text-base font-semibold leading-snug text-ink-primary">{stripTags(e.title)}</h3>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-tertiary">
+                    <span className="font-semibold">综合资讯</span>
+                    {e.sourceName !== "" ? <span className="font-mono">{e.sourceName}</span> : null}
+                    <span className="font-mono">{e.evidenceCount} 来源</span>
+                  </div>
+                  <p className="text-sm leading-relaxed text-ink-secondary">{stripTags(e.conclusion)}</p>
+                </Link>
+              </article>
+            ))}
+          </section>
+        );
+      })}
+
+      {/* 统计 */}
+      <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border-hairline bg-border-hairline">
+        <Stat n={digest.entries.length} lab="今日事件" />
+        <Stat n={sourceCount} lab="信源" />
+        <Stat n={sections.length} lab="分类" />
+      </div>
+
+      {/* 前一日 / 后一日 导航 */}
+      <nav className="flex items-center justify-between border-t border-border-hairline pt-4 text-sm">
+        {prevDay !== null ? (
+          <Link href={`/daily?date=${ymd(new Date(prevDay))}`} className="text-brand">
+            ← 前一日
+          </Link>
+        ) : (
+          <span className="text-ink-tertiary">← 前一日</span>
+        )}
+        <span className="text-ink-tertiary">生成于 {formatDateTime(digest.generatedAt)}</span>
+        {nextDay !== null ? (
+          <Link href={`/daily?date=${ymd(new Date(nextDay))}`} className="text-brand">
+            后一日 →
+          </Link>
+        ) : (
+          <span className="text-ink-tertiary">后一日 →</span>
+        )}
+      </nav>
     </section>
   );
+}
+
+function Stat({ n, lab }: { n: number; lab: string }) {
+  return (
+    <div className="bg-surface-raised px-3 py-4 text-center">
+      <div className="font-display text-2xl font-bold text-brand">{n}</div>
+      <div className="mt-0.5 text-xs text-ink-tertiary">{lab}</div>
+    </div>
+  );
+}
+
+/** Category → tailwind color classes for the TOC tag + section accent. */
+function categoryTone(category: string): string {
+  switch (category) {
+    case "政策动态": return "bg-indigo-50 text-indigo-800";
+    case "行业景气": return "bg-emerald-50 text-emerald-800";
+    case "公司·标的": return "bg-amber-50 text-amber-800";
+    case "海外映射": return "bg-blue-50 text-blue-800";
+    case "资金面": return "bg-red-50 text-red-800";
+    case "风险提示": return "bg-violet-50 text-violet-800";
+    default: return "bg-surface-muted text-ink-secondary";
+  }
+}
+
+/** Format a Date as YYYY-MM-DD (for the ?date= nav links). */
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Chinese long-form date (二〇二六年七月十四日). */
+function formatDateCn(d: Date): string {
+  const digits = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+  const y = String(d.getUTCFullYear()).split("").map((c) => digits[Number(c)]!).join("");
+  const m = d.getUTCMonth() + 1;
+  const day = d.getUTCDate();
+  const cn = (n: number) => (n < 10 ? digits[n]! : `${digits[Math.floor(n / 10)]!}十${n % 10 === 0 ? "" : digits[n % 10]!}`);
+  const weekday = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"][d.getUTCDay()];
+  return `${y}年${cn(m)}月${cn(day)}日 ${weekday}`;
 }
 
 /**
