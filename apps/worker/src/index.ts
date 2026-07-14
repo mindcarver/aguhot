@@ -40,6 +40,10 @@ import { registerRecommendationReasonWorker } from "./queues/recommendation-reas
 import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
 import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
 import {
+  registerPipelineRefreshWorker,
+  schedulePipelineRefreshSelfHeal,
+} from "./queues/pipeline-refresh-queue.js";
+import {
   registerInvestmentTargetsWorker,
   scheduleInvestmentTargetsSelfHeal,
 } from "./queues/investment-targets-queue.js";
@@ -63,6 +67,7 @@ async function main(): Promise<void> {
   const recommendationReasonWorker = registerRecommendationReasonWorker();
   const deepReadWorker = registerDeepReadWorker();
   const investmentTargetsWorker = registerInvestmentTargetsWorker();
+  const pipelineRefreshWorker = registerPipelineRefreshWorker();
 
   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
   // only — the main timeline refresh is the in-tx refreshPublishedTimeline-
@@ -72,8 +77,12 @@ async function main(): Promise<void> {
   // Wire the investment-targets self-heal (full-auto sweep for events lacking a
   // candidate pool). Idempotent on restart.
   await scheduleInvestmentTargetsSelfHeal();
+  // Wire the pipeline-refresh self-heal (full ingest→cluster→explain→reason→
+  // auto-approve→digest→publish-timeline pass every 10 min). Default-on. Dev
+  // auto-approve bypass — prod uses the operator review gate.
+  await schedulePipelineRefreshSelfHeal();
 
-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets workers registered and running");
+  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh workers registered and running");
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -88,6 +97,7 @@ async function main(): Promise<void> {
       recommendationReasonWorker.close(),
       deepReadWorker.close(),
       investmentTargetsWorker.close(),
+      pipelineRefreshWorker.close(),
     ]);
     await closeRedis();
     process.exit(0);
