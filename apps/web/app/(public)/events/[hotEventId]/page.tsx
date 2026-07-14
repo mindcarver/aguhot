@@ -13,6 +13,7 @@ import {
 } from "@aguhot/core";
 
 import { readSession } from "@/lib/session";
+import { stripTags } from "@/lib/utils";
 
 import { BackLink } from "../../_components/back-link";
 import { FollowButton } from "../../_components/follow-button";
@@ -170,7 +171,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
 
       {/* Title — a fact, not system-derived, so no AiLabel here. */}
       <h1 className="mt-4 font-display text-3xl font-bold leading-tight text-ink-primary">
-        {detail.title}
+        {stripTags(detail.title)}
       </h1>
 
       {/* Operator-authored tags (Story 1.9). Display-only chips under the title.
@@ -452,7 +453,7 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
                 </div>
                 {row.summary !== null && row.summary.trim() !== "" ? (
                   <p className="mt-2 text-sm leading-relaxed text-ink-secondary">
-                    {row.summary}
+                    {stripTags(row.summary)}
                   </p>
                 ) : (
                   <p className="mt-2 text-sm text-ink-tertiary">（无摘要）</p>
