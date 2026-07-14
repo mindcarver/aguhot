@@ -35,7 +35,6 @@ const updates: Array<{ table: string; col: string }> = [
 ];
 
 for (const { table, col } of updates) {
-  const where = `${col} ~ '<'`;
   // NULL-safe: only rows where the column contains a tag get rewritten.
   const sql = `UPDATE ${table} SET ${col} = ${STRIP(col)} WHERE ${col} IS NOT NULL AND ${col} ~ '<[^>]*>';`;
   const n = await prisma.$executeRawUnsafe(sql);

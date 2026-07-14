@@ -54,6 +54,7 @@
 import { Queue, Worker, type Job } from "bullmq";
 
 import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
+import { resolveDigestAdapter } from "../digest-adapter-resolver.js";
 
 import { getRedis } from "./connection.js";
 
@@ -164,12 +165,10 @@ export function registerDailyDigestWorker(): Worker {
       // The two adapter injection points are kept as separate consts (NOT a
       // union) so either path can be wired independently while the other stays
       // undefined (spec AC: 研判与日报互不阻塞).
-      const digestAdapter = undefined;
+      const digestAdapter = resolveDigestAdapter(prisma);
       // LLM adapter resolved from env (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL).
       // When set → trend briefing (Story 5.3) flows; when unset → undefined →
-      // honest degradation (the unchanged 5.3 default). digestAdapter stays
-      // undefined (daily-digest provider is a separate deferred procurement,
-      // NOT the LLM — 研判与日报互不阻塞, spec AC).
+      // honest degradation (the unchanged 5.3 default).
       const llmAdapter = resolveLlmAdapter();
       if (digestAdapter === undefined && llmAdapter === undefined) {
         return { generated: 0, considered: 1, skipped: 1 };
