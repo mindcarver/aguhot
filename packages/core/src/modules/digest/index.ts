@@ -52,6 +52,11 @@ export type {
   TrendBriefingRecord,
 } from "./trend-briefing-service.js";
 export { StubDigestAdapter, STUB_DIGEST_CONCLUSION } from "./stub-digest-adapter.js";
+export {
+  OpenAiCompatibleDigestAdapter,
+  DAILY_CATEGORIES,
+} from "./openai-compatible-digest-adapter.js";
+export type { OpenAiCompatibleDigestAdapterOptions } from "./openai-compatible-digest-adapter.js";
 export { DigestSource } from "./types.js";
 export type {
   DigestSource as DigestSourceType,

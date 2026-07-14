@@ -32,7 +32,7 @@
  * (procurement deferred) → honest degradation.
  */
 
-import type { Prisma } from "../../../generated/client.js";
+import type { Prisma, PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
 import {
   listPublishedHotEvents,
@@ -86,10 +86,20 @@ export async function generateDailyDigest(
   // (same window-filter pattern as 1.7/2.2/2.3). listPublishedHotEvents stays
   // filter-free (no signature change).
   const allPublished = await listPublishedHotEvents({ prisma, traceId });
-  const eligible = filterByCoverageDay(allPublished, coverageDate);
+  const eligibleRaw = filterByCoverageDay(allPublished, coverageDate);
 
   // No eligible events → no digest (never fabricate an empty digest).
-  if (eligible.length === 0) return null;
+  if (eligibleRaw.length === 0) return null;
+
+  // Curate: a daily report is an editorial selection, not a dump of every hot
+  // event. Cap to the top N strongest-signal events (evidenceCount DESC, then
+  // latestEvidenceAt DESC) so the report stays readable (~15-25 stories, like the
+  // reference site) AND the LLM digest pass stays bounded (N calls, not hundreds
+  // — a day can cluster 200+ raw events which would blow the cron window + cost).
+  const DIGEST_MAX_EVENTS = 24;
+  const eligible = [...eligibleRaw]
+    .sort((a, b) => b.evidenceCount - a.evidenceCount || b.latestEvidenceAt.getTime() - a.latestEvidenceAt.getTime())
+    .slice(0, DIGEST_MAX_EVENTS);
 
   // 2. No adapter → honest degradation (V1 prod: daily-digest worker resolves
   // none). Never fabricate.
@@ -110,9 +120,14 @@ export async function generateDailyDigest(
     eligibleById.set(e.hotEventId, e);
   }
 
+  // 3b. Load each eligible event's primary evidence source name (the most-recent
+  // member record's source) for the daily-report 信源 attribution. Batched so the
+  // /daily page needs no per-entry source query.
+  const sourceByEvent = await loadPrimarySources(prisma, hotEventIds);
+
   // 4. Validate each conclusion (AC2 + NFR + eligible membership) and assemble
   // entries. Throw on any violation (fail-fast, never silently truncate).
-  const entries = assembleEntries(rawConclusions, eligibleById);
+  const entries = assembleEntries(rawConclusions, eligibleById, sourceByEvent);
 
   // If the adapter returned conclusions but none matched eligible events (all
   // filtered out as non-eligible), there is nothing to write → degrade. (The
@@ -255,6 +270,7 @@ export function filterByCoverageDay(
 function assembleEntries(
   conclusions: DigestConclusion[],
   eligibleById: Map<string, PublishedHotEventSummary>,
+  sourceByEvent: Map<string, string>,
 ): DailyDigestEntry[] {
   const entries: DailyDigestEntry[] = [];
   for (const c of conclusions) {
@@ -281,12 +297,15 @@ function assembleEntries(
       );
     }
     const iso = summary.latestEvidenceAt.toISOString();
+    const category = c.category !== undefined && c.category.trim() !== "" ? c.category.trim() : "其它";
     entries.push({
       hotEventId: summary.hotEventId,
       title: summary.title,
       conclusion: c.conclusion,
       latestEvidenceAt: iso,
       evidenceCount: summary.evidenceCount,
+      category,
+      sourceName: sourceByEvent.get(summary.hotEventId) ?? "",
     });
   }
   // Sort by evidenceCount DESC (strongest signal first), tiebreaker hotEventId
@@ -297,4 +316,38 @@ function assembleEntries(
     return a.hotEventId < b.hotEventId ? 1 : a.hotEventId > b.hotEventId ? -1 : 0;
   });
   return entries;
+}
+
+/**
+ * Batch-load each event's primary evidence source name (the source of its
+ * most-recent member evidence record) for the daily-report 信源 attribution.
+ * Returns hotEventId → sourceName. Empty string fallback is handled by the
+ * caller (assembleEntries). Pure DB read — no write.
+ */
+async function loadPrimarySources(
+  prisma: PrismaClient,
+  hotEventIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (hotEventIds.length === 0) return out;
+  const links = await prisma.hotEventEvidence.findMany({
+    where: { hotEventId: { in: hotEventIds } },
+    select: {
+      hotEventId: true,
+      evidenceRecord: {
+        select: { publishedAt: true, source: { select: { name: true } } },
+      },
+    },
+  });
+  // Per event, pick the source of the max-publishedAt record (latest evidence).
+  const latestByEvent = new Map<string, { publishedAt: Date | null; name: string }>();
+  for (const l of links) {
+    const er = l.evidenceRecord;
+    const cur = latestByEvent.get(l.hotEventId);
+    if (cur === undefined || (er.publishedAt !== null && (cur.publishedAt === null || er.publishedAt > cur.publishedAt))) {
+      latestByEvent.set(l.hotEventId, { publishedAt: er.publishedAt, name: er.source.name });
+    }
+  }
+  for (const [id, v] of latestByEvent) out.set(id, v.name);
+  return out;
 }

@@ -400,8 +400,11 @@ export {
   TREND_BRIEFING_MAX_LENGTH,
   StubDigestAdapter,
   STUB_DIGEST_CONCLUSION,
+  OpenAiCompatibleDigestAdapter,
+  DAILY_CATEGORIES,
 } from "./modules/digest/index.js";
 export { DigestSource } from "./modules/digest/index.js";
+export type { OpenAiCompatibleDigestAdapterOptions } from "./modules/digest/index.js";
 export type {
   DigestSource as DigestSourceType,
   DigestConclusion,

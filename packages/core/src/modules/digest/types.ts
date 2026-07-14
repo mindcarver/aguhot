@@ -71,6 +71,13 @@ export type DigestSource = (typeof DigestSource)[keyof typeof DigestSource];
 export interface DigestConclusion {
   hotEventId: string;
   conclusion: string;
+  /**
+   * LLM-assigned editorial category for the daily-report section grouping
+   * (政策动态/行业景气/公司·标的/海外映射/资金面/风险提示/其它). Optional — stub/
+   * reasons-backed adapters omit it and the service falls back to "其它". When
+   * present, the /daily page groups entries under this category heading.
+   */
+  category?: string;
 }
 
 /**
@@ -129,6 +136,18 @@ export interface DailyDigestEntry {
   conclusion: string;
   latestEvidenceAt: string; // ISO 8601
   evidenceCount: number;
+  /**
+   * Editorial category (LLM-assigned at digest generation). The /daily page
+   * groups entries under category headings (政策动态/行业景气/...). "其它" when the
+   * adapter did not assign one.
+   */
+  category: string;
+  /**
+   * The event's primary evidence source name (the most-recent member record's
+   * source), for the daily-report 信源 attribution row. Carried from evidence at
+   * digest generation so the /daily page needs no per-entry source query.
+   */
+  sourceName: string;
 }
 
 /**
