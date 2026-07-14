@@ -16,6 +16,7 @@
     "verify:digest": "tsx src/verify-digest.ts",
     "verify:reason": "tsx src/verify-reason.ts",
     "verify:deepread": "tsx src/verify-deepread.ts",
+    "verify:investmenttargets": "tsx src/verify-investment-targets.ts",
     "verify:trendbriefing": "tsx src/verify-trendbriefing.ts",
     "verify:suppress-ai-content": "tsx src/verify-suppress-ai-content.ts",
     "verify:revision": "tsx src/verify-revision.ts",
@@ -28,6 +29,7 @@
   "dependencies": {
     "@aguhot/config": "workspace:*",
     "@aguhot/core": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.207",
     "bullmq": "^5.79.3",
     "fast-xml-parser": "^5.2.0",
     "ioredis": "5.10.1"
