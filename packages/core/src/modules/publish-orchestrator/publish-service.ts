@@ -64,6 +64,7 @@
 import type { Prisma, PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
 import type { PublishAction } from "../review-workflow/types.js";
+import type { TargetCandidate } from "../investment-targets/types.js";
 import { EvidenceLinkStatus } from "./types.js";
 import type {
   AssociationItem,
@@ -82,6 +83,7 @@ import type {
   PublishedHotEventDetail,
   PublishedHotEventExplanationSummaryRow,
   PublishedHotEventSummary,
+  PublishedHotEventInvestmentTargets,
   PublishedThemeMembershipRow,
   PublishedTrendBriefing,
   RefreshPublishedDailyDigestOptions,
@@ -145,6 +147,9 @@ export async function refreshPublishedReadModel(
       where: { hotEventId },
     });
     await prisma.publishedHotEventDeepRead.deleteMany({
+      where: { hotEventId },
+    });
+    await prisma.publishedHotEventInvestmentTargets.deleteMany({
       where: { hotEventId },
     });
     await prisma.publishedHotEvent.deleteMany({
@@ -242,6 +247,9 @@ export async function refreshPublishedReadModel(
 
   // 7. Deep-read projection (published_hot_event_deep_reads, Story 5.2).
   await projectDeepRead(prisma, traceId, hotEventId);
+
+  // 8. Investment-targets projection (published_hot_event_investment_targets).
+  await projectInvestmentTargets(prisma, traceId, hotEventId);
 }
 
 /**
@@ -642,6 +650,62 @@ async function projectDeepRead(
 }
 
 /**
+ * Project the latest InvestmentTarget row into published_hot_event_investment_targets.
+ * Mirrors projectDeepRead but WITHOUT the suppressedAt filter (the investment-targets
+ * table has no suppress column — no operator path; a bad run writes nothing). If a
+ * row exists, upsert (1:1 per hotEventId); if none exists, deleteMany so the detail
+ * page renders the honest degraded state rather than a stale prior projection.
+ * publish-orchestrator stays the SOLE writer of published_hot_event_investment_targets
+ * (AD-2/AD-3).
+ */
+async function projectInvestmentTargets(
+  prisma: PrismaClient,
+  traceId: string,
+  hotEventId: string,
+): Promise<void> {
+  const latest = await prisma.investmentTarget.findFirst({
+    where: { hotEventId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      newsConclusion: true,
+      transmissionPath: true,
+      candidates: true,
+      downgradeNote: true,
+      source: true,
+      createdAt: true,
+    },
+  });
+
+  if (latest === null) {
+    await prisma.publishedHotEventInvestmentTargets.deleteMany({
+      where: { hotEventId },
+    });
+    return;
+  }
+
+  await prisma.publishedHotEventInvestmentTargets.upsert({
+    where: { hotEventId },
+    create: {
+      hotEventId,
+      newsConclusion: latest.newsConclusion,
+      transmissionPath: latest.transmissionPath,
+      candidates: latest.candidates as unknown as Prisma.InputJsonValue,
+      downgradeNote: latest.downgradeNote,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+    update: {
+      newsConclusion: latest.newsConclusion,
+      transmissionPath: latest.transmissionPath,
+      candidates: latest.candidates as unknown as Prisma.InputJsonValue,
+      downgradeNote: latest.downgradeNote,
+      generatedAt: latest.createdAt,
+      traceId,
+    },
+  });
+}
+
+/**
  * List all currently-published hot events for the public feed — Story 1.7.
  *
  * This is the first public consumer of the published_hot_events read model (AD-3:
@@ -810,6 +874,19 @@ export async function getPublishedHotEventDetail(
     },
   });
 
+  // Investment-targets block (nullable). Absent when the investment-targets worker
+  // has not produced a pool yet (V1: worker resolves no adapter) → honest degraded.
+  const targetsRow = await prisma.publishedHotEventInvestmentTargets.findUnique({
+    where: { hotEventId },
+    select: {
+      newsConclusion: true,
+      transmissionPath: true,
+      candidates: true,
+      downgradeNote: true,
+      generatedAt: true,
+    },
+  });
+
   const evidence: PublishedEvidenceRow[] = evidenceRows.map((r) => ({
     id: r.id,
     hotEventId: r.hotEventId,
@@ -881,6 +958,17 @@ export async function getPublishedHotEventDetail(
             source: deepReadRow.deepReadSource,
             generatedAt: deepReadRow.generatedAt,
           },
+    investmentTargets:
+      targetsRow === null
+        ? null
+        : ({
+            newsConclusion: targetsRow.newsConclusion,
+            transmissionPath: targetsRow.transmissionPath,
+            candidates: targetsRow.candidates as unknown as TargetCandidate[],
+            downgradeNote: targetsRow.downgradeNote,
+            source: "ai",
+            generatedAt: targetsRow.generatedAt,
+          } satisfies PublishedHotEventInvestmentTargets),
     evidence,
   };
 }

@@ -39,6 +39,10 @@ import { registerPublishTimelineWorker, schedulePublishTimelineSelfHeal } from "
 import { registerRecommendationReasonWorker } from "./queues/recommendation-reason-queue.js";
 import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
 import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
+import {
+  registerInvestmentTargetsWorker,
+  scheduleInvestmentTargetsSelfHeal,
+} from "./queues/investment-targets-queue.js";
 
 async function main(): Promise<void> {
   // Fail loud and early if infra is missing (Block-If): a worker without DB or
@@ -58,14 +62,18 @@ async function main(): Promise<void> {
   const publishTimelineWorker = registerPublishTimelineWorker();
   const recommendationReasonWorker = registerRecommendationReasonWorker();
   const deepReadWorker = registerDeepReadWorker();
+  const investmentTargetsWorker = registerInvestmentTargetsWorker();
 
   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
   // only — the main timeline refresh is the in-tx refreshPublishedTimeline-
   // ForEvent inside decideReview. Idempotent: upsertJobScheduler replaces any
   // existing schedule with the same key on restart.
   await schedulePublishTimelineSelfHeal();
+  // Wire the investment-targets self-heal (full-auto sweep for events lacking a
+  // candidate pool). Idempotent on restart.
+  await scheduleInvestmentTargetsSelfHeal();
 
-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read workers registered and running");
+  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets workers registered and running");
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -79,6 +87,7 @@ async function main(): Promise<void> {
       publishTimelineWorker.close(),
       recommendationReasonWorker.close(),
       deepReadWorker.close(),
+      investmentTargetsWorker.close(),
     ]);
     await closeRedis();
     process.exit(0);

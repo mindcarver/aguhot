@@ -9,6 +9,7 @@ import {
   FollowTargetKind,
   newTraceId,
   type AssociationItem,
+  type TargetCandidate,
 } from "@aguhot/core";
 
 import { readSession } from "@/lib/session";
@@ -293,6 +294,38 @@ export default async function PublicEventDetailPage({ params }: PageProps) {
         )}
       </section>
 
+      {/* 投资标的池 (candidate pool) — agent-driven ashare-news-investment-targets
+          skill output. Null/empty when the worker has not produced a pool yet
+          (V1: worker resolves no adapter → honest degraded state). Carries the
+          uniform <AiLabel>. Research framing only — tier labels are传导链 positions
+          (一级受益/二级受益/三级概念/伪受益风险), scores are the skill's 70-point
+          降级口径 (30 realtime points unscorable → downgradeNote). NFR: no buy/sell/
+          price/操作建议 wording — 阶段C is excluded upstream and never lands here. */}
+      <section className="mt-6 space-y-3 rounded-lg border border-border-hairline bg-surface-base px-5 py-4">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+            投资标的池
+          </h2>
+          {detail.investmentTargets !== null ? <AiLabel /> : null}
+        </div>
+        {detail.investmentTargets !== null ? (
+          <div className="space-y-3">
+            <p className="text-sm leading-relaxed text-ink-secondary">
+              {detail.investmentTargets.newsConclusion}
+            </p>
+            <p className="text-xs text-ink-tertiary">
+              传导路径：{detail.investmentTargets.transmissionPath}
+            </p>
+            <CandidateTable candidates={detail.investmentTargets.candidates} />
+            <p className="font-mono text-xs text-ink-tertiary">
+              {detail.investmentTargets.downgradeNote} · 关联依据：系统映射
+            </p>
+          </div>
+        ) : (
+          <p className="text-base text-ink-tertiary">投资标的池生成中。</p>
+        )}
+      </section>
+
       {/* Market reaction (Story 2.1, AC2/AC3). Two signal chips + a shared
           tradingSession time context when a snapshot was projected; an honest
           degraded line when no snapshot exists (V1 prod: adapter resolves to
@@ -484,6 +517,63 @@ function AssociationGroup({
           </FilterPill>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Candidate pool table — one row per extracted target. Columns: 标的 (name + code,
+ * code null → 待核验 badge), 分层 (tier), 研究强度 (sum of the 4 scorable dims / 70),
+ * 受益逻辑, 待核验项. Research framing only — no price/操作建议 columns (阶段C is
+ * excluded upstream). Visual weight ≤ the factual blocks above.
+ */
+function CandidateTable({ candidates }: { candidates: TargetCandidate[] }) {
+  if (candidates.length === 0) {
+    return <p className="text-sm text-ink-tertiary">未提取到候选标的。</p>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-border-hairline text-left text-xs text-ink-tertiary">
+            <th className="py-2 pr-3 font-semibold">标的</th>
+            <th className="py-2 pr-3 font-semibold">分层</th>
+            <th className="py-2 pr-3 font-semibold">研究强度</th>
+            <th className="py-2 pr-3 font-semibold">受益逻辑</th>
+            <th className="py-2 font-semibold">待核验</th>
+          </tr>
+        </thead>
+        <tbody>
+          {candidates.map((c, i) => {
+            const total =
+              c.scores.newsStrength +
+              c.scores.linkStrength +
+              c.scores.expectationGap +
+              c.scores.earningsElasticity;
+            return (
+              <tr key={`${c.name}:${i}`} className="border-b border-border-hairline align-top">
+                <td className="py-2 pr-3">
+                  <div className="font-medium text-ink-primary">{c.name}</div>
+                  {c.code !== null ? (
+                    <div className="font-mono text-xs text-ink-tertiary">
+                      {c.code}
+                      {c.codeVerified ? "" : " · 待核验"}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-ink-tertiary">代码待核验</div>
+                  )}
+                </td>
+                <td className="py-2 pr-3 text-ink-secondary">{c.tier}</td>
+                <td className="py-2 pr-3 font-mono text-ink-secondary">{total}/70</td>
+                <td className="py-2 pr-3 leading-relaxed text-ink-secondary">{c.benefitLogic}</td>
+                <td className="py-2 text-xs text-ink-tertiary">
+                  {c.toVerify.length > 0 ? c.toVerify.join("；") : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -192,6 +192,18 @@ model HotEvent {
   // module's write-ownership of deep_reads.
   deepReads         DeepRead[]
   publishedDeepRead PublishedHotEventDeepRead?
+  // Read-only reverse relation to the append-only 投资标的池 rows. The investment-
+  // targets module owns investment_targets (AD-5 append-only, one row per agent
+  // run of the ashare-news-investment-targets skill — candidates[] carried as Json,
+  // mirroring TrendBriefing.basedOnHotEventIds); publish-orchestrator projects the
+  // LATEST row into published_hot_event_investment_targets (the sole writer of that
+  // projection stays publish-orchestrator, AD-2/AD-3). This navigation lets
+  // publish-orchestrator read the latest pool at projection time and lets the
+  // investment-targets worker query events lacking a pool via
+  // `investmentTargets: { none: {} }`. It does NOT change the module's write-
+  // ownership of investment_targets.
+  investmentTargets          InvestmentTarget[]
+  publishedInvestmentTargets PublishedHotEventInvestmentTargets?
 
   @@index([publicationStatus])
   @@map("hot_events")
@@ -935,6 +947,63 @@ model PublishedHotEventDeepRead {
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
   @@map("published_hot_event_deep_reads")
+}
+
+// 投资标的池 — append-only AI artifact (agent-driven ashare-news-investment-targets
+// skill). One row per event per agent run. candidates is a serialized array of
+// {name, code, codeVerified, tier, benefitLogic, scores, toVerify, evidenceChain}
+// (Json column — mirrors TrendBriefing.basedOnHotEventIds: no operator, no per-
+// target query need, so no normalization). NO suppressedAt: there is no operator
+// path; a bad run simply writes nothing (honest degradation, like the V1 no-adapter
+// default of the sibling AI tables). publish-orchestrator projects the LATEST row
+// (created_at desc) into published_hot_event_investment_targets; the chain ordered
+// by created_at is the auditable history (NFR-7: model_id + prompt_version + source
+// on every row). The agent runs阶段A (extract+score) +阶段B (verify codes) only;
+// 阶段C (技术面/买卖点) is not in the output schema and never lands here (PRD §10
+// guardrail). Scoring is the skill's 70-point降级口径 (30 points of per-stock
+// realtime data the system does not have → carried as downgradeNote).
+//
+// FK onDelete: Cascade so a HotEvent deletion cleans up its target-pool history.
+model InvestmentTarget {
+  id               String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId       String   @map("hot_event_id")
+  newsConclusion   String   @map("news_conclusion") // 新闻一句话结论
+  transmissionPath String   @map("transmission_path") // 新闻→行业变量→业绩/估值
+  candidates       Json // 候选数组（见 investment-targets 模块 TargetCandidate）
+  downgradeNote    String   @map("downgrade_note") // e.g. "含30分待核验项，按70分口径换算"
+  source           String // ExplanationSource.Ai
+  modelId          String   @map("model_id") // provider + version (e.g. "claude:sonnet-4-6")
+  promptVersion    String   @map("prompt_version") // "skill:<sha>|scope-v1"
+  traceId          String?  @map("trace_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@index([hotEventId])
+  @@index([createdAt])
+  @@map("investment_targets")
+}
+
+// Public read-model projection of the latest InvestmentTarget row (AD-3 public
+// projection, one row per published HotEvent). publish-orchestrator is the SOLE
+// writer (projectInvestmentTargets inside refreshPublishedReadModel; AD-2/AD-3);
+// the detail page reads it via getPublishedHotEventDetail. generated_at comes from
+// the latest InvestmentTarget row. Cleared on takedown alongside the other
+// published_* read models. Mirrors published_hot_event_deep_reads (minus the
+// suppress dimension — no operator path).
+model PublishedHotEventInvestmentTargets {
+  hotEventId       String   @id @map("hot_event_id")
+  newsConclusion   String   @map("news_conclusion")
+  transmissionPath String   @map("transmission_path")
+  candidates       Json
+  downgradeNote    String   @map("downgrade_note")
+  generatedAt      DateTime @map("generated_at")
+  traceId          String?  @map("trace_id")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
+
+  @@map("published_hot_event_investment_targets")
 }
 
 // Story 5.3 — append-only AI 趋势研判 (daily-page cross-event trend briefing). Same
