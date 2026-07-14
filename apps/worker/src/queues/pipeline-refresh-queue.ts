@@ -3,16 +3,21 @@
  *
  * Drives the FULL publish pipeline on a schedule so the public feed stays fresh
  * without a manual run-ingest + run-pipeline:
- *   source-ingest → event-cluster → explain → recommendation-reason →
- *   decideReview(approve each candidate) → daily-digest → publish-timeline
+ *   ingestSources → clusterEvents → generateExplanation(each candidate) →
+ *   generateRecommendationReason(each, LLM) → decideReview(approve each) →
+ *   refreshPublishedTimelineAll
  *
  * This is the pipeline chaining the repo previously deferred ("auto orchestration
  * / cron is deferred" per the sibling queue headers). It is DEFAULT-ON: index.ts
- * registers the worker + schedule unconditionally. The stage workers (cluster /
- * explain / reason / digest / publish-timeline / source-ingest) are already
- * registered in the same process, so this worker only ENQUEUES + awaits each via
- * QueueEvents — it does not call the domain generators directly (reuses the
- * existing worker runtime verbatim, mirroring run-pipeline.ts's proven sequence).
+ * registers the worker + schedule unconditionally.
+ *
+ * IMPLEMENTATION: the handler calls the domain GENERATORS directly (not
+ * enqueue+waitUntilFinished on the sibling queues). The nested-QueueEvents wait
+ * pattern stalls inside a Worker handler (the Worker's lock renewal does not
+ * survive awaiting a sub-job in a long-running handler). Direct generator calls
+ * have no such nesting — each is pure logic + DB / LLM, same convention as
+ * run-digest / run-targets. The sibling stage workers stay registered in index.ts
+ * for on-demand/manual use; this cron does not depend on them.
  *
  * DEV AUTO-APPROVE: every candidate is auto-approved (decideReview outcome
  * "approve", reviewer "pipeline-auto-publish") — the same dev bypass run-pipeline
@@ -21,21 +26,15 @@
  * Idempotent end-to-end: ingest dedupes by content_hash, cluster only creates
  * candidates from unlinked evidence, explain/reason skip events that already have
  * them, approve is a no-op on already-published events, publish-timeline upserts.
- * So a 10-min re-run only does NEW work.
+ * So a 10-min re-run only does NEW work. The daily-digest stage is intentionally
+ * omitted (the worker resolves no digest adapter → always null; the daily page is
+ * a separate, lower-priority surface).
  */
 
-import { Queue, Worker, QueueEvents, type Job } from "bullmq";
+import { Queue, Worker, type Job } from "bullmq";
 
 import { getRedis } from "./connection.js";
-import { enqueueSourceIngest } from "./source-ingest-queue.js";
-import { enqueueEventCluster, EVENT_CLUSTER_QUEUE_NAME } from "./event-cluster-queue.js";
-import { enqueueExplain, EXPLAIN_QUEUE_NAME } from "./explain-queue.js";
-import {
-  enqueueRecommendationReason,
-  RECOMMENDATION_REASON_QUEUE_NAME,
-} from "./recommendation-reason-queue.js";
-import { enqueueDailyDigest, DAILY_DIGEST_QUEUE_NAME } from "./daily-digest-queue.js";
-import { enqueuePublishTimeline, PUBLISH_TIMELINE_QUEUE_NAME } from "./publish-timeline-queue.js";
+import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
 
 export const PIPELINE_REFRESH_QUEUE_NAME = "pipeline-refresh";
 export const PIPELINE_REFRESH_JOB_NAME = "pipeline-refresh";
@@ -81,100 +80,122 @@ export async function schedulePipelineRefreshSelfHeal(): Promise<void> {
 }
 
 /**
- * Run one stage: enqueue a job on `queueName` and await its completion via a
- * dedicated QueueEvents connection (BullMQ blocking sub needs its own conn).
- * Errors are logged + swallowed so one failed stage does not abort the whole pass
- * (the next 10-min run retries) — mirrors run-pipeline.ts's stage() tolerance.
- */
-async function stage(
-  name: string,
-  queueName: string,
-  enqueue: () => Promise<Job>,
-): Promise<void> {
-  const qe = new QueueEvents(queueName, { connection: getRedis() });
-  try {
-    const job = await enqueue();
-    await job.waitUntilFinished(qe);
-  } catch (e) {
-    console.error(`[pipeline-refresh] stage ${name} ERROR`, e instanceof Error ? e.message : e);
-  } finally {
-    await qe.close();
-  }
-}
-
-function utcDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
-/**
- * Register the pipeline-refresh Worker. Each job runs the full chain. The handler
- * resolves the prisma client + newTraceId via dynamic import (keeps the worker
- * bundle the only place pulling domain+DB). Per-stage errors are isolated.
+ * Register the pipeline-refresh Worker. Each job runs the full chain by calling
+ * the domain generators directly. Per-stage errors are isolated (logged + skipped)
+ * so one failed stage does not abort the whole pass — the next 10-min run retries.
  */
 export function registerPipelineRefreshWorker(): Worker {
   const worker = new Worker(
     PIPELINE_REFRESH_QUEUE_NAME,
     async (job: Job) => {
-      const { getPrisma, newTraceId, decideReview } = await import("@aguhot/core");
+      const {
+        getPrisma,
+        newTraceId,
+        decideReview,
+        ingestSources,
+        clusterEvents,
+        generateExplanation,
+        generateRecommendationReason,
+        refreshPublishedTimelineAll,
+      } = await import("@aguhot/core");
       const prisma = getPrisma();
       const data = job.data as PipelineRefreshJobData;
-      const traceId = data.traceId === "scheduled" ? newTraceId() : data.traceId;
+      const rootTrace = data.traceId === "scheduled" ? newTraceId() : data.traceId;
 
-      // 1. Ingest (pull all enabled sources — idempotent dedup).
-      await stage("source-ingest", "source-ingest", () => enqueueSourceIngest(newTraceId()));
+      const tid = () => newTraceId();
+      const log = (stage: string, msg: string) => console.log(`[pipeline-refresh ${rootTrace.slice(0, 8)}] ${stage}: ${msg}`);
+
+      // 1. Ingest (idempotent dedup).
+      try {
+        await ingestSources({ prisma, traceId: tid() });
+        log("ingest", "done");
+      } catch (e) {
+        log("ingest", `ERROR ${e instanceof Error ? e.message : e}`);
+      }
 
       // 2. Cluster new evidence into candidates.
-      await stage("event-cluster", EVENT_CLUSTER_QUEUE_NAME, () => enqueueEventCluster(newTraceId()));
+      try {
+        const r = await clusterEvents({ prisma, traceId: tid() });
+        log("cluster", `newCandidates=${r.newCandidates}`);
+      } catch (e) {
+        log("cluster", `ERROR ${e instanceof Error ? e.message : e}`);
+      }
 
-      // 3. Explain (deterministic three-partition for new events).
-      await stage("explain", EXPLAIN_QUEUE_NAME, () => enqueueExplain(newTraceId()));
+      // 3. Explain each candidate (deterministic, no LLM).
+      const candidates = await prisma.hotEvent.findMany({
+        where: { publicationStatus: "candidate" },
+        select: { id: true },
+      });
+      let explained = 0;
+      for (const c of candidates) {
+        try {
+          await generateExplanation({ prisma, traceId: tid(), hotEventId: c.id });
+          explained += 1;
+        } catch (e) {
+          log("explain", `ERROR ${c.id} ${e instanceof Error ? e.message : e}`);
+        }
+      }
+      log("explain", `processed ${explained}/${candidates.length}`);
 
-      // 4. recommendation-reason (LLM, only events lacking one).
-      await stage("recommendation-reason", RECOMMENDATION_REASON_QUEUE_NAME, () =>
-        enqueueRecommendationReason(newTraceId()),
-      );
+      // 4. recommendation-reason (LLM, only events lacking one). No-ops if no LLM env.
+      const llmAdapter = resolveLlmAdapter();
+      if (llmAdapter !== undefined) {
+        const lacking = await prisma.hotEvent.findMany({
+          where: {
+            publicationStatus: { in: ["candidate", "published"] },
+            recommendationReasons: { none: {} },
+          },
+          select: { id: true },
+        });
+        let reasoned = 0;
+        for (const ev of lacking) {
+          try {
+            const r = await generateRecommendationReason({ prisma, traceId: tid(), hotEventId: ev.id, adapter: llmAdapter });
+            if (r !== null) reasoned += 1;
+          } catch (e) {
+            log("reason", `ERROR ${ev.id} ${e instanceof Error ? e.message : e}`);
+          }
+        }
+        log("reason", `generated ${reasoned}/${lacking.length}`);
+      } else {
+        log("reason", "skipped (no LLM adapter)");
+      }
 
       // 5. Auto-approve every candidate (dev bypass).
-      const candidates = await prisma.hotEvent.findMany({
+      const toApprove = await prisma.hotEvent.findMany({
         where: { publicationStatus: "candidate" },
         select: { id: true, title: true },
       });
       let published = 0;
-      for (const c of candidates) {
+      for (const c of toApprove) {
         try {
           await decideReview({
             prisma,
-            traceId: newTraceId(),
+            traceId: tid(),
             hotEventId: c.id,
             outcome: "approve",
             reviewer: "pipeline-auto-publish",
           });
           published += 1;
         } catch (e) {
-          console.error(`[pipeline-refresh] approve ${c.id} ERROR`, e instanceof Error ? e.message : e);
+          log("approve", `ERROR ${c.id} ${e instanceof Error ? e.message : e}`);
         }
       }
+      log("approve", `published ${published}/${toApprove.length}`);
 
-      // 6. daily-digest for the latest evidence day.
-      const latest = await prisma.publishedHotEvent.findFirst({
-        orderBy: { latestEvidenceAt: "desc" },
-        select: { latestEvidenceAt: true },
-      });
-      const coverageDate = latest?.latestEvidenceAt
-        ? utcDay(latest.latestEvidenceAt)
-        : utcDay(new Date());
-      await stage("daily-digest", DAILY_DIGEST_QUEUE_NAME, () =>
-        enqueueDailyDigest(newTraceId(), coverageDate),
-      );
+      // 6. publish-timeline (re-derive the feed read model).
+      try {
+        await refreshPublishedTimelineAll({ prisma, traceId: tid() });
+        log("publish-timeline", "done");
+      } catch (e) {
+        log("publish-timeline", `ERROR ${e instanceof Error ? e.message : e}`);
+      }
 
-      // 7. publish-timeline (re-derive the feed read model).
-      await stage("publish-timeline", PUBLISH_TIMELINE_QUEUE_NAME, () =>
-        enqueuePublishTimeline(newTraceId()),
-      );
-
-      return { traceId, approved: published, candidates: candidates.length };
+      return { traceId: rootTrace, approved: published, candidates: toApprove.length };
     },
-    { connection: getRedis() },
+    // A full pass (ingest + LLM reason per new event) can take minutes; give the
+    // lock enough headroom so BullMQ does not reclaim a still-running job.
+    { connection: getRedis(), lockDuration: 60_000 },
   );
   return worker;
 }
