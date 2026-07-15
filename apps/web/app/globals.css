@@ -24,12 +24,13 @@
 
 @theme {
   /* Colors — surfaces (cool blue-white recalibration, 2026-07-15: was warm paper
-     #F5F1E8 / #FBF8F2 / #EEE6D8). Brand navy already exists, so the 蓝白格调 shift
-     is a neutral warmth→coolness swap only; market red/green is decoupled + unchanged. */
-  --color-canvas: #F4F7FB;
-  --color-surface-base: #F7F9FC;
+     #F5F1E8 / #FBF8F2 / #EEE6D8). Canvas strengthened to a visibly blue-tinted
+     tone so the page body reads 蓝白, paired with the navy masthead. Brand navy
+     already exists; market red/green is decoupled + unchanged. */
+  --color-canvas: #EDF2F9;
+  --color-surface-base: #F2F5FB;
   --color-surface-raised: #FFFFFF;
-  --color-surface-muted: #ECEFF5;
+  --color-surface-muted: #E4EAF3;
 
   /* Colors — ink hierarchy (cool navy-tinted, was neutral #151A22 / #5D6470 / #8A909A). */
   --color-ink-primary: #0B1A2E;

@@ -104,8 +104,12 @@ export function SearchBox({ defaultValue, className, variant = "stacked" }: Sear
       <button
         type="submit"
         className={cn(
-          "min-h-11 rounded-md bg-brand px-3 py-2 text-base font-semibold text-brand-foreground hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
-          compact ? "shrink-0" : "block w-full",
+          "min-h-11 rounded-md px-3 py-2 text-base font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+          // compact lives in the navy masthead → white button on navy; the stacked
+          // variant lives on the light drawer → navy button on white.
+          compact
+            ? "shrink-0 bg-white text-brand hover:bg-white/90"
+            : "block w-full bg-brand text-brand-foreground hover:opacity-90",
         )}
       >
         搜索
