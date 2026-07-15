@@ -1,0 +1,33 @@
+[project]
+name = "market-sidecar"
+version = "0.0.0"
+description = "AGUHOT market history daily-bars sidecar (AkShare -> Postgres). Python runtime that owns NO domain aggregate; it only translates external market sources into rows (AD-1/AD-7)."
+requires-python = ">=3.12,<3.13"
+# Pinned per spec-8-1 LOCKED DECISIONS. AkShare function names churn across
+# versions; akshare_client.py records the exact verified functions + version.
+dependencies = [
+    "akshare==1.18.64",
+    "psycopg[binary]==3.2.9",
+    "python-dotenv==1.1.0",
+    # uuid7 PyPI package installs as the `uuid_extensions` module (uuid_extensions.uuid7()).
+    "uuid7==0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.4.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/market_sidecar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+# uv workspace isolation: this is a standalone Python project, not part of the
+# Node pnpm workspace. Run with `uv run pytest` / `uv run python -m market_sidecar`.

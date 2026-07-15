@@ -28,10 +28,10 @@ model EvidenceSource {
   id        String   @id // UUIDv7, assigned in application code (newTraceId)
   name      String
   kind      String // SourceKind union value ("rss"); stored as String, no TS enum
-  feedUrl   String  @map("feed_url")
-  enabled   Boolean @default(true)
-  lastError String? @map("last_error")
-  traceId   String? @map("trace_id")
+  feedUrl   String   @map("feed_url")
+  enabled   Boolean  @default(true)
+  lastError String?  @map("last_error")
+  traceId   String?  @map("trace_id")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -48,20 +48,20 @@ model EvidenceSource {
 // archived with status="missing_fields" and a human-readable failure_reason
 // (AC3 traceability) rather than being discarded.
 model EvidenceRecord {
-  id            String   @id // UUIDv7, assigned in application code (newTraceId)
-  sourceId      String   @map("source_id")
+  id            String    @id // UUIDv7, assigned in application code (newTraceId)
+  sourceId      String    @map("source_id")
   url           String?
   title         String?
   summary       String?
   publishedAt   DateTime? @map("published_at")
-  ingestedAt    DateTime @default(now()) @map("ingested_at")
-  contentHash   String   @unique @map("content_hash")
+  ingestedAt    DateTime  @default(now()) @map("ingested_at")
+  contentHash   String    @unique @map("content_hash")
   status        String // IngestStatus union value ("archived"|"missing_fields")
-  failureReason String?  @map("failure_reason")
-  rawPayload    Json     @map("raw_payload")
-  traceId       String?  @map("trace_id")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  failureReason String?   @map("failure_reason")
+  rawPayload    Json      @map("raw_payload")
+  traceId       String?   @map("trace_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   source EvidenceSource @relation(fields: [sourceId], references: [id])
 
@@ -100,10 +100,10 @@ model EvidenceRecord {
 // derivation (latest published_at record's title, non-AI) — real title/
 // explanation generation is the separate explain job (1.8).
 model HotEvent {
-  id                 String   @id // UUIDv7, assigned in application code (newTraceId)
-  title              String
-  clusterSignature   String   @map("cluster_signature")
-  publicationStatus  String   @map("publication_status") // PublicationStatus union value (shared/publication-status.ts)
+  id                String   @id // UUIDv7, assigned in application code (newTraceId)
+  title             String
+  clusterSignature  String   @map("cluster_signature")
+  publicationStatus String   @map("publication_status") // PublicationStatus union value (shared/publication-status.ts)
   // Story 7.1/7.2 — investment-relevance gate + significance score. event-assembly
   // is the SOLE writer of these three fields (AD-2b): they are computed at cluster
   // time from the candidate's member evidence (relevance keywords + breadth +
@@ -115,34 +115,34 @@ model HotEvent {
   // because those modules have not run yet). All nullable: pre-7.2 rows + the
   // self-heal path leave them null; the publish gate treats null as "unscored →
   // hold" (never auto-publish an unscored event).
-  relevanceLabel     String?  @map("relevance_label") // RelevanceLabel union value
-  saliency           Float?   @map("saliency") // 0–100 significance score
-  saliencyBreakdown  Json?    @map("saliency_breakdown") // SaliencyBreakdown object
-  traceId            String?  @map("trace_id")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  relevanceLabel    String?  @map("relevance_label") // RelevanceLabel union value
+  saliency          Float?   @map("saliency") // 0–100 significance score
+  saliencyBreakdown Json?    @map("saliency_breakdown") // SaliencyBreakdown object
+  traceId           String?  @map("trace_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
-  evidence           HotEventEvidence[]
+  evidence                   HotEventEvidence[]
   // Read-only reverse relations (Prisma navigation metadata, not write paths):
   // let review-workflow list candidates / detail evidence and let
   // publish-orchestrator compute read-model projections without a second query
   // round-trip. Adding these does NOT change event-assembly's write-ownership
   // of (title, cluster_signature) or review-workflow's ownership of
   // publication_status (AD-2/AD-6 field-level split).
-  reviewDecisions     ReviewDecision[]
-  publicationDecisions PublicationDecision[]
-  publishedReadModel  PublishedHotEvent?
+  reviewDecisions            ReviewDecision[]
+  publicationDecisions       PublicationDecision[]
+  publishedReadModel         PublishedHotEvent?
   // Read-only reverse relation to the explain job's append-only explanation
   // versions (Story 1.8). The explanation module owns explanation_versions;
   // this navigation metadata lets publish-orchestrator read the latest version
   // when projecting the published read model. It does NOT change the
   // explanation module's write-ownership (AD-5 append-only versions).
-  explanationVersions ExplanationVersion[]
+  explanationVersions        ExplanationVersion[]
   // Read-only reverse relations to the two new published detail read models
   // (Story 1.8: published_hot_event_explanations + published_hot_event_evidence).
   // publish-orchestrator owns both; these are navigation metadata only.
-  publishedExplanation PublishedHotEventExplanation?
-  publishedEvidence    PublishedHotEventEvidence[]
+  publishedExplanation       PublishedHotEventExplanation?
+  publishedEvidence          PublishedHotEventEvidence[]
   // Read-only reverse relation to operator-authored title/tag revisions (Story
   // 1.9). The event-assembly module owns hot_event_revisions (it owns
   // HotEvent clustering + this is the revision write-point per AD-2/AD-5); this
@@ -150,7 +150,7 @@ model HotEvent {
   // operator "pending vs published" diff and lets publish-orchestrator read the
   // effective title/tags at projection time. It does NOT change event-assembly's
   // write-ownership of hot_event_revisions.
-  revisions            HotEventRevision[]
+  revisions                  HotEventRevision[]
   // Read-only reverse relations to the market-reaction read models (Story 2.1).
   // The market-reaction module owns market_reaction_snapshots (AD-2 append-only
   // write table); publish-orchestrator owns published_hot_event_reactions (AD-3
@@ -158,16 +158,16 @@ model HotEvent {
   // latest snapshot at projection time and let the market-reaction worker query
   // published events without a snapshot via `marketReactionSnapshots: { none: {} }`.
   // They do NOT change the respective modules' write-ownership (AD-2).
-  marketReactionSnapshots MarketReactionSnapshot[]
-  publishedReaction       PublishedHotEventReaction?
+  marketReactionSnapshots    MarketReactionSnapshot[]
+  publishedReaction          PublishedHotEventReaction?
   // Read-only reverse relations to the association read models (Story 2.2).
   // The theme-linking module owns event_association_sets (AD-2 append-only write
   // table); publish-orchestrator owns published_hot_event_associations (AD-3
   // public projection). These navigations let publish-orchestrator read the
   // latest set at projection time. They do NOT change the respective modules'
   // write-ownership (AD-2).
-  eventAssociationSets EventAssociationSet[]
-  publishedAssociation PublishedHotEventAssociation?
+  eventAssociationSets       EventAssociationSet[]
+  publishedAssociation       PublishedHotEventAssociation?
   // Read-only reverse relations to the theme read models (Story 2.3).
   // The theme-linking module owns event_theme_sets (AD-2 append-only write table,
   // one row per generation of ThemeRef[]); publish-orchestrator owns
@@ -176,15 +176,15 @@ model HotEvent {
   // theme-backfill worker query published events without a theme set via
   // `eventThemeSets: { none: {} }`. They do NOT change the respective modules'
   // write-ownership (AD-2).
-  eventThemeSets   EventThemeSet[]
-  publishedTheme   PublishedHotEventTheme?
+  eventThemeSets             EventThemeSet[]
+  publishedTheme             PublishedHotEventTheme?
   // Read-only reverse relation to the timeline read model (Story 4.1).
   // publish-orchestrator owns published_timeline_entries (AD-3b public
   // projection of per-HotEvent folded timeline rows). This navigation lets the
   // self-heal job find published events whose timeline projection is stale and
   // lets publish-orchestrator delete a HotEvent's timeline rows on takedown. It
   // does NOT change publish-orchestrator's write-ownership (AD-2/AD-3b).
-  publishedTimeline   PublishedTimelineEntry[]
+  publishedTimeline          PublishedTimelineEntry[]
   // Read-only reverse relation to the append-only AI 解读 rows (Story 5.1).
   // The explanation module owns recommendation_reasons (AD-5 append-only, one
   // row per generation of the ≤40 字 card hook); publish-orchestrator projects
@@ -194,7 +194,7 @@ model HotEvent {
   // time and lets the recommendation-reason worker query events lacking a
   // reason via `recommendationReasons: { none: {} }`. It does NOT change the
   // explanation module's write-ownership of recommendation_reasons.
-  recommendationReasons RecommendationReason[]
+  recommendationReasons      RecommendationReason[]
   // Read-only reverse relation to the append-only AI 深读 rows (Story 5.2).
   // The explanation module owns deep_reads (AD-5 append-only, one row per
   // generation of the three-segment 影响面/受益方/风险点 detail-page deep read);
@@ -204,8 +204,8 @@ model HotEvent {
   // read at projection time and lets the deep-read worker query events lacking a
   // deep read via `deepReads: { none: {} }`. It does NOT change the explanation
   // module's write-ownership of deep_reads.
-  deepReads         DeepRead[]
-  publishedDeepRead PublishedHotEventDeepRead?
+  deepReads                  DeepRead[]
+  publishedDeepRead          PublishedHotEventDeepRead?
   // Read-only reverse relation to the append-only 投资标的池 rows. The investment-
   // targets module owns investment_targets (AD-5 append-only, one row per agent
   // run of the ashare-news-investment-targets skill — candidates[] carried as Json,
@@ -237,7 +237,7 @@ model HotEventEvidence {
   traceId          String?  @map("trace_id")
   createdAt        DateTime @default(now()) @map("created_at")
 
-  hotEvent     HotEvent       @relation(fields: [hotEventId], references: [id])
+  hotEvent       HotEvent       @relation(fields: [hotEventId], references: [id])
   evidenceRecord EvidenceRecord @relation(fields: [evidenceRecordId], references: [id])
 
   @@unique([hotEventId, evidenceRecordId])
@@ -254,11 +254,11 @@ model HotEventEvidence {
 // (approve|reject|takedown). FK onDelete: Restrict so deleting a HotEvent can
 // never silently erase review history (audit traceability, AD-5).
 model ReviewDecision {
-  id        String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId String  @map("hot_event_id")
-  outcome   String // ReviewOutcome union value ("approve"|"reject"|"takedown"|"republish") OR the sibling "suppress_ai_content" outcome (Story 5.4 — written directly to this free-String column, NOT added to the ReviewOutcome const / state machine)
-  reviewer  String // operator identity (V1: placeholder; real auth deferred)
-  note      String? // optional operator note
+  id         String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId String   @map("hot_event_id")
+  outcome    String // ReviewOutcome union value ("approve"|"reject"|"takedown"|"republish") OR the sibling "suppress_ai_content" outcome (Story 5.4 — written directly to this free-String column, NOT added to the ReviewOutcome const / state machine)
+  reviewer   String // operator identity (V1: placeholder; real auth deferred)
+  note       String? // optional operator note
   // Story 5.4 — suppress_ai_content target. Nullable: the traditional 4-outcome
   // decisions leave both null (the decision is per-HotEvent, identified by
   // hotEventId). A suppress_ai_content decision sets targetType ∈ {"reason",
@@ -266,12 +266,12 @@ model ReviewDecision {
   // DeepRead.id (structured audit: which generated AI content was judged
   // misleading + which exact source row). Kept as a free String (no TS enum, per
   // erasableSyntaxOnly); the AiContentType const lives in the explanation module.
-  targetType String? @map("target_type")
-  targetId   String? @map("target_id")
-  traceId   String? @map("trace_id")
-  createdAt DateTime @default(now()) @map("created_at")
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  traceId    String?  @map("trace_id")
+  createdAt  DateTime @default(now()) @map("created_at")
 
-  hotEvent          HotEvent           @relation(fields: [hotEventId], references: [id])
+  hotEvent            HotEvent             @relation(fields: [hotEventId], references: [id])
   publicationDecision PublicationDecision?
 
   @@index([hotEventId])
@@ -287,16 +287,16 @@ model ReviewDecision {
 // onDelete: Restrict so deleting a HotEvent can never erase publication history.
 // `from_status`/`to_status` are PublicationStatus union values.
 model PublicationDecision {
-  id              String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId      String   @map("hot_event_id")
-  fromStatus      String   @map("from_status") // PublicationStatus union value
-  toStatus        String   @map("to_status") // PublicationStatus union value
-  reason          String? // optional operator-facing reason
-  reviewDecisionId String? @unique @map("review_decision_id")
-  traceId         String?  @map("trace_id")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id               String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId       String   @map("hot_event_id")
+  fromStatus       String   @map("from_status") // PublicationStatus union value
+  toStatus         String   @map("to_status") // PublicationStatus union value
+  reason           String? // optional operator-facing reason
+  reviewDecisionId String?  @unique @map("review_decision_id")
+  traceId          String?  @map("trace_id")
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  hotEvent       HotEvent       @relation(fields: [hotEventId], references: [id])
+  hotEvent       HotEvent        @relation(fields: [hotEventId], references: [id])
   reviewDecision ReviewDecision? @relation(fields: [reviewDecisionId], references: [id])
 
   @@index([hotEventId])
@@ -359,14 +359,14 @@ model PublishedHotEvent {
 // `source` distinguishes provenance ("template" V1 deterministic derivation;
 // "ai" when a real LLM lands; "human" for operator-authored revisions in 1.9).
 model ExplanationVersion {
-  id             String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId     String   @map("hot_event_id")
-  summary        String
-  whyItMatters   String   @map("why_it_matters")
-  uncertainties  String
-  source         String // ExplanationSource union value ("template"|"ai"|"human")
-  traceId        String?  @map("trace_id")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id            String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId    String   @map("hot_event_id")
+  summary       String
+  whyItMatters  String   @map("why_it_matters")
+  uncertainties String
+  source        String // ExplanationSource union value ("template"|"ai"|"human")
+  traceId       String?  @map("trace_id")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -387,14 +387,14 @@ model ExplanationVersion {
 // published if the explain job has not run yet — the detail page renders an
 // honest degraded state in that case (never fabricates an explanation).
 model PublishedHotEventExplanation {
-  hotEventId          String   @id @map("hot_event_id")
-  summary             String
-  whyItMatters        String   @map("why_it_matters")
-  uncertainties       String
-  explanationSource   String   @map("explanation_source") // ExplanationSource union value
-  generatedAt         DateTime @map("generated_at")
-  traceId             String?  @map("trace_id")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  hotEventId        String   @id @map("hot_event_id")
+  summary           String
+  whyItMatters      String   @map("why_it_matters")
+  uncertainties     String
+  explanationSource String   @map("explanation_source") // ExplanationSource union value
+  generatedAt       DateTime @map("generated_at")
+  traceId           String?  @map("trace_id")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -417,16 +417,16 @@ model PublishedHotEventExplanation {
 // `position` is the chronological render order (publishedAt ASC, nulls last),
 // assigned at projection time so the public read is a single orderBy position.
 model PublishedHotEventEvidence {
-  id           String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId   String   @map("hot_event_id")
-  sourceName   String   @map("source_name")
-  url          String?
-  summary      String?
-  publishedAt  DateTime? @map("published_at")
-  linkStatus   String   @map("link_status") // EvidenceLinkStatus union value ("available"|"unavailable")
-  position     Int
-  traceId      String?  @map("trace_id")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id          String    @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId  String    @map("hot_event_id")
+  sourceName  String    @map("source_name")
+  url         String?
+  summary     String?
+  publishedAt DateTime? @map("published_at")
+  linkStatus  String    @map("link_status") // EvidenceLinkStatus union value ("available"|"unavailable")
+  position    Int
+  traceId     String?   @map("trace_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -496,17 +496,17 @@ model HotEventRevision {
 // {tone, value}. Adding a future third dimension (e.g. capital flow) is a
 // schema migration (deferred).
 model MarketReactionSnapshot {
-  id                   String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId           String   @map("hot_event_id")
-  priceVolumeTone      String   @map("price_volume_tone") // ReactionTone union value ("up"|"down"|"flat")
-  priceVolumeValue     String   @map("price_volume_value")
-  sectorLimitUpTone    String   @map("sector_limit_up_tone") // ReactionTone union value
-  sectorLimitUpValue   String   @map("sector_limit_up_value")
-  limitUpCount         Int      @map("limit_up_count")
-  tradingSession       DateTime @map("trading_session")
-  source               String // ReactionSource union value ("template"; future provider id)
-  traceId              String?  @map("trace_id")
-  createdAt            DateTime @default(now()) @map("created_at")
+  id                 String   @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId         String   @map("hot_event_id")
+  priceVolumeTone    String   @map("price_volume_tone") // ReactionTone union value ("up"|"down"|"flat")
+  priceVolumeValue   String   @map("price_volume_value")
+  sectorLimitUpTone  String   @map("sector_limit_up_tone") // ReactionTone union value
+  sectorLimitUpValue String   @map("sector_limit_up_value")
+  limitUpCount       Int      @map("limit_up_count")
+  tradingSession     DateTime @map("trading_session")
+  source             String // ReactionSource union value ("template"; future provider id)
+  traceId            String?  @map("trace_id")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -529,17 +529,17 @@ model MarketReactionSnapshot {
 // none → never produced) — the detail page renders an honest degraded state in
 // that case (AC3, never fabricates a reaction).
 model PublishedHotEventReaction {
-  hotEventId          String   @id @map("hot_event_id")
-  priceVolumeTone     String   @map("price_volume_tone") // ReactionTone union value
-  priceVolumeValue    String   @map("price_volume_value")
-  sectorLimitUpTone   String   @map("sector_limit_up_tone") // ReactionTone union value
-  sectorLimitUpValue  String   @map("sector_limit_up_value")
-  limitUpCount        Int      @map("limit_up_count")
-  tradingSession      DateTime @map("trading_session")
-  reactionSource      String   @map("reaction_source") // ReactionSource union value
-  generatedAt         DateTime @map("generated_at")
-  traceId             String?  @map("trace_id")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  hotEventId         String   @id @map("hot_event_id")
+  priceVolumeTone    String   @map("price_volume_tone") // ReactionTone union value
+  priceVolumeValue   String   @map("price_volume_value")
+  sectorLimitUpTone  String   @map("sector_limit_up_tone") // ReactionTone union value
+  sectorLimitUpValue String   @map("sector_limit_up_value")
+  limitUpCount       Int      @map("limit_up_count")
+  tradingSession     DateTime @map("trading_session")
+  reactionSource     String   @map("reaction_source") // ReactionSource union value
+  generatedAt        DateTime @map("generated_at")
+  traceId            String?  @map("trace_id")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -563,7 +563,7 @@ model PublishedHotEventReaction {
 model EventAssociationSet {
   id         String   @id // UUIDv7, assigned in application code (newTraceId)
   hotEventId String   @map("hot_event_id")
-  items      Json     // AssociationItem[] ({kind,label,mappingBasis}); display-only
+  items      Json // AssociationItem[] ({kind,label,mappingBasis}); display-only
   source     String // AssociationSource union value ("template"; future knowledge-base/provider id)
   traceId    String?  @map("trace_id")
   createdAt  DateTime @default(now()) @map("created_at")
@@ -588,12 +588,12 @@ model EventAssociationSet {
 // has NO worker — prod has no trigger → never produced) — the detail page
 // renders an honest degraded state in that case (AC3, never fabricates items).
 model PublishedHotEventAssociation {
-  hotEventId         String   @id @map("hot_event_id")
-  items              Json // AssociationItem[] ({kind,label,mappingBasis}); display-only
-  associationSource  String   @map("association_source") // AssociationSource union value
-  generatedAt        DateTime @map("generated_at")
-  traceId            String?  @map("trace_id")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  hotEventId        String   @id @map("hot_event_id")
+  items             Json // AssociationItem[] ({kind,label,mappingBasis}); display-only
+  associationSource String   @map("association_source") // AssociationSource union value
+  generatedAt       DateTime @map("generated_at")
+  traceId           String?  @map("trace_id")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -619,7 +619,7 @@ model PublishedHotEventAssociation {
 model EventThemeSet {
   id         String   @id // UUIDv7, assigned in application code (newTraceId)
   hotEventId String   @map("hot_event_id")
-  items      Json     // ThemeRef[] ({slug,label,mappingBasis}); display-only
+  items      Json // ThemeRef[] ({slug,label,mappingBasis}); display-only
   source     String // ThemeSource union value ("template"; future knowledge-base/provider id)
   traceId    String?  @map("trace_id")
   createdAt  DateTime @default(now()) @map("created_at")
@@ -644,12 +644,12 @@ model EventThemeSet {
 // skip → never produced) — the detail page renders an honest degraded state in
 // that case (AC3, never fabricates themes).
 model PublishedHotEventTheme {
-  hotEventId    String   @id @map("hot_event_id")
-  items         Json // ThemeRef[] ({slug,label,mappingBasis}); display-only
-  themeSource   String   @map("theme_source") // ThemeSource union value
-  generatedAt   DateTime @map("generated_at")
-  traceId       String?  @map("trace_id")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  hotEventId  String   @id @map("hot_event_id")
+  items       Json // ThemeRef[] ({slug,label,mappingBasis}); display-only
+  themeSource String   @map("theme_source") // ThemeSource union value
+  generatedAt DateTime @map("generated_at")
+  traceId     String?  @map("trace_id")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -883,12 +883,12 @@ model PublishedTimelineEntry {
 // stub-generated). The recommendation_reason column on published_timeline_entries
 // is a DERIVED projection of the latest row here, NOT a second write path.
 model RecommendationReason {
-  id            String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId    String   @map("hot_event_id")
+  id            String    @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId    String    @map("hot_event_id")
   reason        String // ≤40 字 AI 解读; passesRecommendationGuardrail-enforced at write time
   source        String // ExplanationSource union value ("ai" in V1)
-  modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
-  promptVersion String   @map("prompt_version") // prompt template version (e.g. "reason-stub-v1")
+  modelId       String    @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+  promptVersion String    @map("prompt_version") // prompt template version (e.g. "reason-stub-v1")
   // Story 5.4 — suppression timestamp. Nullable metadata: null while the row is
   // live, set to now() by suppressRecommendationReason (the SOLE writer of this
   // column) when an operator judges the reason misleading and suppresses it via
@@ -901,8 +901,8 @@ model RecommendationReason {
   // projection already reads) so no cross-module reverse dependency on
   // review-workflow / ReviewDecision is needed (see spec-5-4 Design Notes).
   suppressedAt  DateTime? @map("suppressed_at")
-  traceId       String?  @map("trace_id")
-  createdAt     DateTime @default(now()) @map("created_at")
+  traceId       String?   @map("trace_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -931,21 +931,21 @@ model RecommendationReason {
 // projection pipeline is identical — only the model_id/prompt_version mark it as
 // stub-generated).
 model DeepRead {
-  id            String   @id // UUIDv7, assigned in application code (newTraceId)
-  hotEventId    String   @map("hot_event_id")
-  impactSurface String   @map("impact_surface") // 影响面; ≤120 字; guardrail-enforced at write time
+  id            String    @id // UUIDv7, assigned in application code (newTraceId)
+  hotEventId    String    @map("hot_event_id")
+  impactSurface String    @map("impact_surface") // 影响面; ≤120 字; guardrail-enforced at write time
   beneficiaries String // 受益方; ≤120 字; guardrail-enforced at write time
-  riskPoints    String   @map("risk_points") // 风险点; ≤120 字; guardrail-enforced at write time
+  riskPoints    String    @map("risk_points") // 风险点; ≤120 字; guardrail-enforced at write time
   source        String // ExplanationSource union value ("ai" in V1)
-  modelId       String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
-  promptVersion String   @map("prompt_version") // prompt template version (e.g. "deepread-stub-v1")
+  modelId       String    @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+  promptVersion String    @map("prompt_version") // prompt template version (e.g. "deepread-stub-v1")
   // Story 5.4 — suppression timestamp. Nullable metadata; same semantics as
   // RecommendationReason.suppressedAt (sole writer = suppressDeepRead; content
   // columns never cleared; projection skips via where:{suppressedAt:null}). See
   // the RecommendationReason comment + spec-5-4 Design Notes for the rationale.
   suppressedAt  DateTime? @map("suppressed_at")
-  traceId       String?  @map("trace_id")
-  createdAt     DateTime @default(now()) @map("created_at")
+  traceId       String?   @map("trace_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   hotEvent HotEvent @relation(fields: [hotEventId], references: [id], onDelete: Cascade)
 
@@ -1061,15 +1061,15 @@ model PublishedHotEventInvestmentTargets {
 // no Ai variant; the column stays String and the TS side assigns ExplanationSource.Ai).
 // Only the model_id/prompt_version mark a row as stub-generated.
 model TrendBriefing {
-  id                String   @id // UUIDv7, assigned in application code (newTraceId)
-  coverageDate      DateTime @map("coverage_date")
-  briefing          String // ≤200 字 single-paragraph cross-event trend briefing; guardrail-enforced at write time
-  basedOnHotEventIds Json   @map("based_on_hot_event_ids") // string[] (hotEventIds the briefing was derived from); data-only link, NO FK
-  source            String // ExplanationSource union value ("ai" in V1)
-  modelId           String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
-  promptVersion     String   @map("prompt_version") // prompt template version (e.g. "trendbriefing-stub-v1")
-  traceId           String?  @map("trace_id")
-  createdAt         DateTime @default(now()) @map("created_at")
+  id                 String   @id // UUIDv7, assigned in application code (newTraceId)
+  coverageDate       DateTime @map("coverage_date")
+  briefing           String // ≤200 字 single-paragraph cross-event trend briefing; guardrail-enforced at write time
+  basedOnHotEventIds Json     @map("based_on_hot_event_ids") // string[] (hotEventIds the briefing was derived from); data-only link, NO FK
+  source             String // ExplanationSource union value ("ai" in V1)
+  modelId            String   @map("model_id") // provider + version (e.g. "stub:v1", future "openai:gpt-4o")
+  promptVersion      String   @map("prompt_version") // prompt template version (e.g. "trendbriefing-stub-v1")
+  traceId            String?  @map("trace_id")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   // NO FK to hot_events — coverageDate-keyed aggregate, data-only based_on_hot_event_ids
   // link (mirrors DailyDigest's no-FK invariant).
@@ -1099,4 +1099,72 @@ model PublishedTrendBriefing {
   // NO FK to hot_events — coverageDate-keyed aggregate (mirrors published_daily_digests).
 
   @@map("published_trend_briefings")
+}
+
+// Story 8.1 — historical daily OHLC-free bars for a broad index (三大宽基: 上证综指
+// sh000001 / 深证成指 sz399001 / 创业板指 sz399006). The Node/Prisma schema owns this
+// table (single-schema ownership, AD-2); the Python sidecar apps/market-sidecar is the SOLE
+// writer — it writes via psycopg v3 raw SQL only (NEVER Prisma/SQLAlchemy/Alembic). Node
+// domain modules (crash-review 8.2, market-reaction) read these rows; they never call AkShare
+// (AD-7: external market source behind the MarketDataAdapter port, sidecar is the impl side).
+//
+// scope is the minimal 大跌日历 foundation: one row per (index_code, trade_date) carrying just
+// pct_change + close (decimal, NOT float — Consistency Convention: 涨跌和比率以 decimal 存储).
+// OHLC/volume/turnover are YAGNI until a consumer needs them (deferred). trade_date is a DATE
+// (A-share trading day, midnight UTC representation); ingested_at is the UTC write instant.
+// `source` is "akshare" in V1 (switching providers changes only the sidecar, AD-7). Idempotent
+// upsert on @@unique([indexCode, tradeDate]) — re-running the same day is a no-op (AC3). The
+// Python side assigns the UUIDv7 `id` app-side (uuid7 lib), mirroring the system-wide
+// app-side PK convention (no DB default) so the sidecar is not coupled to a DB id generator.
+//
+// NO FK to hot_events — this is a market-data time series (a code+date-keyed aggregate), not a
+// hotEvent-owned sub-aggregate (mirrors DailyDigest's no-FK invariant). The unique index backs
+// the psycopg upsert (ON CONFLICT (index_code, trade_date) DO NOTHING) and the 8.2 crash-review
+// latest-bar / date-range reads.
+model IndexDailyBar {
+  id         String   @id // UUIDv7, assigned in the Python sidecar (uuid7.str → str)
+  indexCode  String   @map("index_code") // AkShare-prefixed code ("sh000001"|"sz399001"|"sz399006")
+  tradeDate  DateTime @map("trade_date") @db.Date // A-share trading day (UTC midnight)
+  pctChange  Decimal  @map("pct_change") @db.Decimal(8, 4) // 涨跌幅 % (signed); decimal not float
+  close      Decimal  @db.Decimal(12, 4) // 收盘价; decimal not float
+  source     String // MarketDataSource union value ("akshare")
+  ingestedAt DateTime @default(now()) @map("ingested_at") // UTC write instant
+  traceId    String?  @map("trace_id")
+
+  // Idempotency key: one row per (index, trading day). Backs the upsert ON CONFLICT DO
+  // NOTHING and the 8.2 date-range lookup.
+  @@unique([indexCode, tradeDate])
+  @@index([tradeDate])
+  @@index([indexCode])
+  @@map("index_daily_bars")
+}
+
+// Story 8.1 — historical daily pct_change + close for a 申万一级行业 (~31 industries). Same
+// ownership + idempotency model as IndexDailyBar above: Node/Prisma owns the schema; the Python
+// sidecar is the SOLE writer (psycopg raw SQL). `sector_code` is the AkShare 申万一级 code;
+// `sector_name` is carried per-row (display convenience for the 8.3 public page — a normalized
+// sector directory table would be over-engineering for ~31 stable codes, ponytail). trade_date
+// is a DATE; pct_change/close are decimal (NOT float). Idempotent upsert on
+// @@unique([sectorCode, tradeDate]). NO FK to hot_events — market-data time series.
+//
+// NOTE: AkShare 申万 function names churn (sw_index_daily vs index_hist_sw); the sidecar's
+// akshare_client.py records the EXACT verified function + akshare version at the top. The
+// schema is independent of that — it only fixes the row shape.
+model SectorDailyBar {
+  id         String   @id // UUIDv7, assigned in the Python sidecar (uuid7.str → str)
+  sectorCode String   @map("sector_code") // 申万一级 code (AkShare-returned)
+  sectorName String   @map("sector_name") // display label, carried per-row
+  tradeDate  DateTime @map("trade_date") @db.Date // A-share trading day (UTC midnight)
+  pctChange  Decimal  @map("pct_change") @db.Decimal(8, 4) // 涨跌幅 % (signed); decimal not float
+  close      Decimal  @db.Decimal(12, 4) // 收盘价; decimal not float
+  source     String // MarketDataSource union value ("akshare")
+  ingestedAt DateTime @default(now()) @map("ingested_at") // UTC write instant
+  traceId    String?  @map("trace_id")
+
+  // Idempotency key: one row per (sector, trading day). Backs the upsert ON CONFLICT DO
+  // NOTHING and the 8.2 date-range lookup.
+  @@unique([sectorCode, tradeDate])
+  @@index([tradeDate])
+  @@index([sectorCode])
+  @@map("sector_daily_bars")
 }
