@@ -89,8 +89,8 @@ function DesktopNav({ pathname }: { pathname: string }) {
               className={cn(
                 "inline-flex min-h-14 items-center border-b-2 px-1 text-sm",
                 isActive(pathname, item.href)
-                  ? "border-brand font-semibold text-ink-primary"
-                  : "border-transparent text-ink-secondary hover:text-ink-primary",
+                  ? "border-white font-semibold text-white"
+                  : "border-transparent text-white/70 hover:text-white",
               )}
             >
               {item.label}
@@ -104,8 +104,8 @@ function DesktopNav({ pathname }: { pathname: string }) {
             className={cn(
               "inline-flex min-h-14 items-center border-b-2 px-1 text-xs",
               isActive(pathname, OPERATOR_NAV_ITEM.href)
-                ? "border-brand font-semibold text-ink-primary"
-                : "border-transparent text-ink-tertiary hover:text-ink-primary",
+                ? "border-white font-semibold text-white"
+                : "border-transparent text-white/55 hover:text-white",
             )}
           >
             {OPERATOR_NAV_ITEM.label}
@@ -230,9 +230,17 @@ export function PublicNav() {
         so scrolling content passes under it lightly (reference-site form).
         `border-b-border-hairline` anchors the bar to the editorial column.
       */}
-      <header className="sticky top-0 z-40 border-b border-border-hairline bg-canvas/90 backdrop-blur-sm">
+      {/*
+        Sticky navy masthead (role=banner) at ALL widths. 2026-07-15: flipped
+        from the chromeless translucent canvas bar to a solid brand-navy bar so
+        the 蓝白格调 reads unambiguously (a near-white cool canvas alone was too
+        subtle). This deliberately revises the UX-DR3 "chromeless editorial"
+        stance — the user prioritised a visible blue-white premium register.
+        White brand + light links + white active underline on navy.
+      */}
+      <header className="sticky top-0 z-40 border-b border-black/20 bg-brand">
         <div className="mx-auto flex h-14 max-w-3xl items-center gap-6 px-6">
-          <Link href="/" className="font-display text-lg font-bold tracking-tight text-ink-primary">
+          <Link href="/" className="font-display text-lg font-bold tracking-tight text-white">
             AGUHOT
           </Link>
 
@@ -266,7 +274,7 @@ export function PublicNav() {
             aria-expanded={open}
             aria-controls={drawerId}
             aria-label={open ? "关闭导航菜单" : "打开导航菜单"}
-            className="ml-auto inline-flex size-11 items-center justify-center rounded-md text-ink-secondary hover:bg-surface-muted hover:text-ink-primary md:hidden"
+            className="ml-auto inline-flex size-11 items-center justify-center rounded-md text-white/80 hover:bg-white/10 hover:text-white md:hidden"
           >
             <svg
               aria-hidden="true"
