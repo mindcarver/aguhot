@@ -101,7 +101,7 @@ development_status:
   # 新数据品类(行情历史日线) + Python 第三运行时;排 v1.1,不塞 V1 GA。
   # 合规前置: 行情数据采集 + 统计回顾 → §12 Q9/Q10 金融信息服务复核未清前不公开。
   epic-8: backlog
-  8-1-market-history-daily-bars-sidecar: ready-for-dev
+  8-1-market-history-daily-bars-sidecar: done
   8-2-crash-day-detection-and-forward-returns: backlog
   8-3-crash-calendar-public-page: backlog
   8-4-sidenav-entry-and-route: backlog
