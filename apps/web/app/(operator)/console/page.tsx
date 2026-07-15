@@ -1,6 +1,13 @@
 import Link from "next/link";
 
-import { listPendingCandidates, listPublishedHotEvents, getPrisma, newTraceId } from "@aguhot/core";
+import {
+  listPendingCandidates,
+  listPublishedHotEvents,
+  getSm9GateDistribution,
+  getPrisma,
+  newTraceId,
+} from "@aguhot/core";
+import type { AutoPublishOutcome } from "@aguhot/core";
 
 /**
  * Operator review console — candidate queue + published events. Story 1.6 +
@@ -25,9 +32,10 @@ export const dynamic = "force-dynamic";
 
 export default async function ConsolePage() {
   const prisma = getPrisma();
-  const [candidates, published] = await Promise.all([
+  const [candidates, published, sm9] = await Promise.all([
     listPendingCandidates({ prisma, traceId: newTraceId() }),
     listPublishedHotEvents({ prisma, traceId: newTraceId() }),
+    getSm9GateDistribution({ prisma, traceId: newTraceId() }),
   ]);
 
   return (
@@ -39,6 +47,55 @@ export default async function ConsolePage() {
             待复核候选热点 · {candidates.length} 条
           </p>
         </header>
+
+        {/* Story 7.6 — SM-9 gate-distribution readout. Shows what the Epic 7
+            auto-publish gate recommends (approve/hold/reject) over all hot_events,
+            the relevance split, and the current thresholds. The gap between
+            gate.approve and status.published = manual overrides. */}
+        <section
+          aria-label="打分闸门分布"
+          className="mt-6 rounded-lg border border-border-hairline bg-surface-raised px-5 py-4"
+        >
+          <h2 className="text-sm font-semibold text-ink-secondary">打分闸门分布 (SM-9)</h2>
+          <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-2 font-mono text-xs sm:grid-cols-4">
+            <div>
+              <dt className="inline text-ink-tertiary">自动发 </dt>
+              <dd className="inline text-ink-primary">{sm9.gate.approve}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">留复核 </dt>
+              <dd className="inline text-ink-primary">{sm9.gate.hold}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">拦截 </dt>
+              <dd className="inline text-ink-primary">{sm9.gate.reject}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">总数 </dt>
+              <dd className="inline text-ink-primary">{sm9.total}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">pass </dt>
+              <dd className="inline">{sm9.relevance.pass}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">suspicious </dt>
+              <dd className="inline">{sm9.relevance.suspicious}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">fail </dt>
+              <dd className="inline">{sm9.relevance.fail}</dd>
+            </div>
+            <div>
+              <dt className="inline text-ink-tertiary">未打分 </dt>
+              <dd className="inline">{sm9.relevance.unscored}</dd>
+            </div>
+          </dl>
+          <p className="mt-3 font-mono text-xs text-ink-tertiary">
+            实际: published {sm9.status.published} · candidate {sm9.status.candidate} · rejected{" "}
+            {sm9.status.rejected} · 阈值 LOW={sm9.thresholds.low} HIGH={sm9.thresholds.high}
+          </p>
+        </section>
 
         {/* Story 5.4: AI content sampling console entry. Cross-event list of AI
             解读 + AI 深读 with a type filter, an SM-6 misleading-rate readout,
@@ -75,7 +132,7 @@ export default async function ConsolePage() {
                       {c.evidenceCount} 来源
                     </span>
                   </div>
-                  <dl className="mt-2 flex gap-6 font-mono text-xs text-ink-tertiary">
+                  <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1 font-mono text-xs text-ink-tertiary">
                     <div>
                       <dt className="inline">最近证据 </dt>
                       <dd className="inline">{formatDate(c.latestEvidenceAt)}</dd>
@@ -83,6 +140,21 @@ export default async function ConsolePage() {
                     <div>
                       <dt className="inline">状态 </dt>
                       <dd className="inline">candidate</dd>
+                    </div>
+                    {/* Story 7.6 — Epic 7 score + gate outcome so the operator sees
+                        why this was held. */}
+                    <div>
+                      <dt className="inline">打分 </dt>
+                      <dd className="inline text-ink-secondary">
+                        {c.saliency === null ? "—" : `${c.saliency} 分`}
+                        {c.relevanceLabel !== null ? ` · ${c.relevanceLabel}` : ""}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline">闸门 </dt>
+                      <dd className={`inline ${gateOutcomeClass(c.gateOutcome)}`}>
+                        {gateOutcomeLabel(c.gateOutcome)}
+                      </dd>
                     </div>
                   </dl>
                 </Link>
@@ -141,4 +213,30 @@ function formatDate(d: Date): string {
   // varies by build-time TZ). YYYY-MM-DD HH:mm UTC is enough for a queue list.
   const iso = d.toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+// Story 7.6 — gate-outcome badge label + tone. Kept in ink tones (no market
+// red/green) so it reads as a queue-triage signal, not investment advice.
+function gateOutcomeLabel(outcome: AutoPublishOutcome | null): string {
+  switch (outcome) {
+    case "approve":
+      return "自动发布";
+    case "reject":
+      return "拦截";
+    case "hold":
+      return "留复核";
+    default:
+      return "未打分";
+  }
+}
+
+function gateOutcomeClass(outcome: AutoPublishOutcome | null): string {
+  switch (outcome) {
+    case "approve":
+      return "text-ink-primary font-semibold";
+    case "reject":
+      return "text-ink-secondary";
+    default:
+      return "text-ink-tertiary";
+  }
 }

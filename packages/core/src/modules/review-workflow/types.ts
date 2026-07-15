@@ -12,6 +12,11 @@
 
 import type { PublicationStatus } from "../../shared/publication-status.js";
 import type { ExplanationPartitions } from "../explanation/types.js";
+import type {
+  RelevanceLabel,
+  SaliencyBreakdown,
+  AutoPublishOutcome,
+} from "../event-assembly/saliency.js";
 
 /**
  * The outcome an operator chooses for a candidate. Stored as a String column
@@ -105,6 +110,14 @@ export interface PendingCandidateSummary {
   evidenceCount: number;
   latestEvidenceAt: Date;
   updatedAt: Date;
+  // Story 7.6 — Epic 7 scoring surfaced in the review console so the operator
+  // sees WHY a candidate was held (and what the gate would do). event-assembly
+  // owns these fields (AD-2b); review-workflow only reads them here. gateOutcome
+  // is derived (null when unscored → treated as hold by the gate).
+  saliency: number | null;
+  relevanceLabel: RelevanceLabel | null;
+  saliencyBreakdown: SaliencyBreakdown | null;
+  gateOutcome: AutoPublishOutcome | null;
 }
 
 export interface GetCandidateDetailOptions {
@@ -123,6 +136,12 @@ export interface CandidateDetail {
   publicationStatus: string;
   evidence: CandidateEvidenceItem[];
   decisions: CandidateDecisionEntry[];
+  // Story 7.6 — same Epic 7 scoring fields as PendingCandidateSummary, shown in
+  // the detail header so the operator can judge a held/rejected candidate.
+  saliency: number | null;
+  relevanceLabel: RelevanceLabel | null;
+  saliencyBreakdown: SaliencyBreakdown | null;
+  gateOutcome: AutoPublishOutcome | null;
 }
 
 export interface CandidateEvidenceItem {
@@ -296,6 +315,40 @@ export interface Sm6MisleadingRate {
   numerator: number;
   denominator: number;
   windowDays: number;
+}
+
+// --- Story 7.6: SM-9 gate-distribution readout --------------------------------
+
+/**
+ * Options for getSm9GateDistribution. `{ prisma, traceId }`. The readout applies
+ * the Epic 7 auto-publish gate (decideAutoPublishOutcome) to every scored
+ * hot_event and tallies the approve/hold/reject split, alongside the raw
+ * relevance split and the actual publication_status split — so the operator can
+ * see what the gate recommends vs what is actually published (the gap = manual
+ * overrides) and watch the rejection rate over time (operationalizes SM-C2).
+ */
+export interface GetSm9GateDistributionOptions {
+  prisma: import("../../../generated/client.js").PrismaClient;
+  traceId: string;
+}
+
+/**
+ * The SM-9 gate-distribution readout.
+ *   - gate: approve/hold/reject counts over all scored hot_events (the gate's
+ *     recommendation). Unscored rows (null saliency/label) count as hold.
+ *   - relevance: pass/suspicious/fail/unscored counts.
+ *   - status: actual publication_status counts (candidate/published/rejected/
+ *     taken_down) — the real current state, for comparing against `gate`.
+ *   - thresholds: the current LOW/HIGH (echoed for display; tuning is a code
+ *     constant change, live-tuning is deferred).
+ *   - total: scored + unscored hot_events.
+ */
+export interface Sm9GateDistribution {
+  gate: { approve: number; hold: number; reject: number };
+  relevance: { pass: number; suspicious: number; fail: number; unscored: number };
+  status: { candidate: number; published: number; rejected: number; taken_down: number };
+  thresholds: { low: number; high: number };
+  total: number;
 }
 
 // --- Story 1.9: published-event revision view (operator side) ----------------

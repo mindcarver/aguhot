@@ -127,6 +127,7 @@ export {
   getPublishedEventForRevision,
   suppressAiContent,
   getSm6MisleadingRate,
+  getSm9GateDistribution,
 } from "./modules/review-workflow/review-service.js";
 export type {
   DecideReviewOptions,
@@ -143,6 +144,8 @@ export type {
   SuppressAiContentResult,
   GetSm6MisleadingRateOptions,
   Sm6MisleadingRate,
+  GetSm9GateDistributionOptions,
+  Sm9GateDistribution,
 } from "./modules/review-workflow/types.js";
 export { resolveTransition, LEGAL_TRANSITIONS } from "./modules/review-workflow/transitions.js";
 export {
