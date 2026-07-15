@@ -30,7 +30,7 @@ companions:
 AGUHOT 采用 **modular monolith with event-driven ingest pipeline**。
 
 - `apps/web` 承载公开 Web 与运营后台界面。
-- `apps/worker` 承载采集、归一化、聚类、解释、日报生成和发布链路。
+- `apps/worker` 承载采集、归一化、聚类、解释、日报生成和发布链路；`apps/market-sidecar`（Python）仅承载行情历史日线采集（三大宽基 + 申万一级行业），通过 `MarketDataAdapter` 写入 Postgres，不参与领域规则。
 - `packages/core` 承载领域模块、应用命令、查询契约、外部适配器接口。
 - `packages/ui` 承载 DESIGN/EXPERIENCE 落地后的共享组件与 design tokens。
 
@@ -94,7 +94,7 @@ graph TD
 
 - **Binds:** 热点事件流, 热点事件详情与证据时间线, 日报与主题页
 - **Prevents:** 源站抓取逻辑和 LLM SDK 侵入领域模块，后期切源或切模型时全链路扩散修改
-- **Rule:** 外部财经源、公告源、行情源、LLM 供应商都必须通过 `SourceAdapter`、`MarketDataAdapter`、`LLMAdapter` 端口进入系统。领域模块与发布模块不能直接 import 第三方 SDK。切换供应商只能发生在 adapter 层和 worker 装配层。
+- **Rule:** 外部财经源、公告源、行情源、LLM 供应商都必须通过 `SourceAdapter`、`MarketDataAdapter`、`LLMAdapter` 端口进入系统。领域模块与发布模块不能直接 import 第三方 SDK。切换供应商只能发生在 adapter 层和 worker 装配层。行情历史序列（指数 / 行业日线）由 `apps/market-sidecar`（Python + AkShare）定时采集写入 `index_daily_bars` / `sector_daily_bars` 表；Node 侧 `market-reaction` 模块与新增 `crash-review` 模块只读这些表，不直接调 AkShare。Python sidecar 是受 AD-1 约束的第三个运行时：它不拥有任何领域聚合根，只拥有"把外部行情源翻译成行"的写权限，边界等同 RSSHub 自建采集器（2026-07-15b sprint-change-proposal）。
 
 ### AD-8 — 用户身份不得成为公共内容路径依赖
 
@@ -126,6 +126,8 @@ graph TD
 | Redis | 8 |
 | BullMQ | 5.79.3 |
 | Playwright | 1.60 |
+| Python (data sidecar) | 3.12 LTS |
+| AkShare | 1.x |
 
 ## Structural Seed
 
@@ -223,6 +225,7 @@ packages/
 | 运营复核 | `apps/web/(operator)` + `review-workflow` | AD-1, AD-5, AD-6 |
 | 时间流 | `apps/web/(public)` + `event-assembly` + `publish-orchestrator` | AD-2, AD-3, AD-3b, AD-4 |
 | AI 分析层（AI 解读/深读/研判） | `apps/worker` explain jobs + `LLMAdapter` + `publish-orchestrator` | AD-4, AD-5, AD-7, NFR-3 |
+| 大跌日历与历史回顾 | `apps/market-sidecar` + 新 `crash-review` 模块 + `apps/web/(public)/crash-calendar` | AD-2, AD-3, AD-4, AD-7 |
 
 ## Deferred
 
