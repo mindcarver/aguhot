@@ -23,29 +23,32 @@
 @import "tailwindcss";
 
 @theme {
-  /* Colors — paper / surfaces (DESIGN: canvas + surface-*). */
-  --color-canvas: #F5F1E8;
-  --color-surface-base: #FBF8F2;
+  /* Colors — surfaces (cool blue-white recalibration, 2026-07-15: was warm paper
+     #F5F1E8 / #FBF8F2 / #EEE6D8). Brand navy already exists, so the 蓝白格调 shift
+     is a neutral warmth→coolness swap only; market red/green is decoupled + unchanged. */
+  --color-canvas: #F4F7FB;
+  --color-surface-base: #F7F9FC;
   --color-surface-raised: #FFFFFF;
-  --color-surface-muted: #EEE6D8;
+  --color-surface-muted: #ECEFF5;
 
-  /* Colors — ink hierarchy (DESIGN: ink-*). */
-  --color-ink-primary: #151A22;
-  --color-ink-secondary: #5D6470;
-  --color-ink-tertiary: #8A909A;
+  /* Colors — ink hierarchy (cool navy-tinted, was neutral #151A22 / #5D6470 / #8A909A). */
+  --color-ink-primary: #0B1A2E;
+  --color-ink-secondary: #46566B;
+  --color-ink-tertiary: #8B99AC;
 
-  /* Colors — structure (DESIGN: border-hairline). */
-  --color-border-hairline: #DDD4C4;
+  /* Colors — structure (cool slate hairline, was warm beige #DDD4C4). */
+  --color-border-hairline: #E2E7EF;
 
   /* Colors — brand (DESIGN: brand-primary). Brand is the product / nav / CTA
      color and is NEVER a market color (DESIGN decoupling constraint). */
   --color-brand: #213B63;
   --color-brand-foreground: #FFFFFF;
 
-  /* Colors — accent-warm (DESIGN: accent-warm). Reserved for the AI label and
-     light "explanation-layer" emphasis only. */
-  --color-accent-warm: #B86633;
-  --color-accent-warm-foreground: #FFF8F1;
+  /* Colors — accent (DESIGN: accent-warm token name kept for reference stability;
+     value flipped warm→blue 2026-07-15 as part of the 蓝白格调 recalibration).
+     Reserved for the AI label and light "explanation-layer" emphasis only. */
+  --color-accent-warm: #2B5BD0;
+  --color-accent-warm-foreground: #FFFFFF;
 
   /* Colors — market semantics (DESIGN: market-up/down/flat + their -soft
      backgrounds). Red/green serve ONLY market semantics (涨/跌/平); never
@@ -54,8 +57,8 @@
   --color-market-up-soft: #F8E0DD;
   --color-market-down: #0E8B5B;
   --color-market-down-soft: #DDF2E9;
-  --color-market-flat: #8E7759;
-  --color-market-flat-soft: #EFE7DA;
+  --color-market-flat: #6B7A8F;
+  --color-market-flat-soft: #ECEFF5;
 
   /* Colors — functional (DESIGN: focus-ring + overlay). */
   --color-focus-ring: #335A91;
