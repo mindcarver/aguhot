@@ -194,6 +194,8 @@ export {
   listPublishedDailyDigestCoverageDates,
   refreshPublishedTrendBriefing,
   getPublishedTrendBriefing,
+  refreshPublishedCrashDays,
+  listPublishedCrashDays,
 } from "./modules/publish-orchestrator/publish-service.js";
 export {
   refreshPublishedTimelineForEvent,
@@ -242,6 +244,10 @@ export type {
   PublishedTrendBriefing,
   RefreshPublishedTrendBriefingOptions,
   GetPublishedTrendBriefingOptions,
+  LeadingSector,
+  PublishedCrashDay,
+  RefreshPublishedCrashDaysOptions,
+  ListPublishedCrashDaysOptions,
 } from "./modules/publish-orchestrator/types.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +

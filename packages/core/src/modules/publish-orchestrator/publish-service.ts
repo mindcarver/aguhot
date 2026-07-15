@@ -77,12 +77,15 @@ import type {
   GetPublishedDailyDigestOptions,
   GetPublishedHotEventDetailOptions,
   GetPublishedTrendBriefingOptions,
+  LeadingSector,
   ListPublishedAssociationsOptions,
+  ListPublishedCrashDaysOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
   ListPublishedHotEventExplanationsOptions,
   ListPublishedHotEventsOptions,
   ListPublishedThemeMembershipsOptions,
   PublishedAssociationRow,
+  PublishedCrashDay,
   PublishedDailyDigest,
   PublishedEvidenceRow,
   PublishedHotEventDetail,
@@ -91,6 +94,7 @@ import type {
   PublishedHotEventInvestmentTargets,
   PublishedThemeMembershipRow,
   PublishedTrendBriefing,
+  RefreshPublishedCrashDaysOptions,
   RefreshPublishedDailyDigestOptions,
   RefreshPublishedTrendBriefingOptions,
   ThemeRef,
@@ -1424,4 +1428,193 @@ export async function getPublishedTrendBriefing(
     source: row.source,
     generatedAt: row.generatedAt,
   };
+}
+
+// --- Story 8.3: published_crash_days projection + reads ------------------------
+
+/**
+ * Top-N leading-down sectors materialized per crash day. Module-local config (NOT global env),
+ * mirroring TIMELINE_FOLD_THRESHOLD's "owned by the module that uses it" pattern. 5 covers the
+ * meaningful 申万一级 losers without crowding the page; bump if editorial wants more.
+ */
+const LEADING_SECTOR_LIMIT = 5;
+
+/** Parse a `YYYY-MM-DD` key into a UTC-midnight Date (matches @db.Date; same as crash-review). */
+function crashDayToDate(day: string): Date {
+  return new Date(`${day}T00:00:00.000Z`);
+}
+
+/**
+ * Refresh the published_crash_days read model (Story 8.3). A SIBLING to
+ * refreshPublishedDailyDigest AND refreshPublishedTrendBriefing, NOT a branch in the
+ * hotEventId-keyed refreshPublishedReadModel: a crash day is a tradeDate-keyed statistics
+ * projection (one row per crash trading day), so its key differs from the hotEventId-keyed
+ * published_hot_event_* projections. Same module (publish-orchestrator, AD-3 single write-owner).
+ *
+ * For each crash_days row in scope (optionally `--from/--to` bounded, else all), this READS
+ * crash_days + sector_daily_bars (both owned by other modules — AD-7 read-only here; 8.3 is the
+ * first Node consumer of sector_daily_bars) and upserts one published_crash_days row:
+ * `indices` copied verbatim from crash_days, `leadingSectors` = Top-N down 申万一级 sectors that
+ * trade day (materialized, never stale for historical bars). Per-date try/catch isolation mirrors
+ * crash-review's upsertCrashDays (AC4): a single date's failure skips it, not the batch.
+ *
+ * Self-heal: prunes published_crash_days rows whose crash_days source no longer exists within the
+ * scanned scope (mirrors published_* deleteMany-on-takedown semantics). Idempotent; re-running a
+ * range refreshes existing rows (leadingSectors/forwardReturns stay current) without duplicates.
+ * Scope note: a bounded (`--from/--to`) call only touches rows in that range — it prunes a
+ * published row whose crash_days source vanished in-range, but never deletes rows outside the
+ * range. Only an unbounded call (no from/to) is a full reconcile.
+ *
+ * Compliance gate (§12 Q10): prod does NOT call this until the financial-info review clears — row
+ * absence ⇒ /crash-calendar renders the honest empty state. The dev trigger is run-crash-review.ts
+ * calling this right after upsertCrashDays (runner is wiring; the projection write is still owned
+ * by publish-orchestrator — crash-review's module boundary is unchanged).
+ *
+ * This query only reads crash_days + sector_daily_bars and writes published_crash_days. It never
+ * reads hot_events / evidence_* / index_daily_bars directly (AD-3: published_crash_days is the sole
+ * public surface for /crash-calendar).
+ */
+export async function refreshPublishedCrashDays(
+  options: RefreshPublishedCrashDaysOptions,
+): Promise<{ projected: number; pruned: number; traceId: string }> {
+  const { prisma, traceId } = options;
+
+  // Date-bound the crash_days scan (unbounded = all). trade_date is @db.Date (UTC midnight).
+  const where: { tradeDate?: { gte?: Date; lte?: Date } } = {};
+  if (options.fromDay !== undefined) {
+    where.tradeDate = { ...where.tradeDate, gte: crashDayToDate(options.fromDay) };
+  }
+  if (options.toDay !== undefined) {
+    where.tradeDate = { ...where.tradeDate, lte: crashDayToDate(options.toDay) };
+  }
+
+  const crashRows = await prisma.crashDay.findMany({
+    where,
+    select: {
+      tradeDate: true,
+      threshold: true,
+      crashCount: true,
+      indices: true,
+      source: true,
+    },
+    orderBy: { tradeDate: "asc" },
+  });
+
+  let projected = 0;
+  const sourceTradeDates = new Set(crashRows.map((r) => r.tradeDate.getTime()));
+
+  for (const row of crashRows) {
+    try {
+      // Top-N down 申万一级 sectors for this trade day (8.1 owns sector_daily_bars; read-only).
+      // pctChange is Prisma.Decimal; order ascending = most negative (biggest loser) first.
+      // Only negative-change sectors qualify as "leading-down"; an all-up day yields [] (NFR-5).
+      const sectors = await prisma.sectorDailyBar.findMany({
+        where: { tradeDate: row.tradeDate, pctChange: { lt: 0 } },
+        orderBy: { pctChange: "asc" },
+        take: LEADING_SECTOR_LIMIT,
+        select: { sectorCode: true, sectorName: true, pctChange: true },
+      });
+      const leadingSectors: LeadingSector[] = sectors.map((s) => ({
+        sectorCode: s.sectorCode,
+        sectorName: s.sectorName,
+        pctChange: s.pctChange.toNumber(),
+      }));
+
+      // indices Json copied verbatim from crash_days (typed IndexCrashDetail[]; the projection does
+      // not interpret it — cast through InputJsonValue across the read→write boundary, same as the
+      // digest items projection).
+      const indicesJson = row.indices as unknown as Prisma.InputJsonValue;
+      const leadingJson = leadingSectors as unknown as Prisma.InputJsonValue;
+
+      await prisma.publishedCrashDay.upsert({
+        where: { tradeDate: row.tradeDate },
+        create: {
+          tradeDate: row.tradeDate,
+          threshold: row.threshold,
+          crashCount: row.crashCount,
+          indices: indicesJson,
+          leadingSectors: leadingJson,
+          source: row.source,
+          traceId,
+        },
+        update: {
+          threshold: row.threshold,
+          crashCount: row.crashCount,
+          indices: indicesJson,
+          leadingSectors: leadingJson,
+          source: row.source,
+          traceId,
+        },
+      });
+      projected++;
+    } catch (err) {
+      // Per-date isolation: a single projection failure skips this day, not the batch.
+      console.warn(
+        `[publish-orchestrator] skip published_crash_days for ${row.tradeDate.toISOString()} (project failed): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // Self-heal: prune published rows whose crash_days source no longer exists in the scanned scope.
+  let pruned = 0;
+  const existing = await prisma.publishedCrashDay.findMany({
+    where,
+    select: { tradeDate: true },
+  });
+  for (const e of existing) {
+    if (!sourceTradeDates.has(e.tradeDate.getTime())) {
+      try {
+        await prisma.publishedCrashDay.delete({ where: { tradeDate: e.tradeDate } });
+        pruned++;
+      } catch (err) {
+        console.warn(
+          `[publish-orchestrator] skip prune published_crash_days for ${e.tradeDate.toISOString()}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  return { projected, pruned, traceId };
+}
+
+/**
+ * List published crash days for the /crash-calendar page — Story 8.3.
+ *
+ * This is the public read query the /crash-calendar page consumes (AD-3: public reads only
+ * published_* read models). Returns every published_crash_days row ordered by tradeDate DESC
+ * (latest first; SM-C4: NOT ordered by rebound magnitude — never frame as "best bounce"), so the
+ * page can render the calendar grids and resolve the default detail (first row = latest crash day).
+ * forwardReturns T+N null (too few future bars) is preserved for the page to render as "—".
+ *
+ * This query only SELECTs published_crash_days. It NEVER reads crash_days / index_daily_bars /
+ * sector_daily_bars / hot_events (AD-3). Row existence = a published crash day (no status column).
+ */
+export async function listPublishedCrashDays(
+  options: ListPublishedCrashDaysOptions,
+): Promise<PublishedCrashDay[]> {
+  const { prisma, limit = 200 } = options;
+
+  const rows = await prisma.publishedCrashDay.findMany({
+    orderBy: { tradeDate: "desc" },
+    take: limit,
+    select: {
+      tradeDate: true,
+      threshold: true,
+      crashCount: true,
+      indices: true,
+      leadingSectors: true,
+      source: true,
+      publishedAt: true,
+    },
+  });
+
+  return rows.map((r) => ({
+    tradeDate: r.tradeDate,
+    threshold: r.threshold.toNumber(),
+    crashCount: r.crashCount,
+    indices: r.indices as unknown as PublishedCrashDay["indices"],
+    leadingSectors: r.leadingSectors as unknown as LeadingSector[],
+    source: r.source,
+    publishedAt: r.publishedAt,
+  }));
 }

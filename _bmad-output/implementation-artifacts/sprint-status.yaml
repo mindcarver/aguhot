@@ -103,7 +103,7 @@ development_status:
   epic-8: backlog
   8-1-market-history-daily-bars-sidecar: done
   8-2-crash-day-detection-and-forward-returns: done
-  8-3-crash-calendar-public-page: backlog
+  8-3-crash-calendar-public-page: done
   8-4-sidenav-entry-and-route: backlog
   8-5-crash-day-hot-event-linkage: backlog   # deferred v1.2
 

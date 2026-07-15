@@ -24,6 +24,7 @@
 
 import type { PrismaClient } from "../../../generated/client.js";
 import type { TargetCandidate } from "../investment-targets/types.js";
+import type { IndexCrashDetail } from "../crash-review/types.js";
 
 /**
  * Options for listPublishedHotEvents. `{ prisma, traceId }` mirrors the
@@ -565,6 +566,72 @@ export interface GetPublishedTrendBriefingOptions {
   prisma: PrismaClient;
   traceId: string;
   coverageDate: Date;
+}
+
+// --- Story 8.3: published_crash_days (大跌日历) read types ----------------------
+
+/**
+ * One leading-down sector on a crash day — the Top-N 申万一级 sectors by跌幅 (most negative
+ * pctChange first), materialized into published_crash_days at projection time from
+ * sector_daily_bars (8.1 owns those rows; 8.3 is the first Node consumer). pctChange is the
+ * signed daily change % (negative for down sectors). Mirrors the per-index pctChange in
+ * IndexCrashDetail: a display-only statistic, never advisory.
+ */
+export interface LeadingSector {
+  sectorCode: string;
+  sectorName: string;
+  pctChange: number;
+}
+
+/**
+ * The projected public crash-day row for one tradeDate (Story 8.3). Mirrors
+ * published_crash_days. `indices` is copied verbatim from crash_days (IndexCrashDetail[]: the
+ * three broad indices' pctChange/close/crashed/forwardReturns for that day); `leadingSectors`
+ * is the Top-N down 申万一级 sectors materialized from sector_daily_bars. The /crash-calendar
+ * page renders the calendar grid (highlighting crash days), the leading-sector list
+ * (ReactionChip tone="down"), and the T+1/T+5/T+20 forward-return table from one row.
+ *
+ * Row existence = a currently-published crash day (no status column). Absent when
+ * refreshPublishedCrashDays has not projected a crash_days row (V1/§12-Q10 gate: prod does not
+ * run the projection until the financial-info compliance review clears) — the page renders the
+ * honest empty state ("暂无已记录的大跌日。", AC4). Absent does NOT block any other surface.
+ *
+ * Mirrors PublishedDailyDigest (tradeDate-keyed, no FK to crash_days / sector_daily_bars).
+ * forwardReturns T+N null (too few future bars) renders as "—" on the page (NFR-5, not faked).
+ */
+export interface PublishedCrashDay {
+  tradeDate: Date;
+  threshold: number;
+  crashCount: number;
+  indices: IndexCrashDetail[];
+  leadingSectors: LeadingSector[];
+  source: string;
+  publishedAt: Date;
+}
+
+/**
+ * Options for refreshPublishedCrashDays. `{ prisma, traceId, fromDay?, toDay? }` —
+ * tradeDate-keyed (NOT hotEventId-keyed like refreshPublishedReadModel), a SIBLING to
+ * refreshPublishedDailyDigest. Optionally bound by `--from/--to` (YYYY-MM-DD) to reproject a
+ * range after a crash-review recompute; unbounded scans all crash_days. Also self-heals: prunes
+ * published rows whose crash_days source no longer exists within the scanned scope.
+ */
+export interface RefreshPublishedCrashDaysOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
+/**
+ * Options for listPublishedCrashDays. `{ prisma, traceId, limit? }` — returns published crash
+ * days ordered by tradeDate DESC (latest first; SM-C4: NOT ordered by rebound magnitude). The
+ * /crash-calendar page uses the first row as the default detail when no ?d= query param is set.
+ */
+export interface ListPublishedCrashDaysOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  limit?: number;
 }
 
 // --- Story 4.1: published_timeline read model (AD-3b) ------------------------
