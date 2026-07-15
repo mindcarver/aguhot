@@ -494,3 +494,34 @@ export type {
   ListFollowedTargetIdsOptions,
   IsFollowingOptions,
 } from "./modules/user-profile/index.js";
+
+// crash-review module (Story 8.2 — owns crash_days, AD-2 single-writer; READS
+// index_daily_bars from 8.1; detects crash days at the operator-tunable CRASH_THRESHOLD
+// module constant — NOT global env, mirroring TIMELINE_FOLD_THRESHOLD — and computes
+// historic actual T+1/T+5/T+20 forward returns. Pure detection/forward-return core is
+// covered by verify:crash-logic; the DB-bound upsertCrashDays is driven by the
+// apps/worker run-crash-review dev runner. published_crash_days + public page = 8.3.)
+export {
+  detectCrashDays,
+  computeForwardReturns,
+  tradeDayKey,
+  compareTradeDayKey,
+  upsertCrashDays,
+  getCrashDay,
+  CRASH_THRESHOLD,
+  FORWARD_RETURN_HORIZONS,
+  CRASH_INDEX_CODES,
+  CRASH_SOURCE,
+} from "./modules/crash-review/index.js";
+export type {
+  ForwardReturnHorizon,
+  CrashIndexCode,
+  IndexBar,
+  DecimalLike,
+  ForwardReturns,
+  IndexCrashDetail,
+  DetectedCrashDay,
+  CrashDayRecord,
+  UpsertCrashDaysOptions,
+  UpsertCrashDaysResult,
+} from "./modules/crash-review/index.js";
