@@ -65,6 +65,11 @@ import type { Prisma, PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
 import type { PublishAction } from "../review-workflow/types.js";
 import type { TargetCandidate } from "../investment-targets/types.js";
+import {
+  marketReactionBonus,
+  associationBonusPoints,
+  combineSaliency,
+} from "../event-assembly/saliency.js";
 import { EvidenceLinkStatus } from "./types.js";
 import type {
   AssociationItem,
@@ -210,6 +215,15 @@ export async function refreshPublishedReadModel(
   }
   const latestEvidenceAt = latest ?? new Date();
 
+  // Story 7.4 — published saliency = cluster-time base + publish-time bonuses
+  // (market-reaction magnitude + association density). Reads the latest snapshot
+  // + association set read-only (market-reaction / theme-linking own them,
+  // AD-2); publish-orchestrator owns the projected published_hot_events.saliency.
+  // In V1 (no adapter → no snapshots/sets) the bonuses are 0, so this equals the
+  // cluster base. Re-runs on the refresh triggered by the market-reaction worker
+  // pick up the snapshot once it lands.
+  const publishedSaliency = await computePublishedSaliency(prisma, hotEventId, event.saliency);
+
   await prisma.publishedHotEvent.upsert({
     where: { hotEventId },
     // On a first publish, set publishedAt to now. On a re-publish (refresh),
@@ -221,7 +235,7 @@ export async function refreshPublishedReadModel(
       tags: effectiveTags,
       evidenceCount,
       latestEvidenceAt,
-      saliency: event.saliency,
+      saliency: publishedSaliency,
       publishedAt: new Date(),
       traceId,
     },
@@ -230,7 +244,7 @@ export async function refreshPublishedReadModel(
       tags: effectiveTags,
       evidenceCount,
       latestEvidenceAt,
-      saliency: event.saliency,
+      saliency: publishedSaliency,
       traceId,
       // publishedAt deliberately omitted on update: preserve first-publish time.
     },
@@ -409,6 +423,52 @@ async function projectEvidenceTimeline(
  *
  * Mirrors projectExplanation: read latest → upsert or deleteMany.
  */
+
+/**
+ * Story 7.4 — compute the published saliency: cluster-time base (from
+ * HotEvent.saliency, owned by event-assembly) + publish-time bonuses for market
+ * reaction + association density. Reads the latest MarketReactionSnapshot +
+ * EventAssociationSet read-only (those modules own them, AD-2); the combined
+ * value is written into published_hot_events.saliency, which publish-orchestrator
+ * owns. Returns null when the cluster base is null (unscored event — the gate
+ * never publishes these, but refreshPublishedTimelineAll may re-project; keep the
+ * null so the column honestly reflects "unscored").
+ */
+async function computePublishedSaliency(
+  prisma: PrismaClient,
+  hotEventId: string,
+  clusterScore: number | null,
+): Promise<number | null> {
+  if (clusterScore === null) return null;
+
+  // Market reaction: latest snapshot's limit-up count + a non-flat price tone.
+  const snapshot = await prisma.marketReactionSnapshot.findFirst({
+    where: { hotEventId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { limitUpCount: true, priceVolumeTone: true },
+  });
+  const market =
+    snapshot === null
+      ? 0
+      : marketReactionBonus(snapshot.limitUpCount, snapshot.priceVolumeTone !== "flat");
+
+  // Association density: latest set's item count (concept/industry/stock tags).
+  const assocSet = await prisma.eventAssociationSet.findFirst({
+    where: { hotEventId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { items: true },
+  });
+  const itemCount =
+    assocSet === null
+      ? 0
+      : Array.isArray(assocSet.items)
+        ? assocSet.items.length
+        : 0;
+  const assoc = associationBonusPoints(itemCount);
+
+  return combineSaliency(clusterScore, market, assoc);
+}
+
 async function projectMarketReaction(
   prisma: PrismaClient,
   traceId: string,

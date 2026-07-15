@@ -27,16 +27,22 @@ export {
 } from "./clustering.js";
 export type { ClusterGroup } from "./clustering.js";
 export { reviseHotEvent, normalizeTags } from "./revise-service.js";
-// Story 7.1/7.2 — investment-relevance gate + cluster-time saliency score.
-// Pure logic; event-assembly is the sole writer of the HotEvent fields it
-// produces (AD-2b). market-reaction + association components are 0 at cluster
-// time and folded in at publish time by Story 7.4.
+// Story 7.1/7.2/7.4 — investment-relevance gate + saliency score (cluster-time
+// base + publish-time market/association bonuses). Pure logic; event-assembly is
+// the sole writer of the HotEvent fields it produces (AD-2b). publish-orchestrator
+// reads the cluster base + market/association data read-only and writes the
+// combined score into published_hot_events.saliency (its own read model).
 export {
   judgeRelevance,
   scoreSaliency,
   saliencyTier,
+  decideAutoPublishOutcome,
+  marketReactionBonus,
+  associationBonusPoints,
+  combineSaliency,
   RelevanceLabel,
   SALIENCY_WEIGHTS,
+  SALIENCY_BONUS_CAPS,
   SALIENCY_LOW_THRESHOLD,
   SALIENCY_HIGH_THRESHOLD,
   BREADTH_SATURATION_SOURCES,
