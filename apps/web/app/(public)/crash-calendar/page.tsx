@@ -6,12 +6,14 @@ import type { ReactionTone } from "@/components/chips";
 import {
   getPrisma,
   listPublishedCrashDays,
+  listPublishedHotEvents,
   newTraceId,
 } from "@aguhot/core";
 import type {
   IndexCrashDetail,
   LeadingSector,
   PublishedCrashDay,
+  PublishedHotEventSummary,
 } from "@aguhot/core";
 
 export const metadata: Metadata = {
@@ -22,13 +24,15 @@ export const metadata: Metadata = {
 };
 
 /**
- * Crash-calendar public page — Story 8.3 (Epic 8 大跌日历与历史回顾).
+ * Crash-calendar public page — Story 8.3 + 8.5 (Epic 8 大跌日历与历史回顾).
  *
- * Reads ONLY the published_crash_days read model (listPublishedCrashDays, AD-3 — never
- * crash_days / index_daily_bars / sector_daily_bars / hot_events). Renders three segments:
+ * Reads ONLY published_* read models (AD-3 — never crash_days / index_daily_bars /
+ * sector_daily_bars / hot_events): listPublishedCrashDays (8.3) + listPublishedHotEvents
+ * (8.5 当日关联, saliency DESC). Renders four segments:
  *   1. 月度日历网格 — 大跌日高亮(`bg-market-down-soft`),可点选 `?d=` 切换详情;
  *   2. 领跌板块榜   — 当日 Top-N 申万一级跌幅板块,复用 `ReactionChip tone="down"`;
  *   3. 前瞻收益表   — 三大宽基 × T+1/T+5/T+20 历史实际收益(`font-mono`,缺数据「—」NFR-5)。
+ *   4. 当日热点事件 — 当日已发布 HotEvent(Story 8.5),saliency 顺位,链 `/events/[id]`(NFR-5 空状态)。
  *
  * 默认详情 = 最近一个大跌日(tradeDate desc 首行);`?d=YYYY-MM-DD` 命中则切到该日,非法/不
  * 命中回落最近(不报错,同 /daily 的 ?date= 范式)。空状态诚实降级(AC4),从不渲染假数据。
@@ -54,6 +58,8 @@ const INDEX_LABEL: Record<string, string> = {
   sz399006: "创业板指",
 };
 const MONTH_GRID_CAP = 12;
+// Story 8.5 — 当日已发布 HotEvent 关联列表的展示上限(防御性;V1 published 体量极小)。
+const LINKED_EVENTS_CAP = 8;
 
 /** UTC-midnight Date (@db.Date) → `YYYY-MM-DD`, using UTC getters to avoid TZ drift. */
 function formatDay(d: Date): string {
@@ -90,18 +96,27 @@ interface MonthGroup {
 export default async function CrashCalendarPage({ searchParams }: PageProps) {
   const prisma = getPrisma();
   const params = await searchParams;
-  const crashDays = await listPublishedCrashDays({ prisma, traceId: newTraceId() });
+  const traceId = newTraceId();
+  // 两条独立的 published_* 读(AD-3,公开页只读 published_*)——并发取,共用一个 traceId。
+  const [crashDays, hotEvents] = await Promise.all([
+    listPublishedCrashDays({ prisma, traceId }),
+    listPublishedHotEvents({ prisma, traceId }),
+  ]);
 
   // Resolve the focus day: a valid & extant ?d= → that day; otherwise the latest crash day.
   // Invalid/malformed ?d= is ignored (falls back to latest) — same honest-fallback as /daily.
-  const requested = /^\d{4}-\d{2}-\d{2}$/.test(params.d ?? "")
-    ? (params.d as string)
-    : undefined;
+  const requested = /^\d{4}-\d{2}-\d{2}$/.test(params.d ?? "") ? (params.d as string) : undefined;
   const focus =
     (requested !== undefined
       ? crashDays.find((c) => formatDay(c.tradeDate) === requested)
       : undefined) ?? crashDays[0];
   const focusKey = focus !== undefined ? formatDay(focus.tradeDate) : undefined;
+
+  // Story 8.5 — 当日已发布 HotEvent 关联:复用 listPublishedHotEvents 的 saliency DESC 返回
+  // 序(filter 保序),在 web 层按 UTC 发布日 == 大跌交易日过滤。锁定设计(ListPublishedHotEvents
+  // Options 注释):date-window 是 UI 关切,不塞进 core 查询。publishedAt = 首次发布日(Interpretation A)。
+  const focusLinked =
+    focusKey !== undefined ? hotEvents.filter((e) => formatDay(e.publishedAt) === focusKey) : [];
 
   // Group crash days by month (preserve first-seen = latest month order; cap for sanity).
   const months: MonthGroup[] = [];
@@ -149,8 +164,8 @@ export default async function CrashCalendarPage({ searchParams }: PageProps) {
             说明
           </span>
           <p className="text-sm leading-relaxed text-ink-secondary">
-            历史统计回顾，非预测、非投资建议。大跌日 = 三大宽基任一当日跌幅 ≤ 阈值；T+1 / T+5 /
-            T+20 为大跌后该指数历史实际收益，缺失记为「—」。数据来源：AkShare 公开行情。
+            历史统计回顾，非预测、非投资建议。大跌日 = 三大宽基任一当日跌幅 ≤ 阈值；T+1 / T+5 / T+20
+            为大跌后该指数历史实际收益，缺失记为「—」。数据来源：AkShare 公开行情。
           </p>
         </div>
       </header>
@@ -159,9 +174,7 @@ export default async function CrashCalendarPage({ searchParams }: PageProps) {
         // AC4 honest empty state — never fabricated, never blank.
         <section className="mt-12 space-y-2">
           <p className="text-base text-ink-tertiary">暂无已记录的大跌日。</p>
-          <p className="font-mono text-xs text-ink-tertiary">
-            行情历史回顾上线后将在此展示。
-          </p>
+          <p className="font-mono text-xs text-ink-tertiary">行情历史回顾上线后将在此展示。</p>
         </section>
       ) : (
         <>
@@ -183,7 +196,11 @@ export default async function CrashCalendarPage({ searchParams }: PageProps) {
 
           {/* Segments 2 + 3 — 所选大跌日详情(领跌板块 + 前瞻收益) */}
           {focus !== undefined ? (
-            <CrashDayDetail day={focus} />
+            <CrashDayDetail
+              day={focus}
+              linkedEvents={focusLinked.slice(0, LINKED_EVENTS_CAP)}
+              linkedTotal={focusLinked.length}
+            />
           ) : null}
         </>
       )}
@@ -192,13 +209,7 @@ export default async function CrashCalendarPage({ searchParams }: PageProps) {
 }
 
 /** One month grid: weekday header (Mon-start) + aligned day cells; crash days highlighted. */
-function CrashMonthGrid({
-  month,
-  focusKey,
-}: {
-  month: MonthGroup;
-  focusKey: string | undefined;
-}) {
+function CrashMonthGrid({ month, focusKey }: { month: MonthGroup; focusKey: string | undefined }) {
   const firstDow = (new Date(Date.UTC(month.year, month.month0, 1)).getUTCDay() + 6) % 7;
   const daysInMonth = new Date(Date.UTC(month.year, month.month0 + 1, 0)).getUTCDate();
   const crashByDay = new Map<number, PublishedCrashDay>();
@@ -226,9 +237,7 @@ function CrashMonthGrid({
             "bg-market-down-soft text-market-down",
             // Hover flips to solid market-down bg ⇒ text must flip to white to stay
             // readable (green-on-green would vanish). Focus keeps the soft bg + a ring.
-            isFocus
-              ? "ring-2 ring-market-down"
-              : "hover:bg-market-down hover:text-white",
+            isFocus ? "ring-2 ring-market-down" : "hover:bg-market-down hover:text-white",
           ].join(" ")}
         >
           {day}
@@ -236,10 +245,7 @@ function CrashMonthGrid({
       );
     } else {
       cells.push(
-        <div
-          key={day}
-          className="flex h-11 items-center justify-center text-xs text-ink-tertiary"
-        >
+        <div key={day} className="flex h-11 items-center justify-center text-xs text-ink-tertiary">
           {day}
         </div>,
       );
@@ -261,16 +267,23 @@ function CrashMonthGrid({
   );
 }
 
-/** Detail for one crash day: trigger indices + leading-down sectors + forward-return table. */
-function CrashDayDetail({ day }: { day: PublishedCrashDay }) {
+/** Detail for one crash day: trigger indices + leading-down sectors + forward-return table +
+ *  same-day published HotEvents (Story 8.5 linkage). */
+function CrashDayDetail({
+  day,
+  linkedEvents,
+  linkedTotal,
+}: {
+  day: PublishedCrashDay;
+  linkedEvents: PublishedHotEventSummary[];
+  linkedTotal: number;
+}) {
   const date = day.tradeDate;
   const weekday = `周${WEEKDAY_CN[date.getUTCDay()]}`;
   return (
     <section className="mt-12 space-y-8 border-t border-border-hairline pt-8">
       <div className="space-y-1">
-        <h2 className="font-mono text-xl font-semibold text-ink-primary">
-          {formatDay(date)}
-        </h2>
+        <h2 className="font-mono text-xl font-semibold text-ink-primary">{formatDay(date)}</h2>
         <p className="text-sm text-ink-secondary">
           {weekday} · 触发宽基 {day.crashCount} / 3（阈值 {day.threshold.toFixed(1)}%）
         </p>
@@ -296,7 +309,45 @@ function CrashDayDetail({ day }: { day: PublishedCrashDay }) {
 
       {/* Segment 3 — 前瞻收益表 */}
       <ForwardReturnsTable indices={day.indices} />
+
+      {/* Segment 4 — 当日热点事件(Story 8.5:关联当日已发布 HotEvent,saliency 顺位) */}
+      <LinkedHotEvents events={linkedEvents} total={linkedTotal} />
     </section>
+  );
+}
+
+/** Same-day published HotEvents (Story 8.5). Rank = listPublishedHotEvents' saliency DESC
+ *  return order (filter preserves it); honest empty state + honest truncation (NFR-2/NFR-5). */
+function LinkedHotEvents({ events, total }: { events: PublishedHotEventSummary[]; total: number }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold text-ink-secondary">当日热点事件</h3>
+      {events.length === 0 ? (
+        // NFR-5: no published HotEvent first-published this crash day → honest line, never faked.
+        <p className="text-sm text-ink-tertiary">该日暂无关联热点事件。</p>
+      ) : (
+        <>
+          <ol className="space-y-1.5">
+            {events.map((e, i) => (
+              <li key={e.hotEventId} className="flex items-baseline gap-2">
+                <span className="font-mono text-xs text-ink-tertiary">#{i + 1}</span>
+                <Link
+                  href={`/events/${e.hotEventId}`}
+                  className="text-sm text-ink-secondary underline-offset-4 hover:text-ink-primary hover:underline"
+                >
+                  {e.title}
+                </Link>
+              </li>
+            ))}
+          </ol>
+          {total > events.length ? (
+            <p className="font-mono text-xs text-ink-tertiary">
+              共 {total} 条，仅展示前 {events.length} 条。
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -324,9 +375,7 @@ function LeadingSectors({ sectors }: { sectors: LeadingSector[] }) {
 function ForwardReturnsTable({ indices }: { indices: IndexCrashDetail[] }) {
   return (
     <div className="space-y-2">
-      <h3 className="text-sm font-semibold text-ink-secondary">
-        前瞻收益（大跌后历史实际）
-      </h3>
+      <h3 className="text-sm font-semibold text-ink-secondary">前瞻收益（大跌后历史实际）</h3>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -360,11 +409,8 @@ function ForwardReturnsTable({ indices }: { indices: IndexCrashDetail[] }) {
 
 function ReturnCell({ v }: { v: number | null }) {
   if (v === null) {
-    return (
-      <td className="py-1.5 pr-4 font-mono text-ink-tertiary">—</td>
-    );
+    return <td className="py-1.5 pr-4 font-mono text-ink-tertiary">—</td>;
   }
-  const tone =
-    v > 0 ? "text-market-up" : v < 0 ? "text-market-down" : "text-ink-secondary";
+  const tone = v > 0 ? "text-market-up" : v < 0 ? "text-market-down" : "text-ink-secondary";
   return <td className={`py-1.5 pr-4 font-mono ${tone}`}>{signedPct(v)}</td>;
 }
