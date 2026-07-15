@@ -12,6 +12,7 @@
     "verify:saliency-logic": "tsx src/modules/event-assembly/saliency.selfcheck.ts",
     "verify:review-logic": "tsx src/modules/review-workflow/transitions.selfcheck.ts",
     "verify:follow-logic": "tsx src/modules/user-profile/follow-service.selfcheck.ts",
+    "verify:crash-logic": "tsx src/modules/crash-review/crash-logic.selfcheck.ts",
     "typecheck": "prisma generate && tsc --noEmit",
     "lint": "eslint src",
     "build": "prisma generate && tsc -p tsconfig.build.json"

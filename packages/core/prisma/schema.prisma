@@ -1168,3 +1168,41 @@ model SectorDailyBar {
   @@index([sectorCode])
   @@map("sector_daily_bars")
 }
+
+// Story 8.2 — one row per A-share crash trading day. Owned SOLELY by the `crash-review`
+// module (AD-2 single-writer), which READS `index_daily_bars` (8.1) and writes here.
+// A crash day = any of the three broad indices (sh000001 / sz399001 / sz399006) whose
+// pct_change ≤ CRASH_THRESHOLD (default -2.0%, operator-tunable module constant — NOT
+// global env, mirroring TIMELINE_FOLD_THRESHOLD). `threshold` is carried per-row so a
+// re-tuned recompute is auditable.
+//
+// `indices` is a read-only statistics projection with no cross-row query need, so per
+// the 2026-07-15b sprint-change-proposal #2 it is a single Json column: one entry per
+// index present that day ({ indexCode, pctChange, close, crashed, forwardReturns }). A
+// missing index_daily_bars row ⇒ that index is omitted (never faked to 0, NFR-5).
+// forwardReturns T+1/T+5/T+20 are HISTORIC ACTUAL `(close[t+N]/close[t]-1)*100` over the
+// index's own trading-day series; null when fewer than N future bars exist (NFR-5 — no
+// fabrication, no extrapolation). These describe observed facts only; advisory wording
+// ("非预测/非建议") is a display concern for 8.3, not stored here.
+//
+// Upsert semantics differ from market_reaction_snapshots (AD-5 append-only): crash_days
+// is a materialized projection keyed by tradeDate, so recompute UPDATES in place to
+// fill forward returns as new bars arrive (mirrors published_* upsert, NOT append-only).
+// NO FK to index_daily_bars — derived projection, not a sub-aggregate. The public read
+// model `published_crash_days` is owned by publish-orchestrator and built in 8.3; this
+// table is the source-of-truth the projection reads.
+model CrashDay {
+  id         String   @id // UUIDv7, assigned by crash-review (newTraceId)
+  tradeDate  DateTime @map("trade_date") @db.Date // the crash trading day (UTC midnight)
+  threshold  Decimal  @db.Decimal(8, 4) // CRASH_THRESHOLD used for this judgement (signed %)
+  crashCount Int      @map("crash_count") // how many of the 3 indices crashed (1..3)
+  indices    Json // array of IndexCrashDetail (per-index pctChange/close/crashed/forwardReturns)
+  source     String // market-data lineage ("akshare")
+  computedAt DateTime @default(now()) @map("computed_at") // UTC recompute instant (bumped on recompute)
+  traceId    String?  @map("trace_id")
+
+  // One row per crash trading day; recompute upserts in place.
+  @@unique([tradeDate])
+  @@index([tradeDate])
+  @@map("crash_days")
+}
