@@ -32,8 +32,9 @@
  */
 
 import { newTraceId } from "../../shared/ids.js";
-import type { PrismaClient } from "../../../generated/client.js";
+import type { PrismaClient, Prisma } from "../../../generated/client.js";
 import { clusterRecords, signatureOf, SIGNATURE_DELIMITER } from "./clustering.js";
+import { judgeRelevance, scoreSaliency, VELOCITY_WINDOW_MS } from "./saliency.js";
 import type { ClusterInput, ClusterOptions } from "./types.js";
 import { PublicationStatus, SIMILARITY_THRESHOLD, TIME_WINDOW_MS } from "./types.js";
 
@@ -83,6 +84,7 @@ export async function clusterEvents(
     },
     select: {
       id: true,
+      sourceId: true,
       title: true,
       summary: true,
       publishedAt: true,
@@ -164,12 +166,24 @@ export async function clusterEvents(
       // new), so future incremental merges compare against the full union.
       const allMembers = await prisma.evidenceRecord.findMany({
         where: { evidenceLinks: { some: { hotEventId: match.id } } },
-        select: { id: true, title: true, publishedAt: true, ingestedAt: true },
+        select: { id: true, sourceId: true, title: true, summary: true, publishedAt: true, ingestedAt: true },
       });
       const newSig = signatureOf(allMembers);
+      // Re-score the merged candidate: more members may have changed breadth /
+      // velocity / relevance (Story 7.1/7.2). event-assembly stays the sole
+      // writer of these fields (AD-2b).
+      const mergedScore = scoreGroup(allMembers);
       await prisma.hotEvent.update({
         where: { id: match.id },
-        data: { clusterSignature: newSig, traceId },
+        data: {
+          clusterSignature: newSig,
+          relevanceLabel: mergedScore.label,
+          saliency: mergedScore.score,
+          // Prisma's Json envelope does not infer the object's element type; the
+          // cast is the documented TS↔Json boundary (mirrors theme-service.ts).
+          saliencyBreakdown: mergedScore.breakdown as unknown as Prisma.InputJsonValue,
+          traceId,
+        },
       });
       // Keep the in-memory snapshot in sync for subsequent groups in this run:
       // signature + published-bounds both expand to cover the merged members.
@@ -181,12 +195,20 @@ export async function clusterEvents(
       // (publishedAt asc sort means the last member), fallback to summary
       // fragment, then the placeholder.
       const title = deriveTitle(members);
+      // Score the candidate at creation (Story 7.1/7.2): relevance gate +
+      // cluster-time saliency from the group's member evidence. event-assembly
+      // is the sole writer of these fields (AD-2b); the publish gate (Story
+      // 7.3) reads them to decide reject / hold / auto-publish.
+      const createdScore = scoreGroup(members);
       const candidate = await prisma.hotEvent.create({
         data: {
           id: newTraceId(),
           title,
           clusterSignature: groupSignature,
           publicationStatus: PublicationStatus.Candidate,
+          relevanceLabel: createdScore.label,
+          saliency: createdScore.score,
+          saliencyBreakdown: createdScore.breakdown as unknown as Prisma.InputJsonValue,
           traceId,
         },
       });
@@ -368,6 +390,52 @@ function deriveTitle(members: DeriveTitleMember[]): string {
     }
   }
   return FALLBACK_TITLE;
+}
+
+/**
+ * The member shape scoreGroup needs: the projection carried from the findMany
+ * selects (which now include sourceId + summary for the relevance text + breadth
+ * distinct-source count). Structural typing accepts the DB rows' extra fields
+ * (id, ingestedAt) silently.
+ */
+type ScoreMember = {
+  sourceId: string;
+  title: string | null;
+  summary: string | null;
+  publishedAt: Date | null;
+};
+
+/**
+ * Compute the relevance label + cluster-time saliency for a group of member
+ * evidence records (Story 7.1/7.2). Relevance runs over the concatenated
+ * title+summary text; breadth keys off distinct EvidenceSource feeds; velocity
+ * off the publishedAt span (only when ≥2 distinct sources AND ≥2 non-null
+ * timestamps — otherwise unmeasurable, so velocity contributes 0 by passing the
+ * full window as the span). Returns the label + score + Json breakdown to write
+ * onto the HotEvent row (event-assembly sole writer, AD-2b).
+ */
+function scoreGroup(members: ScoreMember[]): {
+  label: ReturnType<typeof judgeRelevance>["label"];
+  score: number;
+  breakdown: ReturnType<typeof scoreSaliency>["breakdown"];
+} {
+  const text = members.map((m) => `${m.title ?? ""} ${m.summary ?? ""}`).join(" ");
+  const { label } = judgeRelevance(text);
+  const distinctSourceCount = new Set(members.map((m) => m.sourceId)).size;
+  const nonNull = members
+    .map((m) => m.publishedAt)
+    .filter((d): d is Date => d !== null);
+  // Unmeasurable timing (<2 timestamps) → span = full window → velocity 0.
+  const spanMs =
+    nonNull.length >= 2
+      ? Math.max(...nonNull.map((d) => d.getTime())) - Math.min(...nonNull.map((d) => d.getTime()))
+      : VELOCITY_WINDOW_MS;
+  const { score, breakdown } = scoreSaliency({
+    evidenceCount: members.length,
+    distinctSourceCount,
+    spanMs,
+  });
+  return { label, score, breakdown };
 }
 
 // --- helpers -----------------------------------------------------------------

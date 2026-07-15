@@ -203,15 +203,20 @@ So that 我可以在后台处理事件级候选，而不是逐条手工拼接资
 
 **Acceptance Criteria:**
 
-**Given** 系统中已存在可追溯的证据记录  
-**When** 异步任务完成去重、初步聚类和候选事件生成  
-**Then** 系统会生成待复核的候选 `热点事件`  
+**Given** 系统中已存在可追溯的证据记录
+**When** 异步任务完成去重、初步聚类和候选事件生成
+**Then** 系统会生成待复核的候选 `热点事件`
 **And** 候选事件与关联证据保持可追溯关系
 
-**Given** 某个候选热点尚未经过发布决策  
-**When** 公共用户访问首页或详情  
-**Then** 该候选不会出现在公开页面  
+**Given** 某个候选热点尚未经过发布决策
+**When** 公共用户访问首页或详情
+**Then** 该候选不会出现在公开页面
 **And** 只会出现在运营复核路径中
+
+**Given** 候选 HotEvent 生成（2026-07-15 sprint-change-proposal 追加，对齐 Epic 7）  
+**When** event-assembly 聚类产出一个候选  
+**Then** 该候选必须附带投资相关性 `relevanceLabel`（pass/suspicious/fail）与 `saliency` 分  
+**And** `relevance=fail` 的候选不进入发布流程，落 `reject` 审计（AD-2b / NFR-8）
 
 ### Story 1.6: 运营复核队列与发布闸门
 
@@ -231,10 +236,15 @@ So that 只有经过复核的热点才会进入公开流。
 **Then** 系统会写入 `ReviewDecision` 和 `PublicationDecision` 记录  
 **And** 公开展示状态只由 `publication_status` 控制
 
-**Given** 某个候选未被发布  
-**When** 公共用户访问首页或详情  
-**Then** 该内容不会出现在公开页  
+**Given** 某个候选未被发布
+**When** 公共用户访问首页或详情
+**Then** 该内容不会出现在公开页
 **And** 后台仍能看到完整审计轨迹
+
+**Given** 运营人员进入复核台（2026-07-15 sprint-change-proposal 追加，对齐 Epic 7）  
+**When** 查看待复核列表  
+**Then** 列表默认按 `saliency DESC` 排序，每条显示分数与 `saliencyBreakdown`  
+**And** 中分（`LOW ≤ saliency < HIGH`）候选默认进复核队列，运营可手动覆盖阈值处置（阈值模块配置常量，可调）
 
 ### Story 1.7: 公开热点事件流
 
@@ -793,3 +803,106 @@ So that 改版后不出现视觉割裂与回归。
 **And** `event-card`（搜索等非流表面）同步无边框化（UX-DR4 扩展），全站视觉统一
 **And** `globals.css` token 零改动（ui-ux-pro-max 印证），architecture 零触碰
 **And** 护栏守住：AI 解读权重 ≤ 事实、红绿仅市场语义、无 carousel / 满屏红绿
+
+## Epic 7: 投资相关性打分与分级发布闸门
+
+让系统在聚类后、发布前对每个候选 HotEvent 做**投资相关性判定 + 显著度打分（saliency）**，并按分数分级处置（高分自动发 / 中分进运营复核 / 低分或无关拦截），使公开时间流只承载有投资价值或会影响投资的高质量动态，而非"来者不拒"。打分全部基于现有数据（多源覆盖 + 升温速度 + 市场反应强度 + 板块关联密度），社交热度信号 V1 占位、deferred。
+
+**触发：** sprint-change-proposal-2026-07-15（scope: Moderate，路由 Architect 点评 AD-2b + Developer 实施 + PO 排期/阈值）。
+**FRs covered:** FR-1(质量准入), FR-3(排序理由读 saliencyBreakdown), FR-15(运营复核按分), 新增 NFR-8（内容质量分级）, 操作化 SM-C2, 新增 SM-9。
+
+### Story 7.1: 投资相关性判定（准入闸门）
+
+As a 市场观察用户,
+I want 与投资无关的新闻（娱乐/八卦/纯社会噪音）在准入阶段就被挡下,
+So that 公开流不被低相关性内容稀释。
+
+**Acceptance Criteria:**
+
+**Given** event-assembly 聚类产出一个候选 HotEvent
+**When** scoring 阶段（cluster 之后、explain 之前）运行相关性判定
+**Then** 候选附带 `relevanceLabel`（pass / suspicious / fail）
+**And** 判定基于板块/个股关联命中（theme-linking `EventAssociationSet`）+ 投资关键词白名单/黑名单（正向可枚举常量承载，照搬 AI 措辞黑名单先例）
+**And** V1 用确定性规则（可复现、可审计，AD-5）；模糊项 LLM 兜底 deferred
+
+**Given** 某候选 `relevance = fail`
+**When** 进入发布流程
+**Then** 该候选落 `decideReview({outcome:"reject"})`，不进公开流
+**And** 审计记录（`ReviewDecision`）标注 relevance-fail 原因
+
+### Story 7.2: 显著度打分 saliency 与 schema 迁移
+
+As a 市场观察用户,
+I want 每个候选事件有一个可解释的显著度分,
+So that 真正多源覆盖、升温快、市场已反应的事件排在前面。
+
+**Acceptance Criteria:**
+
+**Given** Prisma schema（`packages/core/prisma/schema.prisma`）
+**When** 迁移落地
+**Then** `HotEvent` 增 `saliency Float?` + `saliencyBreakdown Json?` + `relevanceLabel`
+**And** `PublishedHotEvent` / `PublishedTimelineEntry` 增 `saliency Float?`（由 publish-orchestrator 投影写入，AD-3）
+
+**Given** 一个候选及其证据集
+**When** scoring 阶段计算 saliency（0–100）
+**Then** 加权 = 多源覆盖（~40）+ 升温速度（~20）+ 市场反应强度（~25，Story 7.4 回灌）+ 板块关联密度（~15）+ 社交热度（V1 占位 0）
+**And** 权重与阈值为 event-assembly 模块配置常量（不进全局 env，照搬 `TIMELINE_FOLD_THRESHOLD` 先例），运营可调
+
+### Story 7.3: 分级发布闸门
+
+As a 运营人员,
+I want 发布闸门按 saliency 分级处置,
+So that 高质量事件自动上线、可疑事件进复核、垃圾事件被拦截。
+
+**Acceptance Criteria:**
+
+**Given** 候选已带 relevance + saliency
+**When** 发布流程执行（dev: `run-pipeline.ts:95` 自动过审循环；prod: `review-service.ts:108`）
+**Then** 三级处置：`relevance=fail` 或 `saliency < LOW` → `reject`；`LOW ≤ saliency < HIGH` → 留 `candidate` 进复核队列；`saliency ≥ HIGH` 且 `relevance=pass` → 自动 `approve`
+**And** 高风险子集（个股-facing / 含收益·目标暗示）V1 仍走人工签核（对齐 PRD §12 Q8）
+**And** AD-6 发布闸门不变式不破——只是给闸门加了数值门槛
+
+### Story 7.4: 市场反应强度回灌 saliency
+
+As a 市场观察用户,
+I want "市场已经反应"的事件显著度更高,
+So that 排序反映真实市场动作而非纯文本热度。
+
+**Acceptance Criteria:**
+
+**Given** `MarketReactionSnapshot`（涨停数、板块涨跌幅等）已存在
+**When** publish-orchestrator 刷新读模型时
+**Then** 只读查询 market-reaction snapshot，把 magnitude 折入 saliency 重算
+**And** 写拥有权仍在 event-assembly（AD-2b：market-reaction 不跨边界写）
+
+### Story 7.5: 排序与展示接入 saliency
+
+As a 市场观察用户,
+I want 首页与时间流按显著度而非纯源数排序,
+So that 最值得看的事件排在前。
+
+**Acceptance Criteria:**
+
+**Given** `published_*` 读模型已带 `saliency`
+**When** 刷新首页与时间流
+**Then** `publish-service.ts:742`（listPublishedHotEvents）与 `timeline-read-model.ts:578`（listPublishedTimeline）排序键由 `evidenceCount DESC` 改为 `saliency DESC`
+**And** FR-3 排序理由 chip 改读 `saliencyBreakdown`（多源覆盖/升温/市场反应/板块关联），文案规则不变（非公式化、不暴露权重）
+**And** 时间流条目视觉形态零改动（Epic 6 纵栏不动）
+
+### Story 7.6: 运营台 saliency 可见 + 阈值可调 + 观测
+
+As a 运营人员,
+I want 在复核台看到分数与 breakdown 并能调阈值,
+So that 我能监控打分质量并校准。
+
+**Acceptance Criteria:**
+
+**Given** 复核台（Epic 1 Story 1.6）
+**When** 运营查看
+**Then** 列表按 saliency 排序，显示分数 + breakdown，中分候选进队列
+**And** 阈值（HIGH/LOW）与权重在模块配置可调，不写死
+**And** 新增 SM-9 读数可观测：低分拦截率 + 公开流高分占比（操作化 SM-C2）
+
+### Story 7.7: 社交热度信号（deferred，V1 不实现）
+
+社交热度（评论/转发/热度）需新建微博/雪球 adapter，触发 §10 合规新增面。V1 saliency 公式留 0 分位。待社交数据源采购 + 合规推进后另开 story，与 Epic 5 算法备案窗口捆绑。MVP 不交付。
