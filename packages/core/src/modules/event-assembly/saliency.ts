@@ -100,10 +100,49 @@ const INVESTMENT_KEYWORDS = [
   "估值",
   "市盈",
   "市净",
+  "投资",
+  // macro data / real-estate / trade (added after real-data inspection: 房地产
+  // 开发投资 / 通胀 / 进出口 headlines were false-negative `fail` without these).
+  "房地产",
+  "地产",
+  "楼市",
+  "通胀",
+  "出口",
+  "进口",
+  "贸易",
+  // A股 sectors / themes — the product's own feeds are 芯片 + 新能源, so these
+  // MUST pass. Added after real-data inspection showed 算力/芯片/黄金/原油 sector
+  // headlines false-negativing as `fail`. High recall, near-zero false-positive on
+  // curated 财经 feeds (these terms are unambiguously market-sector vocabulary).
+  "芯片",
+  "半导体",
+  "算力",
+  "新能源",
+  "光伏",
+  "锂电",
+  "电池",
+  "储能",
+  "黄金",
+  "白银",
+  "原油",
+  "钢铁",
+  "煤炭",
+  "军工",
+  "医药",
+  "数据中心",
+  "大模型",
+  "零售额",
+  "汽车",
   // macro / policy / regulators
   "政策",
   "监管",
   "央行",
+  "美联储", // US Fed — foreign central bank (央行 alone is CN; 美联储 surfaced as a
+  // false-negative `fail` in real-data inspection: "新美联储主席…" headlines).
+  "议息",
+  "非农",
+  "失业",
+  "就业",
   "证监会",
   "银保监",
   "利率",
@@ -113,6 +152,7 @@ const INVESTMENT_KEYWORDS = [
   "汇率",
   "补贴",
   "关税",
+  "亏损", // 业绩亏损 headlines (e.g. "科大讯飞：预计净亏损…") — 净利/利润 cover gains, not losses.
   // market structure / trading
   "涨停",
   "跌停",

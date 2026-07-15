@@ -53,6 +53,15 @@ function main(): void {
     detail: JSON.stringify(r1),
   });
 
+  // Regression guard: 美联储 was missing from the whitelist initially and
+  // "新美联储主席…" headlines false-negatived as fail. Lock foreign-Fed coverage.
+  const r1b = judgeRelevance("新美联储主席：哪怕总统批评我，也会按数据行动");
+  assertions.push({
+    name: "美联储 (US Fed) headline → pass (regression guard)",
+    ok: r1b.label === RelevanceLabel.Pass && r1b.hitKeyword === "美联储",
+    detail: JSON.stringify(r1b),
+  });
+
   const r2 = judgeRelevance("某明星综艺录制现场花絮 选秀选手路透");
   assertions.push({
     name: "zero finance vocabulary → fail (noise killer)",
