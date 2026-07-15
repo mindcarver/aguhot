@@ -32,6 +32,13 @@ import { suppressDeepRead } from "../explanation/deep-read-service.js";
 import { suppressRecommendationReason } from "../explanation/reason-service.js";
 import { refreshPublishedReadModel } from "../publish-orchestrator/publish-service.js";
 import { refreshPublishedTimelineForEvent } from "../publish-orchestrator/timeline-read-model.js";
+import {
+  decideAutoPublishOutcome,
+  RelevanceLabel,
+  SALIENCY_LOW_THRESHOLD,
+  SALIENCY_HIGH_THRESHOLD,
+} from "../event-assembly/saliency.js";
+import type { SaliencyBreakdown } from "../event-assembly/saliency.js";
 import { resolveTransition } from "./transitions.js";
 import type {
   CandidateDecisionEntry,
@@ -42,10 +49,12 @@ import type {
   GetCandidateDetailOptions,
   GetPublishedEventForRevisionOptions,
   GetSm6MisleadingRateOptions,
+  GetSm9GateDistributionOptions,
   ListPendingCandidatesOptions,
   PendingCandidateSummary,
   PublishedEventRevisionView,
   Sm6MisleadingRate,
+  Sm9GateDistribution,
   SuppressAiContentOptions,
   SuppressAiContentResult,
 } from "./types.js";
@@ -207,6 +216,10 @@ export async function listPendingCandidates(
       id: true,
       title: true,
       updatedAt: true,
+      // Story 7.6 — Epic 7 scoring fields (event-assembly owns them; read-only).
+      saliency: true,
+      relevanceLabel: true,
+      saliencyBreakdown: true,
       evidence: {
         select: {
           evidenceRecord: {
@@ -233,6 +246,13 @@ export async function listPendingCandidates(
       evidenceCount: c.evidence.length,
       latestEvidenceAt: latest ?? c.updatedAt,
       updatedAt: c.updatedAt,
+      saliency: c.saliency,
+      relevanceLabel: c.relevanceLabel as RelevanceLabel | null,
+      saliencyBreakdown: (c.saliencyBreakdown as SaliencyBreakdown | null) ?? null,
+      gateOutcome:
+        c.saliency !== null && c.relevanceLabel !== null
+          ? decideAutoPublishOutcome(c.relevanceLabel as RelevanceLabel, c.saliency)
+          : null,
     };
   });
 }
@@ -254,6 +274,10 @@ export async function getCandidateDetail(
       id: true,
       title: true,
       publicationStatus: true,
+      // Story 7.6 — Epic 7 scoring fields for the detail header.
+      saliency: true,
+      relevanceLabel: true,
+      saliencyBreakdown: true,
       evidence: {
         select: {
           evidenceRecord: {
@@ -331,6 +355,13 @@ export async function getCandidateDetail(
     publicationStatus: event.publicationStatus,
     evidence,
     decisions,
+    saliency: event.saliency,
+    relevanceLabel: event.relevanceLabel as RelevanceLabel | null,
+    saliencyBreakdown: (event.saliencyBreakdown as SaliencyBreakdown | null) ?? null,
+    gateOutcome:
+      event.saliency !== null && event.relevanceLabel !== null
+        ? decideAutoPublishOutcome(event.relevanceLabel as RelevanceLabel, event.saliency)
+        : null,
   };
 }
 
@@ -663,5 +694,63 @@ export async function getSm6MisleadingRate(
     numerator,
     denominator,
     windowDays,
+  };
+}
+
+/**
+ * SM-9 gate-distribution readout (Story 7.6). Applies the Epic 7 auto-publish
+ * gate (decideAutoPublishOutcome) to every hot_event and tallies the
+ * approve/hold/reject split, the relevance split, and the actual publication_
+ * status split. Surfaced on /console so the operator can (a) see what the gate
+ * recommends vs what is actually published (gap = manual overrides), and (b)
+ * watch the rejection rate over time (operationalizes SM-C2: "don't maximize
+ * item count").
+ *
+ * The gate outcome is NOT persisted on hot_events, so approve/hold/reject are
+ * derived by reading each row's (relevanceLabel, saliency) and bucketing.
+ * Unscored rows (null) count as hold (the gate never auto-publishes unscored).
+ * V1 volume is tiny (hundreds), so a full read + TS bucket is fine — no need to
+ * push the thresholds into SQL.
+ */
+export async function getSm9GateDistribution(
+  options: GetSm9GateDistributionOptions,
+): Promise<Sm9GateDistribution> {
+  const { prisma } = options;
+
+  const rows = await prisma.hotEvent.findMany({
+    select: { saliency: true, relevanceLabel: true, publicationStatus: true },
+  });
+
+  const gate = { approve: 0, hold: 0, reject: 0 };
+  const relevance = { pass: 0, suspicious: 0, fail: 0, unscored: 0 };
+  const status = { candidate: 0, published: 0, rejected: 0, taken_down: 0 };
+
+  for (const r of rows) {
+    // gate outcome (unscored → hold)
+    if (r.saliency !== null && r.relevanceLabel !== null) {
+      const outcome = decideAutoPublishOutcome(r.relevanceLabel as RelevanceLabel, r.saliency);
+      gate[outcome] += 1;
+    } else {
+      gate.hold += 1;
+    }
+    // relevance split
+    const label = r.relevanceLabel as RelevanceLabel | null;
+    if (label === RelevanceLabel.Pass) relevance.pass += 1;
+    else if (label === RelevanceLabel.Suspicious) relevance.suspicious += 1;
+    else if (label === RelevanceLabel.Fail) relevance.fail += 1;
+    else relevance.unscored += 1;
+    // status split
+    if (r.publicationStatus === "candidate") status.candidate += 1;
+    else if (r.publicationStatus === "published") status.published += 1;
+    else if (r.publicationStatus === "rejected") status.rejected += 1;
+    else if (r.publicationStatus === "taken_down") status.taken_down += 1;
+  }
+
+  return {
+    gate,
+    relevance,
+    status,
+    thresholds: { low: SALIENCY_LOW_THRESHOLD, high: SALIENCY_HIGH_THRESHOLD },
+    total: rows.length,
   };
 }

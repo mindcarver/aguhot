@@ -21,6 +21,7 @@ export {
   getPublishedEventForRevision,
   suppressAiContent,
   getSm6MisleadingRate,
+  getSm9GateDistribution,
 } from "./review-service.js";
 export type {
   DecideReviewOptions,
@@ -37,6 +38,8 @@ export type {
   SuppressAiContentResult,
   GetSm6MisleadingRateOptions,
   Sm6MisleadingRate,
+  GetSm9GateDistributionOptions,
+  Sm9GateDistribution,
 } from "./types.js";
 export { resolveTransition, LEGAL_TRANSITIONS } from "./transitions.js";
 export {
