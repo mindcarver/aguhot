@@ -27,6 +27,7 @@ interface NavItem {
 const CONTENT: NavItem[] = [
   { href: "/", label: "精选", icon: "★", exact: true },
   { href: "/daily", label: "A股日报", icon: "▤" },
+  { href: "/crash-calendar", label: "大跌日历", icon: "▿" },
   { href: "/topics", label: "主题", icon: "⊞" },
   { href: "/search", label: "搜索", icon: "⌕" },
   { href: "/favorites", label: "收藏", icon: "🔖" },

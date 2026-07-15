@@ -97,8 +97,21 @@ development_status:
   6-4-ai-reason-signature-block-and-source-chips: done
   6-5-visual-alignment-e2e-and-event-card: done
   epic-6-retrospective: done
+  # Epic 8 — 大跌日历与历史回顾 (sprint-change-proposal-2026-07-15b, scope: Major)
+  # 新数据品类(行情历史日线) + Python 第三运行时;排 v1.1,不塞 V1 GA。
+  # 合规前置: 行情数据采集 + 统计回顾 → §12 Q9/Q10 金融信息服务复核未清前不公开。
+  epic-8: backlog
+  8-1-market-history-daily-bars-sidecar: backlog
+  8-2-crash-day-detection-and-forward-returns: backlog
+  8-3-crash-calendar-public-page: backlog
+  8-4-sidenav-entry-and-route: backlog
+  8-5-crash-day-hot-event-linkage: backlog   # deferred v1.2
 
 action_items:
+  - epic: 8
+    action: "行情数据源(AkShare Python sidecar)与 §10 金融信息服务 / 算法推荐备案合规边界,GA 前须外部律所书面意见(§12 Q9/Q10)"
+    owner: "PM"
+    status: open
   - epic: 6
     action: "在 DB 环境跑全 e2e（home/timeline/search/navigation/a11y/design/themes）验证视觉重构无回归"
     owner: "dev/infra"

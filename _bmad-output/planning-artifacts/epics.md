@@ -109,6 +109,10 @@ FR15: Epic 1 - 运营复核解释与来源完整性
 让用户能够通过搜索快速找回 `热点事件` 和 `主题页`，并通过 `关注列表` 建立最小可用的个人回访机制，而不把整个公共内容路径绑死在登录态上。
 **FRs covered:** FR12, FR13
 
+### Epic 8: 大跌日历与历史回顾
+让用户在「大跌日历页」查看A股历史大跌日、当日领跌板块与大跌后历史实际表现，把"市场反应"从单点快照升级为历史序列回顾。排期 v1.1，不塞 V1 GA（行情数据为全新品类 + §12 Q9/Q10 合规未清）。
+**FRs covered:** FR16
+
 ## Epic 1: 可信热点发布闭环
 
 让用户可以看到可公开展示的 `热点事件流`，进入详情页阅读摘要与 `证据时间线`，并且整个公开内容经过最小可用的 `运营复核` 与发布闸门，保证“能看”同时“可信”。
@@ -906,3 +910,48 @@ So that 我能监控打分质量并校准。
 ### Story 7.7: 社交热度信号（deferred，V1 不实现）
 
 社交热度（评论/转发/热度）需新建微博/雪球 adapter，触发 §10 合规新增面。V1 saliency 公式留 0 分位。待社交数据源采购 + 合规推进后另开 story，与 Epic 5 算法备案窗口捆绑。MVP 不交付。
+
+## Epic 8: 大跌日历与历史回顾
+
+status: backlog
+target_release: v1.1
+binds: 市场反应与关联展示 (FR-16)
+depends_on: Epic 7 saliency（可选，大跌日 ↔ 热点关联用）
+source: sprint-change-proposal-2026-07-15b（scope: Major）
+
+把 PRD §4.3「市场反应」从 per-HotEvent 单点快照升级为历史序列回顾。新增行情历史日线数据品类（三大宽基 + 申万一级行业）与 Python 第三运行时（`apps/market-sidecar`，受 AD-1 约束，复刻 RSSHub 自建采集器先例）。措辞护栏：大跌后表现为历史 T+N 实际收益统计，显式标注「非预测、非投资建议」，受 §10 黑名单约束。排期 v1.1，不塞 V1 GA；§12 Q10 合规复核未清前 `/crash-calendar` 不对外公开。
+
+### Story 8.1: 行情历史日线采集 sidecar（Python + AkShare）
+
+- 新建 `apps/market-sidecar`（Python 3.12 + AkShare），定时 job 拉取三大宽基（上证综指 / 深证成指 / 创业板指）+ 申万一级行业日线，写入 `index_daily_bars` / `sector_daily_bars`（Postgres）。
+- 仅"翻译成行"写权限，不含领域规则（AD-1 / AD-7）。Node 侧 `market-reaction` 与 `crash-review` 只读这些表。
+- **Given** 近 3 年交易日 **When** sidecar 回填 + 每日增量 **Then** 三大宽基 + 申万一级日线入库，`source` 字段可追溯（NFR-2），数据缺失明确标记，不编造（NFR-5）。
+- 风险面：行情数据采集属金融信息服务范畴 → 进 §12 Q9 / Q10 合规复核。
+
+### Story 8.2: 大跌日判定 + 前瞻收益计算
+
+- 新增 `crash-review` 模块（写拥有 `CrashDay`，AD-2）：任一宽基日跌幅 ≤ `CRASH_THRESHOLD`（默认 -2%，运营可调）即记大跌日；投影当日跌幅 Top-N 申万行业 + T+1/T+5/T+20 三大宽基实际收益。
+- 计算走 BullMQ 异步 job（AD-4）；T+N 收益随交易日推进补全。`publish-orchestrator` 投影 `published_crash_days` 读模型（AD-3）。
+- **Given** 已入库日线 **When** 计算大跌日 **Then** 阈值不写死（对齐 `TIMELINE_FOLD_THRESHOLD` 范式，运营可调）；前瞻收益为历史实际值非预测；缺失态不编造（NFR-5）。
+
+### Story 8.3: 大跌日历公开页 /crash-calendar
+
+- 日历视图（大跌日高亮 + 触发指数 / 跌幅）+ 领跌板块榜（复用 `reaction-chip-down`，不新增 token）+ 前瞻收益表（numeric 字体 + T+1/T+5/T+20）。
+- 复用 `published_*` 读模型范式（AD-3），新增 `published_crash_days`。
+- 文案显式标注「历史统计回顾，非预测、非投资建议」（`editorial-reason-block`），受 §10 措辞黑名单约束。
+- **Given** published_crash_days 有数据 **When** 用户访问 **Then** 三段视图齐备；无数据时明确空状态；移动端可用（NFR-4）。
+
+### Story 8.4: 左栏 SideNav 入口 + 路由
+
+- `side-nav` CONTENT 加「大跌日历」导航项（220px 不动）；移动端抽屉同步可见。
+- 新增 `/crash-calendar` 路由接入公开 layout。
+- **Given** 桌面 / 移动端 **When** 导航 **Then** 双端一致；active 态正确（startsWith 匹配）。
+
+### Story 8.5: 大跌日 ↔ 当日 HotEvent 关联（deferred，v1.2）
+
+把大跌日历与现有热点事件流打通：大跌日高亮关联当日已发布 HotEvent，复用 Epic 7 saliency / market reaction。v1.1 不做，避免与 saliency 调参期耦合。
+
+### Epic 8 观测 / 验收度量
+
+- 新增 **SM-C4（对冲）**：大跌日历页不以"大跌后涨幅最大化"为展示目标，避免退化为"反弹规律的暗示"（对齐 §10 advisory 护栏）。
+- 不立 V1 硬访问指标，v1.1 上线后观测再立。
