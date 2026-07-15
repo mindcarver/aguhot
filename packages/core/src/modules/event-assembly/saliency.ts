@@ -242,18 +242,30 @@ export function judgeRelevance(text: string): RelevanceJudgement {
 // --- saliency score ----------------------------------------------------------
 
 /**
- * Component weights (sum = 100). breadth + velocity are computed at cluster
- * time (max 60 combined); marketReaction + association are 0 at cluster time
- * and folded in at publish time by Story 7.4 (max 40 combined). So a freshly
- * clustered candidate peaks at ~60 until 7.4 re-scores — by design, the
- * cluster-time gate is conservative and market-confirmed events get a boost
- * once their snapshot lands.
+ * Base component weights (sum = 100). breadth + velocity are the ONLY signals
+ * available at cluster time, so they span the full 0–100 base scale (renormalized
+ * 2026-07-15, Story 7.4: previously breadth 40 + velocity 20 left a 40-point hole
+ * for marketReaction + association that V1 never fills — those workers resolve no
+ * adapter → 0 snapshots / 0 association sets, so the hole was permanently empty
+ * and the cluster-time ceiling was effectively 60). market reaction + association
+ * are now ADDITIVE publish-time bonuses (see SALIENCY_BONUS_CAPS), not base weight.
  */
 export const SALIENCY_WEIGHTS = {
-  breadth: 40,
-  velocity: 20,
-  marketReaction: 25,
-  association: 15,
+  breadth: 65,
+  velocity: 35,
+} as const;
+
+/**
+ * Publish-time bonus caps (Story 7.4). market reaction + association density are
+ * added on top of the cluster-time base at publish-orchestrator projection time,
+ * total capped at 100 (combineSaliency). In V1 (no market/association data
+ * produced) they are 0; once those data sources land they boost mid-range
+ * confirmed events (e.g. a 2-source event with a limit-up snapshot + sector tags
+ * crosses HIGH). They never leave a hole in the base scale.
+ */
+export const SALIENCY_BONUS_CAPS = {
+  marketReaction: 20,
+  association: 10,
 } as const;
 
 /**
@@ -276,15 +288,13 @@ export const VELOCITY_WINDOW_MS = 6 * 60 * 60 * 1000; // 6h
  *   LOW ≤ < HIGH  → hold as candidate for operator review
  *   score ≥ HIGH  → auto-publish (relevance must also be pass)
  *
- * NOTE: with the cluster-time component ceiling of 60, HIGH=38 means "≥2
- * distinct sources arriving moderately fast" auto-publishes while single-source
- * items (breadth 12, velocity 0 → 12) are held for review. LOW=10 is below the
- * single-source floor of 12, so it only rejects degenerate/unscored-adjacent
- * cases in V1; tightening it is a follow-up once we observe the real score
- * distribution (deferred-work, do not guess).
+ * With the renormalized base, single-source = 22 (held, not rejected — preserves
+ * the 单源快讯 feature), 2-source-fast ≈ 71 (auto-publish), 3-source = 100. LOW=20
+ * sits just under the single-source floor so only degenerate cases reject;
+ * tighten it after observing the real distribution (deferred-work, do not guess).
  */
-export const SALIENCY_LOW_THRESHOLD = 10;
-export const SALIENCY_HIGH_THRESHOLD = 38;
+export const SALIENCY_LOW_THRESHOLD = 20;
+export const SALIENCY_HIGH_THRESHOLD = 55;
 
 export interface SaliencyInput {
   /** Total member evidence records (EvidenceRecord count in the cluster). */
@@ -312,18 +322,17 @@ export interface SaliencyResult {
  * Breadth component (0..SALIENCY_WEIGHTS.breadth). Stepwise on distinct sources
  * rather than purely linear, so the jump from 1→2 sources (the "got a second
  * confirmation" threshold) is the steepest signal — single-source is weak,
- * two-source is credible, three+ is saturated. Steps chosen so single-source =
- * 12 (above LOW=10 → held not rejected, preserving the 单源快讯 feature) and
- * two-source = 24.
+ * two-source is credible, three+ is saturated. Steps: 1 src = 22, 2 src = 39,
+ * 3+ src = 65 (60% and 100% of the weight; 1 src = one-third).
  *
  * ponytail: stepwise table over a curve — the three meaningful tiers (1/2/3+)
  * are all the resolution that matters; a continuous formula would be false
  * precision without real calibration data.
  */
 function breadthPoints(distinctSourceCount: number): number {
-  if (distinctSourceCount >= BREADTH_SATURATION_SOURCES) return SALIENCY_WEIGHTS.breadth; // 40
-  if (distinctSourceCount === 2) return 24;
-  return 12; // 1 source (or 0 — guarded by caller, but defensive)
+  if (distinctSourceCount >= BREADTH_SATURATION_SOURCES) return SALIENCY_WEIGHTS.breadth; // 65
+  if (distinctSourceCount === 2) return 39;
+  return 22; // 1 source (or 0 — guarded by caller, but defensive)
 }
 
 /**
@@ -339,11 +348,11 @@ function velocityPoints(distinctSourceCount: number, spanMs: number): number {
 }
 
 /**
- * Compute the cluster-time saliency score (0–100). marketReaction + association
- * are 0 here; Story 7.4 re-scores at publish time with a sibling function that
- * takes those two inputs. Returns the integer-rounded score + the component
- * breakdown (stored on HotEvent.saliency_breakdown for the FR-3 sort-reason
- * chip and for 7.4 incremental re-scoring).
+ * Compute the cluster-time saliency base score (0–100). breadth + velocity only;
+ * marketReaction + association are 0 here and folded in at publish time by
+ * combineSaliency (Story 7.4). Returns the integer-rounded score + the component
+ * breakdown (stored on HotEvent.saliency_breakdown for the FR-3 sort-reason chip
+ * and for publish-time re-scoring).
  */
 export function scoreSaliency(input: SaliencyInput): SaliencyResult {
   const breadth = breadthPoints(input.distinctSourceCount);
@@ -357,6 +366,50 @@ export function scoreSaliency(input: SaliencyInput): SaliencyResult {
   };
   breakdown.total = Math.round(breadth + velocity);
   return { score: breakdown.total, breakdown };
+}
+
+// --- publish-time bonuses (Story 7.4) ----------------------------------------
+
+/**
+ * Market-reaction bonus (0..SALIENCY_BONUS_CAPS.marketReaction). Derived from
+ * the latest MarketReactionSnapshot at publish time: sector strength via the
+ * limit-up count (涨停家数 = real market response) + a price-move flag. 0 when no
+ * snapshot exists (V1 default). Called by publish-orchestrator; the snapshot is
+ * read read-only (market-reaction owns it, AD-2).
+ *
+ * `hasPriceMove` = priceVolumeTone ∈ {up, down} (a non-flat tone = the event
+ * moved prices). `limitUpCount` is the snapshot's 涨停家数.
+ */
+export function marketReactionBonus(limitUpCount: number, hasPriceMove: boolean): number {
+  let pts = 0;
+  if (limitUpCount > 0) {
+    pts += Math.min(limitUpCount * 2, SALIENCY_BONUS_CAPS.marketReaction - 6); // ≤14
+  }
+  if (hasPriceMove) pts += 6;
+  return Math.min(pts, SALIENCY_BONUS_CAPS.marketReaction);
+}
+
+/**
+ * Association-density bonus (0..SALIENCY_BONUS_CAPS.association). From the latest
+ * EventAssociationSet item count (concept/industry/stock tags) at publish time.
+ * ~3+ tags = full bonus. 0 when no set exists (V1 default).
+ */
+export function associationBonusPoints(itemCount: number): number {
+  return Math.min(itemCount * 3, SALIENCY_BONUS_CAPS.association);
+}
+
+/**
+ * Combine the cluster-time base score with the publish-time bonuses, capped at
+ * 100. The publish-time published_hot_events.saliency is this combined value
+ * (publish-orchestrator owns that read-model column; it reads the cluster base
+ * + snapshot + association set, never writes HotEvent.saliency — AD-2b).
+ */
+export function combineSaliency(
+  clusterScore: number,
+  marketBonus: number,
+  associationBonus: number,
+): number {
+  return Math.min(100, clusterScore + marketBonus + associationBonus);
 }
 
 /**
