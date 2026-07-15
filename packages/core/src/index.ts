@@ -74,6 +74,25 @@ export type { ClusterGroup } from "./modules/event-assembly/clustering.js";
 // refresh go through decideReview afterward (reuse the publish gate).
 export { reviseHotEvent, normalizeTags } from "./modules/event-assembly/revise-service.js";
 export { mergeHotEvents, splitHotEvent } from "./modules/event-assembly/merge-split-service.js";
+// Story 7.1/7.2/7.3 — relevance gate + saliency score + auto-publish decision.
+export {
+  judgeRelevance,
+  scoreSaliency,
+  saliencyTier,
+  decideAutoPublishOutcome,
+  RelevanceLabel,
+  SALIENCY_WEIGHTS,
+  SALIENCY_LOW_THRESHOLD,
+  SALIENCY_HIGH_THRESHOLD,
+} from "./modules/event-assembly/saliency.js";
+export type {
+  RelevanceJudgement,
+  SaliencyInput,
+  SaliencyBreakdown,
+  SaliencyResult,
+  SaliencyTier,
+  AutoPublishOutcome,
+} from "./modules/event-assembly/saliency.js";
 export {
   SIMILARITY_THRESHOLD,
   TIME_WINDOW_MS,

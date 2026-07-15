@@ -104,6 +104,20 @@ model HotEvent {
   title              String
   clusterSignature   String   @map("cluster_signature")
   publicationStatus  String   @map("publication_status") // PublicationStatus union value (shared/publication-status.ts)
+  // Story 7.1/7.2 — investment-relevance gate + significance score. event-assembly
+  // is the SOLE writer of these three fields (AD-2b): they are computed at cluster
+  // time from the candidate's member evidence (relevance keywords + breadth +
+  // velocity). `relevance_label` is the RelevanceLabel union ("pass"|"suspicious"
+  // |"fail"); `saliency` is the 0–100 significance score; `saliency_breakdown` is
+  // the Json component breakdown ({breadth,velocity,marketReaction,association,
+  // total}) used both for the FR-3 sort-reason chip and for publish-time re-score
+  // (Story 7.4 folds in marketReaction + association, which are 0 at cluster time
+  // because those modules have not run yet). All nullable: pre-7.2 rows + the
+  // self-heal path leave them null; the publish gate treats null as "unscored →
+  // hold" (never auto-publish an unscored event).
+  relevanceLabel     String?  @map("relevance_label") // RelevanceLabel union value
+  saliency           Float?   @map("saliency") // 0–100 significance score
+  saliencyBreakdown  Json?    @map("saliency_breakdown") // SaliencyBreakdown object
   traceId            String?  @map("trace_id")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
@@ -314,6 +328,13 @@ model PublishedHotEvent {
   tags             String[] @default([])
   evidenceCount    Int      @map("evidence_count")
   latestEvidenceAt DateTime @map("latest_evidence_at")
+  // Story 7.5 — projected saliency for feed ranking. publish-orchestrator is the
+  // SOLE writer (projects HotEvent.saliency at publish/republish, re-scored with
+  // market-reaction + association per Story 7.4). Nullable for pre-7.5 rows; the
+  // feed orderBy falls back to evidenceCount when null (defensive — should not
+  // occur for post-7.5 publishes). listPublishedHotEvents swaps evidenceCount DESC
+  // for saliency DESC (Story 7.5).
+  saliency         Float?   @map("saliency")
   publishedAt      DateTime @default(now()) @map("published_at")
   traceId          String?  @map("trace_id")
   updatedAt        DateTime @updatedAt @map("updated_at")
@@ -816,6 +837,11 @@ model PublishedTimelineEntry {
   summary                 String
   evidenceCount           Int      @map("evidence_count")
   foldedEvidenceRecordIds Json     @default("[]") @map("folded_evidence_record_ids") // string[] (EvidenceRecord.id)
+  // Story 7.5 — projected saliency for timeline ranking, same source/writer as
+  // PublishedHotEvent.saliency. Nullable for pre-7.5 rows; listPublishedTimeline
+  // orders by occurredAt DESC and uses saliency as a secondary tiebreak / the
+  // FR-3 sort-reason source (Story 7.5).
+  saliency                Float?   @map("saliency")
   recommendationReason    String?  @map("recommendation_reason") // Story 5.1 slot (AI 解读); NULL until 5.1
   traceId                 String?  @map("trace_id")
   createdAt               DateTime @default(now()) @map("created_at")

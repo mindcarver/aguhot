@@ -14,7 +14,13 @@
  */
 import { QueueEvents } from "bullmq";
 
-import { getPrisma, newTraceId, decideReview } from "@aguhot/core";
+import {
+  getPrisma,
+  newTraceId,
+  decideReview,
+  decideAutoPublishOutcome,
+  RelevanceLabel,
+} from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
 import { closeRedis, getRedis } from "./queues/connection.js";
@@ -86,26 +92,57 @@ await stage("reason", RECOMMENDATION_REASON_QUEUE_NAME, () =>
   enqueueRecommendationReason(newTraceId()),
 );
 
-// Auto-approve every candidate (dev bypass of the operator gate).
+// Score-aware auto-publish (Story 7.3). Replaces the blind "approve every
+// candidate" dev bypass: each candidate is routed by decideAutoPublishOutcome
+// from its cluster-time relevance label + saliency score:
+//   reject  → decideReview(reject)   (off-topic noise / degenerate — kept out)
+//   approve → decideReview(approve)   (multi-source confirmed — auto-published)
+//   hold    → left as candidate       (operator review in /console)
+// In prod the same outcome fn drives any future auto-publish path; the manual
+// /console gate is NOT bound by it (AD-6 stays the gate).
 const candidates = await prisma.hotEvent.findMany({
   where: { publicationStatus: "candidate" },
-  select: { id: true, title: true },
+  select: { id: true, title: true, relevanceLabel: true, saliency: true },
 });
-console.log(`auto-approve ${candidates.length} candidate(s)…`);
+const counts = { approve: 0, reject: 0, hold: 0 };
+console.log(`score-aware publish: ${candidates.length} candidate(s)…`);
 for (const c of candidates) {
+  const outcome = decideAutoPublishOutcome(
+    (c.relevanceLabel ?? RelevanceLabel.Fail) as RelevanceLabel,
+    c.saliency ?? 0,
+  );
+  counts[outcome] += 1;
+  const label = (c.title ?? c.id).slice(0, 50);
   try {
-    await decideReview({
-      prisma,
-      traceId: newTraceId(),
-      hotEventId: c.id,
-      outcome: "approve",
-      reviewer: "dev-auto-publish",
-    });
-    console.log(`  ✓ published: ${(c.title ?? c.id).slice(0, 50)}`);
+    if (outcome === "approve") {
+      await decideReview({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: c.id,
+        outcome: "approve",
+        reviewer: "dev-auto-publish",
+      });
+      console.log(`  ✓ published: ${label}`);
+    } else if (outcome === "reject") {
+      await decideReview({
+        prisma,
+        traceId: newTraceId(),
+        hotEventId: c.id,
+        outcome: "reject",
+        reviewer: "dev-auto-publish",
+        note: "low-relevance/low-saliency (Epic 7 gate)",
+      });
+      console.log(`  ✗ rejected:  ${label}`);
+    } else {
+      console.log(`  … held:      ${label}`);
+    }
   } catch (e) {
     console.error(`  ✗ ${c.id}:`, e instanceof Error ? e.message : e);
   }
 }
+console.log(
+  `  → ${counts.approve} published, ${counts.hold} held, ${counts.reject} rejected`,
+);
 
 // Digest coverageDate = the day of the latest evidence among published events
 // (not necessarily "today" — RSS items may carry an earlier pubDate).
