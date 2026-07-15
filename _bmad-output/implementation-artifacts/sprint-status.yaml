@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-09T20:20:51+0800
-last_updated: 2026-07-15T00:00:00+0800
+last_updated: 2026-07-15T21:30:00+0800
 project: aguhot
 project_key: NOKEY
 tracking_system: file-system
@@ -104,7 +104,7 @@ development_status:
   8-1-market-history-daily-bars-sidecar: done
   8-2-crash-day-detection-and-forward-returns: done
   8-3-crash-calendar-public-page: done
-  8-4-sidenav-entry-and-route: backlog
+  8-4-sidenav-entry-and-route: done
   8-5-crash-day-hot-event-linkage: backlog   # deferred v1.2
 
 action_items:
