@@ -26,6 +26,7 @@ import {
   judgeRelevance,
   scoreSaliency,
   saliencyTier,
+  decideAutoPublishOutcome,
   RelevanceLabel,
   SALIENCY_WEIGHTS,
   SALIENCY_LOW_THRESHOLD,
@@ -133,6 +134,30 @@ function main(): void {
     name: "marketReaction + association are 0 at cluster time (7.4 folds in later)",
     ok: s3.breakdown.marketReaction === 0 && s3.breakdown.association === 0,
     detail: JSON.stringify(s3.breakdown),
+  });
+
+  // --- auto-publish decision (Story 7.3) ------------------------------------
+
+  assertions.push({
+    name: "decideAutoPublishOutcome: fail → reject regardless of score",
+    ok: decideAutoPublishOutcome(RelevanceLabel.Fail, 80) === "reject",
+  });
+  assertions.push({
+    name: "decideAutoPublishOutcome: pass + high score → approve",
+    ok: decideAutoPublishOutcome(RelevanceLabel.Pass, 50) === "approve",
+  });
+  assertions.push({
+    name: "decideAutoPublishOutcome: suspicious → hold (never auto-publish)",
+    ok:
+      decideAutoPublishOutcome(RelevanceLabel.Suspicious, 80) === "hold",
+  });
+  assertions.push({
+    name: "decideAutoPublishOutcome: pass + single-source score (12) → hold",
+    ok: decideAutoPublishOutcome(RelevanceLabel.Pass, 12) === "hold",
+  });
+  assertions.push({
+    name: "decideAutoPublishOutcome: pass + degenerate score (<LOW) → reject",
+    ok: decideAutoPublishOutcome(RelevanceLabel.Pass, 5) === "reject",
   });
 
   // --- report ----------------------------------------------------------------

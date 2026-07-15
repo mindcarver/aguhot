@@ -174,6 +174,10 @@ export async function refreshPublishedReadModel(
     where: { id: hotEventId },
     select: {
       title: true,
+      // Story 7.5 — project the cluster-time saliency into the read model (the
+      // sole writer of HotEvent.saliency is event-assembly, AD-2b; publish-
+      // orchestrator only reads it here and writes the projected copy it owns).
+      saliency: true,
       evidence: {
         select: {
           evidenceRecord: {
@@ -217,6 +221,7 @@ export async function refreshPublishedReadModel(
       tags: effectiveTags,
       evidenceCount,
       latestEvidenceAt,
+      saliency: event.saliency,
       publishedAt: new Date(),
       traceId,
     },
@@ -225,6 +230,7 @@ export async function refreshPublishedReadModel(
       tags: effectiveTags,
       evidenceCount,
       latestEvidenceAt,
+      saliency: event.saliency,
       traceId,
       // publishedAt deliberately omitted on update: preserve first-publish time.
     },
@@ -739,7 +745,15 @@ export async function listPublishedHotEvents(
       latestEvidenceAt: true,
       publishedAt: true,
     },
-    orderBy: [{ evidenceCount: "desc" }, { latestEvidenceAt: "desc" }],
+    // Story 7.5 — rank by saliency (significance) first, evidenceCount as the
+    // tiebreak / fallback for pre-7.5 rows with null saliency (nulls last).
+    // Replaces the old "evidenceCount DESC" implicit priority rule with the
+    // explicit Epic 7 score; latestEvidenceAt stays the final tiebreak.
+    orderBy: [
+      { saliency: { sort: "desc", nulls: "last" } },
+      { evidenceCount: "desc" },
+      { latestEvidenceAt: "desc" },
+    ],
   });
 
   return rows;

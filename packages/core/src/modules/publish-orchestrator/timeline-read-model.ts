@@ -62,6 +62,9 @@ import type {
 interface TimelineProjectionInput {
   title: string;
   createdAt: Date;
+  // Story 7.5 — projected verbatim from HotEvent.saliency (event-assembly owns
+  // it; publish-orchestrator only reads + projects). Nullable for unscored rows.
+  saliency: number | null;
   revisions: ReadonlyArray<{ title: string }>;
   evidence: ReadonlyArray<{
     evidenceRecord: {
@@ -91,6 +94,7 @@ function projectTimelineFields(input: TimelineProjectionInput): {
   evidenceCount: number;
   foldedEvidenceRecordIds: string[];
   recommendationReason: string | null;
+  saliency: number | null;
 } | null {
   if (input.evidence.length === 0) {
     return null;
@@ -177,6 +181,7 @@ function projectTimelineFields(input: TimelineProjectionInput): {
     evidenceCount: input.evidence.length,
     foldedEvidenceRecordIds,
     recommendationReason,
+    saliency: input.saliency,
   };
 }
 
@@ -217,6 +222,7 @@ export async function refreshPublishedTimelineForEvent(
     select: {
       title: true,
       createdAt: true,
+      saliency: true,
       revisions: {
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 1,
@@ -256,6 +262,7 @@ export async function refreshPublishedTimelineForEvent(
   const input: TimelineProjectionInput = {
     title: event.title,
     createdAt: event.createdAt,
+    saliency: event.saliency,
     revisions: event.revisions,
     evidence: event.evidence,
     explanationVersions: event.explanationVersions,
@@ -290,6 +297,7 @@ export async function refreshPublishedTimelineForEvent(
       foldedEvidenceRecordIds:
         projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
       recommendationReason: projected.recommendationReason,
+      saliency: projected.saliency,
       traceId,
     },
     update: {
@@ -303,6 +311,7 @@ export async function refreshPublishedTimelineForEvent(
       foldedEvidenceRecordIds:
         projected.foldedEvidenceRecordIds as unknown as Prisma.InputJsonValue,
       recommendationReason: projected.recommendationReason,
+      saliency: projected.saliency,
       traceId,
     },
   });
@@ -336,6 +345,7 @@ export async function refreshPublishedTimelineAll(
       id: true,
       title: true,
       createdAt: true,
+      saliency: true,
       revisions: {
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 1,
@@ -385,6 +395,7 @@ export async function refreshPublishedTimelineAll(
       const input: TimelineProjectionInput = {
         title: event.title,
         createdAt: event.createdAt,
+        saliency: event.saliency,
         revisions: event.revisions,
         evidence: event.evidence,
         explanationVersions: event.explanationVersions,

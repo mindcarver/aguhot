@@ -334,3 +334,32 @@ export function saliencyTier(score: number): SaliencyTier {
   if (score < SALIENCY_HIGH_THRESHOLD) return "hold-tier";
   return "publish-tier";
 }
+
+/**
+ * The auto-publish decision for a scored candidate (Story 7.3). Pure function
+ * of relevance label + saliency score — called by the dev auto-publish loop
+ * (run-pipeline) and reusable by a future prod auto-publish path. The operator
+ * review console is NOT bound by this: an operator may approve a held event or
+ * reject a publish-tier one manually (AD-6 stays the gate; this only drives the
+ * automatic path).
+ *
+ *   relevance = fail                         → reject  (off-topic, never shown)
+ *   score < LOW_THRESHOLD                    → reject  (degenerate/weak, reserved)
+ *   relevance = pass AND score ≥ HIGH        → approve (auto-publish)
+ *   everything else (suspicious, single-src) → hold    (operator review)
+ *
+ * `hold` is NOT a review-workflow outcome — it means "leave the candidate as
+ * candidate" (no decideReview call). The caller maps approve/reject to
+ * decideReview outcomes and skips hold.
+ */
+export type AutoPublishOutcome = "approve" | "reject" | "hold";
+
+export function decideAutoPublishOutcome(
+  label: RelevanceLabel,
+  score: number,
+): AutoPublishOutcome {
+  if (label === RelevanceLabel.Fail) return "reject";
+  if (score < SALIENCY_LOW_THRESHOLD) return "reject";
+  if (label === RelevanceLabel.Pass && score >= SALIENCY_HIGH_THRESHOLD) return "approve";
+  return "hold";
+}
