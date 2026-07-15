@@ -21,6 +21,7 @@ import {
   getPrisma,
   newTraceId,
   upsertCrashDays,
+  refreshPublishedCrashDays,
   CRASH_THRESHOLD,
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
@@ -80,5 +81,20 @@ for (const d of result.crashDays) {
   );
 }
 console.log(`upserted ${result.upserted} crash_days row(s) (trace ${traceId}).`);
+
+// Project crash_days → published_crash_days for the /crash-calendar public page (Story 8.3).
+// The runner is wiring; the projection WRITE is still owned by publish-orchestrator (AD-3) —
+// crash-review's module never writes published_crash_days. Refreshing in the same date range
+// keeps the public read model in sync with the recompute; idempotent. (§12 Q10: prod gates this
+// by simply not running the runner until the financial-info compliance review clears.)
+const projection = await refreshPublishedCrashDays({
+  prisma,
+  traceId,
+  fromDay,
+  toDay,
+});
+console.log(
+  `published_crash_days: projected ${projection.projected}, pruned ${projection.pruned}.`,
+);
 
 await prisma.$disconnect();
