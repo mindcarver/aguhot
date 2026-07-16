@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-09T20:20:51+0800
-last_updated: 2026-07-15T22:00:00+0800
+last_updated: 2026-07-16T00:00:00+0800
 project: aguhot
 project_key: NOKEY
 tracking_system: file-system
@@ -75,13 +75,13 @@ development_status:
   3-5-semantic-and-keyboard-accessibility-baseline: done
   3-6-touch-target-and-reduced-motion-support: done
   epic-3-retrospective: optional
-  epic-4: backlog
+  epic-4: done
   4-1-timeline-read-model-and-publish-refresh: done
   4-2-timeline-home-and-card-component: done
   4-3-session-and-category-filters: done
   4-4-timeline-search-integration: done
   epic-4-retrospective: optional
-  epic-5: backlog
+  epic-5: done
   5-1-card-recommendation-reason: done
   5-2-event-deep-read: done
   5-3-digest-trend-briefing: done
@@ -90,7 +90,7 @@ development_status:
   # Epic 6 — 视觉对齐参考站：编辑型纵栏 (sprint-change-proposal-2026-07-12, scope: Moderate)
   # 视觉规格: _bmad-output/demo-ui-redesign.html (方案 A, 已锁定)
   # 不动 token / architecture / PRD 定位层；仅 UX 渲染层返工。
-  epic-6: backlog
+  epic-6: done
   6-1-top-nav-replace-left-rail: done
   6-2-numbered-hot-list-replace-main-line-band: done
   6-3-timeline-borderless-editorial-column: done
@@ -100,16 +100,27 @@ development_status:
   # Epic 8 — 大跌日历与历史回顾 (sprint-change-proposal-2026-07-15b, scope: Major)
   # 新数据品类(行情历史日线) + Python 第三运行时;排 v1.1,不塞 V1 GA。
   # 合规前置: 行情数据采集 + 统计回顾 → §12 Q9/Q10 金融信息服务复核未清前不公开。
-  epic-8: backlog
+  epic-8: in-progress   # 8.1–8.5 done (2026-07-15);2026-07-16 重开追加 8.6–8.8 (大跌日深度广度详情)
   8-1-market-history-daily-bars-sidecar: done
   8-2-crash-day-detection-and-forward-returns: done
   8-3-crash-calendar-public-page: done
   8-4-sidenav-entry-and-route: done
   8-5-crash-day-hot-event-linkage: done   # was deferred v1.2; pulled forward + done 2026-07-15
+  # Epic 8.6 — 大跌日深度详情页 + 市场广度数据 (sprint-change-proposal-2026-07-16, scope: Moderate)
+  # T1 MVP 全免费 AkShare: 涨跌停/连板/炸板 + 涨跌家数 + 两市成交额 + 龙虎榜(机构vs游资) + 融资融券。
+  # 北向资金砍掉(2024-08-19 后停披露)。合规门禁不变(继续 noindex + prod 不投影),律所复核范围扩到龙虎榜/涨跌停。
+  # 新表 market_breadth_daily(Node/Prisma 拥有, Python 裸 SQL 写, 复刻 8-1 范式)。
+  8-6-market-breadth-daily-sidecar: review           # impl+4-layer-review done (db7d637); PR open, awaits merge. spot fields nullable (NFR-5), 6 defers logged.
+  8-7-crash-breadth-projection-and-runner: backlog   # published_crash_days +breadth Json 投影 + run-market-breadth runner
+  8-8-crash-day-detail-route: backlog                # /crash-calendar/[date] 深度详情页 + 日历索引改链
 
 action_items:
   - epic: 8
     action: "行情数据源(AkShare Python sidecar)与 §10 金融信息服务 / 算法推荐备案合规边界,GA 前须外部律所书面意见(§12 Q9/Q10)"
+    owner: "PM"
+    status: open
+  - epic: 8
+    action: "大跌日深度详情新增金融信息品类(龙虎榜/涨跌停家数/融资融券),§12 Q9/Q10 律所复核范围须覆盖;GA 前须外部律所书面意见(sprint-change-proposal-2026-07-16 / Story 8-6~8-8)"
     owner: "PM"
     status: open
   - epic: 6

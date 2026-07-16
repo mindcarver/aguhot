@@ -7,8 +7,9 @@ the MarketDataAdapter port (AD-7): Node domain modules read the two Postgres
 tables it writes; they never call AkShare.
 
 Tables (Node/Prisma owns the schema; this sidecar writes via psycopg raw SQL):
-  - index_daily_bars  (三大宽基 daily pct_change + close)
-  - sector_daily_bars (申万一级行业 daily pct_change + close)
+  - index_daily_bars       (三大宽基 daily pct_change + close)
+  - sector_daily_bars      (申万一级行业 daily pct_change + close)
+  - market_breadth_daily   (市场广度 single-row-per-day aggregate, story 8.6)
 """
 
 __version__ = "0.0.0"

@@ -1169,6 +1169,55 @@ model SectorDailyBar {
   @@map("sector_daily_bars")
 }
 
+// Story 8.6 — market breadth for a single A-share trading day (one aggregate row per
+// trade_date). Same ownership + idempotency model as IndexDailyBar/SectorDailyBar above:
+// Node/Prisma owns the schema; the Python sidecar is the SOLE writer (psycopg raw SQL,
+// never Prisma/SQLAlchemy/Alembic — single-schema ownership, AD-2). The 8.7 projection
+// (published_crash_days.breadth) and 8.8 deep detail page READ this table; they never
+// call AkShare (AD-7). trade_date is a DATE and the UNIQUE key — breadth is a per-day
+// SINGLE-ROW aggregate of 5 AkShare sources (not per-code like the bar tables).
+//
+// Core counts (limit_up/down, consecutive_board_max, broken_board_count, advancing/
+// declining/flat, total_turnover) are NOT NULL: a breadth row is only written when the
+// core count sources return data (NFR-5 — never fabricate; a missing core source ⇒ the
+// day is simply absent from the table). `margin_balance_change` (T-1, 融资融券) and
+// `dragon_tiger` (龙虎榜) are NULLABLE: a day with no dragon-tiger listings is honestly
+// stored as a zero object ({stockCount:0,...}), while a fetch failure stores NULL
+// (NFR-5 > the proposal table sketch — see spec Design Notes). `dragon_tiger` is the
+// golden-example shape: {stockCount, institutionalNetBuy, hotMoneyNetBuy,
+// topStocks:[{code,name,netBuy,reason}]}. total_turnover/margin_balance_change are
+// Decimal(20,2) (两市成交额 reaches trillions of yuan); counts are Int. source/ingested_at/
+// trace_id make every row traceable (NFR-2). North-bound capital is deliberately NOT
+// collected: exchanges stopped real-time disclosure on 2024-08-19, so showing it would
+// fabricate empty data.
+//
+// Idempotent upsert on @@unique([tradeDate]) with ON CONFLICT (trade_date) DO NOTHING —
+// re-running a trading day is a no-op and never overwrites an existing row (AC2). NO FK
+// to crash_days / index_daily_bars — breadth is a market-data time series keyed by date,
+// not a sub-aggregate (mirrors the no-FK invariant above).
+model MarketBreadthDaily {
+  id                   String   @id // UUIDv7, assigned in the Python sidecar (uuid7.str → str)
+  tradeDate            DateTime @map("trade_date") @db.Date // A-share trading day (UTC midnight); unique
+  limitUpCount         Int      @map("limit_up_count") // 涨停家数 (stock_zt_pool_em row count)
+  limitDownCount       Int      @map("limit_down_count") // 跌停家数 (stock_zt_pool_dtgc_em row count)
+  consecutiveBoardMax  Int      @map("consecutive_board_max") // 最高连板高度 (涨停池 连板数 max)
+  brokenBoardCount     Int      @map("broken_board_count") // 炸板家数 (stock_zt_pool_zbgc_em row count)
+  advancingCount       Int?     @map("advancing_count") // 上涨家数 (spot pctChange > 0); nullable — stock_zh_a_spot_em serves ONLY the latest trading day, so historical-day rows are NULL (NFR-5 honest empty, not fabricated)
+  decliningCount       Int?     @map("declining_count") // 下跌家数 (spot pctChange < 0); nullable — advancing/declining/flat/turnover populated only on the latest day (window end)
+  flatCount            Int?     @map("flat_count") // 平盘家数 (spot pctChange == 0); nullable — same latest-day-only constraint
+  totalTurnover        Decimal? @map("total_turnover") @db.Decimal(20, 2) // 两市成交额(元) (spot 成交额 sum); nullable — spot is latest-day-only, so historical-day rows are NULL (NFR-5)
+  marginBalanceChange  Decimal? @map("margin_balance_change") @db.Decimal(20, 2) // 融资融券余额变化(T-1, nullable NFR-5)
+  dragonTiger          Json?    @map("dragon_tiger") // 龙虎榜 aggregate (nullable; zero object on no-listing day, NFR-5)
+  source               String // MarketDataSource union value ("akshare")
+  ingestedAt           DateTime @default(now()) @map("ingested_at") // UTC write instant
+  traceId              String?  @map("trace_id")
+
+  // One row per trading day; re-running the same day is a no-op (ON CONFLICT DO NOTHING).
+  @@unique([tradeDate])
+  @@index([tradeDate])
+  @@map("market_breadth_daily")
+}
+
 // Story 8.2 — one row per A-share crash trading day. Owned SOLELY by the `crash-review`
 // module (AD-2 single-writer), which READS `index_daily_bars` (8.1) and writes here.
 // A crash day = any of the three broad indices (sh000001 / sz399001 / sz399006) whose

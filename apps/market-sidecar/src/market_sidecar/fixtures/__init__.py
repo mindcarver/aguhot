@@ -96,3 +96,157 @@ EXPECTED_SECTOR_PCT = {
     date(2026, 7, 14): "0.5215",   # (210.09-209)/209
     # 2026-07-08 DROPPED (first row)
 }
+
+
+# ---------------------------------------------------------------------------
+# Breadth fixtures (story 8.6). trade_date = 2026-07-14 (a trading day).
+# These mirror the verified akshare 1.18.64 frame shapes (see akshare_client.py probe).
+# ---------------------------------------------------------------------------
+
+BREADTH_TRADE_DATE = date(2026, 7, 14)
+
+
+def zt_pool_20260714() -> pd.DataFrame:
+    """Canned stock_zt_pool_em(date='20260714') shape: 涨停池.
+
+    3 stocks limit-up; 连板数 max = 4 (the 2nd row). Columns mirror the verified frame.
+    """
+    return pd.DataFrame(
+        {
+            "序号": [1, 2, 3],
+            "代码": ["000001", "000002", "600000"],
+            "名称": ["平安银行", "万科A", "浦发银行"],
+            "涨停价": [12.34, 10.50, 11.20],
+            "最新价": [12.34, 10.50, 11.20],
+            "成交额": [1.0e9, 2.0e9, 3.0e9],
+            "流通市值": [2.0e11, 1.5e11, 3.0e11],
+            "封板资金": [5.0e8, 3.0e8, 4.0e8],
+            "首次封板时间": ["09:30:00", "10:15:00", "14:20:00"],
+            "最后封板时间": ["09:30:00", "10:15:00", "14:20:00"],
+            "炸板次数": [0, 1, 0],
+            "涨停统计": ["3/3", "2/3", "1/1"],
+            "连板数": [1, 4, 2],
+        }
+    )
+
+
+def dt_pool_20260714() -> pd.DataFrame:
+    """Canned stock_zt_pool_dtgc_em(date='20260714') shape: 跌停池. 2 stocks limit-down."""
+    return pd.DataFrame(
+        {
+            "序号": [1, 2],
+            "代码": ["300001", "600001"],
+            "名称": ["特锐德", "浦发银行"],
+            "跌停价": [8.50, 9.00],
+            "最新价": [8.50, 9.00],
+            "成交额": [5.0e8, 6.0e8],
+        }
+    )
+
+
+def zb_pool_20260714() -> pd.DataFrame:
+    """Canned stock_zt_pool_zbgc_em(date='20260714') shape: 炸板池. 1 broken-board stock."""
+    return pd.DataFrame(
+        {
+            "序号": [1],
+            "代码": ["000333"],
+            "名称": ["美的集团"],
+            "涨停价": [15.00],
+            "最新价": [14.20],
+            "成交额": [8.0e8],
+        }
+    )
+
+
+def spot_em_20260714() -> pd.DataFrame:
+    """Canned stock_zh_a_spot_em() shape: A-share spots for the latest trading day.
+
+    6 stocks: 3 advancing (涨跌幅 > 0), 2 declining (涨跌幅 < 0), 1 flat (涨跌幅 == 0).
+    total 成交额 = 1e9 + 2e9 + 3e9 + 4e9 + 5e9 + 6e9 = 21e9 (Decimal-exact via str).
+    """
+    return pd.DataFrame(
+        {
+            "代码": ["000001", "000002", "000003", "000004", "000005", "000006"],
+            "名称": ["平安银行", "万科A", "上海钢联", "浦发银行", "招商银行", "中国银行"],
+            "最新价": [12.34, 10.50, 20.00, 11.20, 35.00, 4.50],
+            "涨跌幅": [5.0, 2.5, 0.0, -1.2, -3.0, 10.0],
+            "涨跌额": [0.59, 0.26, 0.0, -0.14, -1.08, 0.41],
+            "成交量": [1e6, 2e6, 3e6, 4e6, 5e6, 6e6],
+            "成交额": [1e9, 2e9, 3e9, 4e9, 5e9, 6e9],
+        }
+    )
+
+
+def lhb_detail_20260714() -> pd.DataFrame:
+    """Canned stock_lhb_detail_em(date='20260714') shape: 龙虎榜. 2 stocks listed."""
+    return pd.DataFrame(
+        {
+            "序号": [1, 2],
+            "代码": ["000001", "600000"],
+            "名称": ["平安银行", "浦发银行"],
+            "收盘价": [12.34, 11.20],
+            "涨跌幅": [5.0, 2.0],
+            "龙虎榜净买额": [1.5e8, -3.0e7],
+            "上榜原因": ["日涨幅偏离值达7%", "日振幅值达15%"],
+        }
+    )
+
+
+def margin_sse_20260714() -> pd.DataFrame:
+    """Canned stock_margin_sse(start_date='20260714', end_date='20260714') shape (上交所汇总).
+
+    SSE 融资融券汇总; 融资余额 in YUAN. One aggregate row for the day. Cols mirror the
+    verified akshare 1.18.64 frame.
+    """
+    return pd.DataFrame(
+        {
+            "信用交易日期": ["20260714"],
+            "融资余额": [8.0e9],  # 8e9 yuan (SSE reports in yuan)
+            "融资买入额": [3.0e8],
+            "融券余量": [1.0e6],
+            "融券余量金额": [5.0e6],
+            "融券卖出量": [1000],
+            "融资融券余额": [8.5e9],
+        }
+    )
+
+
+def margin_szse_20260714() -> pd.DataFrame:
+    """Canned stock_margin_szse(date='20260714') shape (深交所汇总).
+
+    SZSE 融资融券汇总; 融资余额 in 亿元 (×1e8). The wrapper normalizes to yuan before summing
+    so SSE (yuan) + SZSE (亿元→yuan) are comparable. Cols mirror the verified frame.
+    """
+    return pd.DataFrame(
+        {
+            "融资买入额": [30.0],  # 亿元
+            "融资余额": [40.0],  # 40 亿元 → 4e9 yuan after normalization
+            "融券卖出量": [5.0],
+            "融券余量": [17.66],
+            "融券余额": [1.12],
+            "融资融券余额": [41.12],
+        }
+    )
+
+
+def empty_frame() -> pd.DataFrame:
+    """An empty frame (for non-trading-day / no-listing-day tests)."""
+    return pd.DataFrame()
+
+
+# Expected derived breadth counts for 2026-07-14 (assertion map). Decimal-str values
+# match Decimal(str(numpy_float64)) representation (the parse layer goes via str to dodge
+# float binary-repr drift; the DB DECIMAL(20,2) column normalizes on store).
+EXPECTED_BREADTH = {
+    "limit_up_count": 3,
+    "limit_down_count": 2,
+    "consecutive_board_max": 4,
+    "broken_board_count": 1,
+    "advancing_count": 3,
+    "declining_count": 2,
+    "flat_count": 1,
+    "total_turnover": "21000000000.0",  # 21e9 yuan (sum of float64 成交额 via Decimal(str))
+    "lhb_stock_count": 2,
+    "lhb_net_sum": "120000000.0",  # 1.5e8 + (-3e7) = 1.2e8 (float64 str -> Decimal)
+    "margin_total": "12000000000",  # 8e9 yuan (SSE) + 40亿元→4e9 yuan (SZSE) = 12e9 yuan
+}
