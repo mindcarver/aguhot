@@ -196,6 +196,7 @@ export {
   getPublishedTrendBriefing,
   refreshPublishedCrashDays,
   listPublishedCrashDays,
+  toCrashDayBreadth,
 } from "./modules/publish-orchestrator/publish-service.js";
 export {
   refreshPublishedTimelineForEvent,
@@ -246,9 +247,11 @@ export type {
   GetPublishedTrendBriefingOptions,
   LeadingSector,
   PublishedCrashDay,
+  CrashDayBreadth,
   RefreshPublishedCrashDaysOptions,
   ListPublishedCrashDaysOptions,
 } from "./modules/publish-orchestrator/types.js";
+export type { MarketBreadthProjectionInput } from "./modules/publish-orchestrator/publish-service.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
 // append-only ExplanationVersion, AD-5; Story 1.9 — saveExplanation operator

@@ -111,7 +111,7 @@ development_status:
   # 北向资金砍掉(2024-08-19 后停披露)。合规门禁不变(继续 noindex + prod 不投影),律所复核范围扩到龙虎榜/涨跌停。
   # 新表 market_breadth_daily(Node/Prisma 拥有, Python 裸 SQL 写, 复刻 8-1 范式)。
   8-6-market-breadth-daily-sidecar: review           # impl+4-layer-review done (db7d637); PR open, awaits merge. spot fields nullable (NFR-5), 6 defers logged.
-  8-7-crash-breadth-projection-and-runner: backlog   # published_crash_days +breadth Json 投影 + run-market-breadth runner
+  8-7-crash-breadth-projection-and-runner: review     # impl+4-layer-review done; PR open (stacked on #19/8-6). DbNull+timeout patches; 4 defers logged.
   8-8-crash-day-detail-route: backlog                # /crash-calendar/[date] 深度详情页 + 日历索引改链
 
 action_items:
