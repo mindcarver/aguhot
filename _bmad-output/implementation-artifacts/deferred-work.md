@@ -1068,3 +1068,21 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-timeline-card-summary-clamp.md`
   summary: 卡片 `line-clamp-3` 无 E2E 验证——seed 摘要 10–20 字永不触发截断，现有 timeline.spec.ts 只断言可见
   evidence: `timeline.spec.ts` 唯一相关断言是摘要 `<p>` `.toBeVisible()`，line-clamp 前后都过（clamp 文本仍在 DOM）；`seed-timeline.ts` 摘要均 10–20 字、不足 3 行，clamp 在所有测试里是 no-op。clamp 实际生效路径（长摘要 → 卡片高度有界、详情页仍全文）零覆盖。应并入既有视觉对齐 E2E（spec-6-5-visual-alignment-e2e-and-event-card.md）：加一条 >400 字摘要的 seed，断言卡片高度有界。review Blind Hunter F2。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
+  summary: 龙虎榜 `dragon_tiger.institutionalNetBuy`/`hotMoneyNetBuy` 机构 vs 游资拆分未实现——当前 `institutionalNetBuy` 存的是全市场龙虎榜净买额合计（误标签），`hotMoneyNetBuy` 恒为 0
+  evidence: spec-8-6 step-04 adversarial + intent-alignment 审计：`fetch_dragon_tiger` 用 `stock_lhb_detail_em`（扁平 per-stock 框，无营业部 seat 拆分），把 `龙虎榜净买额` 列求和进 `institutional_net_buy`，`hot_money_net_buy=Decimal("0")` 硬编码。提案 §4 golden-example + 8.8 详情页要「机构净买 vs 游资净买」拆分，需 `stock_lhb_stock_detail_em`（per-seat 买卖明细）+ 机构/游资 seat 分类启发式（akshare 不直接标注 seat 归属）。当前把 total 误标为 institutional 会误导 8.8 消费者；修复需 seat 分类研究，归 8.8（消费方）或独立 follow-up。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
+  summary: `market_breadth_daily` upsert 用 `ON CONFLICT (trade_date) DO NOTHING`——瞬时源失败把 dragon_tiger/margin 永久锁为 NULL/坏值，重跑无法自愈
+  evidence: spec-8-6 step-04 adversarial 审计：breadth 是可重算的日聚合，但沿用 8.1 的 DO NOTHING 语义（AC2 幂等）。一次瞬时网络抖动让 dragon_tiger/margin 捕获异常→NULL，后续成功 fetch 因 DO NOTHING 永远无法修复该日。无 `--force`/DO UPDATE 自愈路径。修复 = 改 `ON CONFLICT (trade_date) DO UPDATE SET ...`（同输入仍幂等，且能自愈）或加 `--force` flag，但变更 AC2「不改写既有行」语义，需决策。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
+  summary: 涨跌家数/两市成交额历史回填无免费源——`stock_zh_a_spot_em` 仅当日；历史大跌日（8.8）的 advancing/declining/turnover 永远为 NULL
+  evidence: spec-8-6 step-04 四层审计一致：`stock_zh_a_spot_em()` 无 date 参数、仅返回最新交易日快照。8.6 已修复造假（历史日这 4 字段 NULL，NFR-5），但代价是历史 crash day 的涨跌家数/成交额在 8.8 详情页永远显空态。turnover 可考虑从 8.1 `index_daily_bars` 派生（跨表）；advancing/declining 需全市场逐股日线聚合（免费源不可得，Tushare Pro 或自算）。属产品决策：接受历史空态 / 派生 turnover / 付费源。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
+  summary: 无 A 股交易日历——`_iter_dates` 遍历日历日（含周末/节假日），backfill 对非交易日发空帧请求；失败比例分母含非交易日致阈值偏移
+  evidence: spec-8-6 step-04 edge-case 审计：`ingest_breadth` 的 `total_items += 1` 对窗口每个日历日计数（含春节等长假），`failed_items` 仅核心源抛错时计；跨长假 backfill 且某源抖动时 `FAILURE_THRESHOLD`(0.5) 退出码门会误判。且 backfill 对每个非交易日发 5 次 akshare 调用拿空帧（浪费配额）。修复 = 引入 A 股交易日历（akshare `tool_trade_date_hist_sina`）过滤 `_iter_dates` + 仅交易日计 total_items。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
+  summary: SZSE 融资余额 `×1e8`（亿元→元）归一无上限 sanity check——若深交所改以元披露会静默放大 1e8 倍
+  evidence: spec-8-6 step-04 edge-case 审计：`_sum_margin_balance` 假定 SZSE 返回亿元、SSE 返回元，对 SZSE 值 `×1e8`。无 magnitude 上限校验（如 `>1e12` 告警）。akshare 单位漂移会让 margin_balance_change 静默 corrupt。低概率，但 margin 是金融数据故登记。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
+  summary: `market_breadth_daily.trace_id` 恒为 NULL——per-source 失败 log 不回链到持久化行，排障断链
+  evidence: spec-8-6 step-04 adversarial 审计：`_aggregate_breadth_day` 硬编码 `trace_id=None`；失败记 `report.failures` log 但不写进行。一行只部分源成功（如 3/5）仍标 `source="akshare"` 整体，无 trace 关联哪些源失败。8.1 同形（沿用），但 breadth 多源放大了断链影响。修复 = 生成 trace_id 写入每行 + 失败 log 带同 trace。

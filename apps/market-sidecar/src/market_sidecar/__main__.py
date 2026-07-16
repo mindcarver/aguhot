@@ -7,9 +7,10 @@ Subcommands:
     --smoke         live smoke: last 5 trading days, index only (NOT run by tests)
 
 Scopes:
-    --scope index   三大宽基
-    --scope sector  申万一级
-  (omitting --scope runs both; --smoke forces index only)
+    --scope index    三大宽基
+    --scope sector   申万一级
+    --scope breadth  市场广度 (涨跌停/连板/炸板/涨跌家数/成交额/龙虎榜/融资融券, story 8.6)
+  (ommitting --scope runs index+sector; --smoke with breadth runs breadth only, else index)
 
 Exit code: 0 on success or below-threshold failures; 1 if the failure ratio
 exceeded FAILURE_THRESHOLD (scheduler retry signal, AD-4).
@@ -24,7 +25,7 @@ import argparse
 import logging
 import sys
 
-from .ingest import ingest_indices, ingest_sectors
+from .ingest import ingest_breadth, ingest_indices, ingest_sectors
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,9 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ing.add_argument(
         "--scope",
-        choices=("index", "sector", "both"),
+        choices=("index", "sector", "both", "breadth"),
         default="both",
-        help="index=三大宽基, sector=申万一级, both=both. --smoke forces index.",
+        help="index=三大宽基, sector=申万一级, both=index+sector, breadth=市场广度(8.6). "
+        "--smoke with breadth runs breadth; otherwise --smoke forces index.",
     )
     ing.add_argument(
         "-v", "--verbose", action="count", default=0, help="-v info, -vv debug."
@@ -64,11 +66,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "ingest":
         return 2
 
-    # --smoke is index-only by definition.
-    scope = "index" if args.smoke else args.scope
+    # --smoke is index-only by definition, UNLESS the caller explicitly asked for the
+    # breadth scope (story 8.6: breadth has its own smoke channel, SMOKE_DAYS window).
+    if args.smoke and args.scope == "breadth":
+        scope = "breadth"
+    else:
+        scope = "index" if args.smoke else args.scope
     mode = "smoke" if args.smoke else ("backfill" if args.backfill else "incremental")
 
     exit_code = 0
+    if scope == "breadth":
+        rep = ingest_breadth(mode=mode)
+        exit_code |= rep.exit_code
+        _log_report(rep)
+        return exit_code
     if scope in ("index", "both"):
         rep = ingest_indices(mode=mode)
         exit_code |= rep.exit_code

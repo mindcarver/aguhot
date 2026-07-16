@@ -21,7 +21,16 @@ import psycopg
 import pytest
 
 from market_sidecar.config import load_env
-from market_sidecar.db import IndexBar, SectorBar, connect, upsert_index_bars, upsert_sector_bars
+from market_sidecar.db import (
+    IndexBar,
+    MarketBreadthRow,
+    SectorBar,
+    connect,
+    count_breadth_rows,
+    upsert_index_bars,
+    upsert_market_breadth,
+    upsert_sector_bars,
+)
 
 load_env()
 # Strip Prisma's ?schema=public param — libpq rejects it. Tests use the bare URL
@@ -91,6 +100,26 @@ def isolated_schema():
                 );
                 CREATE UNIQUE INDEX sec_code_date_key
                     ON {TEST_SCHEMA}.sector_daily_bars(sector_code, trade_date);
+                CREATE TABLE {TEST_SCHEMA}.market_breadth_daily (
+                    id TEXT NOT NULL,
+                    trade_date DATE NOT NULL,
+                    limit_up_count INTEGER NOT NULL,
+                    limit_down_count INTEGER NOT NULL,
+                    consecutive_board_max INTEGER NOT NULL,
+                    broken_board_count INTEGER NOT NULL,
+                    advancing_count INTEGER,
+                    declining_count INTEGER,
+                    flat_count INTEGER,
+                    total_turnover DECIMAL(20,2),
+                    margin_balance_change DECIMAL(20,2),
+                    dragon_tiger JSONB,
+                    source TEXT NOT NULL,
+                    ingested_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    trace_id TEXT,
+                    CONSTRAINT br_pkey PRIMARY KEY (id)
+                );
+                CREATE UNIQUE INDEX br_trade_date_key
+                    ON {TEST_SCHEMA}.market_breadth_daily(trade_date);
                 """
             )
     # Point subsequent connections at the test schema via search_path so the
@@ -219,3 +248,113 @@ def test_decimal_not_float_round_trip(isolated_schema):
     assert typ == "numeric"
     assert str(pct) == "-2.3456"
     assert str(close) == "3500.1234"
+
+
+_BREADTH_DEFAULT_DRAGON = {
+    "stockCount": 2,
+    "institutionalNetBuy": "120000000",
+    "hotMoneyNetBuy": "0",
+    "topStocks": [],
+}
+_UNSET = object()  # sentinel: distinguish "not provided" from "explicitly None"
+
+
+def _breadth_row(
+    id_: str,
+    d: date,
+    *,
+    limit_up: int = 3,
+    turnover: str = "21000000000.00",
+    margin: str | None = "-500000000.00",
+    dragon: object = _UNSET,
+) -> MarketBreadthRow:
+    # dragon=_UNSET → use the populated default; dragon=None → explicit NULL (NFR-5 path).
+    dragon_val = _BREADTH_DEFAULT_DRAGON if dragon is _UNSET else dragon
+    return MarketBreadthRow(
+        id=id_,
+        trade_date=d,
+        limit_up_count=limit_up,
+        limit_down_count=2,
+        consecutive_board_max=4,
+        broken_board_count=1,
+        advancing_count=3,
+        declining_count=2,
+        flat_count=1,
+        total_turnover=Decimal(turnover),
+        margin_balance_change=Decimal(margin) if margin is not None else None,
+        dragon_tiger=dragon_val,
+        source="akshare",
+        ingested_at="2026-07-16T00:00:00+00:00",
+        trace_id=None,
+    )
+
+
+def test_breadth_upsert_is_idempotent(isolated_schema):
+    """AC2: re-running the same trade_date is a no-op — no duplicate, no overwrite."""
+    row1 = _breadth_row(
+        "01947cdc-1000-7000-8000-0000000000b1",
+        date(2026, 7, 14),
+        limit_up=3,
+        turnover="21000000000.00",
+        margin="-500000000.00",
+    )
+    with connect(isolated_schema) as conn:
+        n1 = upsert_market_breadth(conn, [row1])
+        # second run: SAME trade_date, different id + different counts to prove NO overwrite
+        row2 = _breadth_row(
+            "01947cdc-1000-7000-8000-0000000000b2",
+            date(2026, 7, 14),
+            limit_up=999,
+            turnover="99999999.99",
+            margin=None,
+            dragon=None,
+        )
+        n2 = upsert_market_breadth(conn, [row2])
+
+    assert n1 == 1
+    assert n2 == 1  # batch size; idempotency is row-level
+    # the real idempotency proof: re-open, count, and read preserved values
+    with connect(isolated_schema) as conn:
+        assert count_breadth_rows(conn) == 1  # still exactly 1 (no duplicate)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT limit_up_count, total_turnover, margin_balance_change, dragon_tiger "
+                "FROM market_breadth_daily WHERE trade_date='2026-07-14'"
+            )
+            lu, to, margin, dragon = cur.fetchone()
+    assert lu == 3  # original preserved, NOT overwritten by the 999 rerun
+    assert str(to) == "21000000000.00"
+    assert str(margin) == "-500000000.00"  # original margin preserved (not NULLed)
+    assert dragon is not None
+    assert dragon["stockCount"] == 2  # original dragon_tiger preserved (not NULLed)
+
+
+def test_breadth_upsert_nullable_fields_accept_null(isolated_schema):
+    """NFR-5: margin_balance_change + dragon_tiger NULLable (fetch failure → honest NULL).
+
+    A null dragon_tiger must be stored as SQL NULL (read back as Python None), NOT as a
+    JSONB scalar 'null' (which Json(None) would have produced before the params-builder fix).
+    The discriminator is the SQL predicate `dragon_tiger IS NULL`: it is True for a real
+    database NULL and False for a JSONB 'null' scalar. psycopg returns Python None for a
+    SQL NULL too, so both the Python readback AND the IS NULL predicate must hold.
+    """
+    row = _breadth_row(
+        "01947cdc-1000-7000-8000-0000000000b3",
+        date(2026, 7, 15),
+        margin=None,
+        dragon=None,
+    )
+    with connect(isolated_schema) as conn:
+        upsert_market_breadth(conn, [row])
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT margin_balance_change, dragon_tiger, dragon_tiger IS NULL "
+                "FROM market_breadth_daily WHERE trade_date='2026-07-15'"
+            )
+            margin, dragon, is_null = cur.fetchone()
+    assert margin is None
+    # dragon_tiger is a real database NULL (not a JSONB 'null' scalar): psycopg returns
+    # Python None for SQL NULL, and the SQL predicate `IS NULL` is True (it would be False
+    # for a JSONB scalar 'null').
+    assert dragon is None
+    assert is_null is True

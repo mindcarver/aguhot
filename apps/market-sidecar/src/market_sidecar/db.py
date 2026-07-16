@@ -19,6 +19,7 @@ from decimal import Decimal
 from typing import Protocol
 
 import psycopg
+from psycopg.types.json import Json
 
 from .config import database_url
 
@@ -39,6 +40,22 @@ INSERT INTO sector_daily_bars
 VALUES (%(id)s, %(sector_code)s, %(sector_name)s, %(trade_date)s, %(pct_change)s, %(close)s,
         %(source)s, %(ingested_at)s, %(trace_id)s)
 ON CONFLICT (sector_code, trade_date) DO NOTHING
+"""
+
+# Story 8.6 — market breadth single-row-per-trade_date aggregate. ON CONFLICT (trade_date)
+# DO NOTHING: re-running a trading day is a no-op and NEVER overwrites an existing row (AC2).
+# dragon_tiger is a Json column (wrapped in psycopg.types.json.Json in _breadth_params so it
+# adapts to JSONB; None → NULL); margin_balance_change is nullable (None → NULL, NFR-5).
+_BREADTH_UPSERT = """
+INSERT INTO market_breadth_daily
+    (id, trade_date, limit_up_count, limit_down_count, consecutive_board_max,
+     broken_board_count, advancing_count, declining_count, flat_count, total_turnover,
+     margin_balance_change, dragon_tiger, source, ingested_at, trace_id)
+VALUES (%(id)s, %(trade_date)s, %(limit_up_count)s, %(limit_down_count)s,
+        %(consecutive_board_max)s, %(broken_board_count)s, %(advancing_count)s,
+        %(declining_count)s, %(flat_count)s, %(total_turnover)s,
+        %(margin_balance_change)s, %(dragon_tiger)s, %(source)s, %(ingested_at)s, %(trace_id)s)
+ON CONFLICT (trade_date) DO NOTHING
 """
 
 
@@ -77,6 +94,37 @@ class SectorBar:
     trade_date: date
     pct_change: Decimal
     close: Decimal
+    source: str
+    ingested_at: str  # ISO8601 UTC
+    trace_id: str | None = None
+
+
+@dataclass(frozen=True)
+class MarketBreadthRow:
+    """One market_breadth_daily row: a single-day aggregate of 5 breadth sources.
+
+    Date-specific pool counts (limit_up/down, consecutive_board_max, broken_board_count) are int
+    and NOT NULL — they come from stock_zt_pool_* which take a date. The SPOT-derived fields
+    (advancing/declining/flat, total_turnover) are NULLABLE: stock_zh_a_spot_em() takes NO date and
+    serves ONLY the latest trading day, so a historical-day row carries None for these four fields
+    (NFR-5 honest empty, never fabricated onto past trade_dates). margin_balance_change is the
+    day-over-day 融资余额 diff (None on the first day in the window or when margin is unavailable).
+    dragon_tiger is the golden-example dict shape (see akshare_client.dragon_tiger_to_json) or
+    None on fetch failure.
+    """
+
+    id: str
+    trade_date: date
+    limit_up_count: int
+    limit_down_count: int
+    consecutive_board_max: int
+    broken_board_count: int
+    advancing_count: int | None  # spot pctChange > 0; None on non-latest days (spot is latest-day-only)
+    declining_count: int | None  # spot pctChange < 0; None on non-latest days
+    flat_count: int | None  # spot pctChange == 0; None on non-latest days
+    total_turnover: Decimal | None  # spot 成交额 sum; None on non-latest days
+    margin_balance_change: Decimal | None
+    dragon_tiger: dict[str, object] | None
     source: str
     ingested_at: str  # ISO8601 UTC
     trace_id: str | None = None
@@ -130,6 +178,20 @@ def upsert_sector_bars(conn: Connection, bars: list[SectorBar]) -> int:
         return len(payload)
 
 
+def upsert_market_breadth(conn: Connection, rows: list[MarketBreadthRow]) -> int:
+    """Upsert market breadth rows idempotently. Same semantics as the bar upserts.
+
+    ON CONFLICT (trade_date) DO NOTHING means a repeat for the same trade_date is a no-op
+    (AC2). dragon_tiger dict is sent as JSONB via psycopg's default JSON adapter.
+    """
+    if not rows:
+        return 0
+    payload = [_breadth_params(r) for r in rows]
+    with conn.cursor() as cur:
+        cur.executemany(_BREADTH_UPSERT, payload)
+        return len(payload)
+
+
 def count_index_bars(conn: Connection, index_code: str) -> int:
     """Count rows for an index code (test assertion helper)."""
     with conn.cursor() as cur:
@@ -147,6 +209,13 @@ def count_sector_bars(conn: Connection, sector_code: str) -> int:
             "SELECT count(*) FROM sector_daily_bars WHERE sector_code = %s",
             (sector_code,),
         )
+        return int(cur.fetchone()[0])
+
+
+def count_breadth_rows(conn: Connection) -> int:
+    """Count all market_breadth_daily rows (test assertion helper)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM market_breadth_daily")
         return int(cur.fetchone()[0])
 
 
@@ -174,4 +243,28 @@ def _sector_params(b: SectorBar) -> dict[str, object]:
         "source": b.source,
         "ingested_at": b.ingested_at,
         "trace_id": b.trace_id,
+    }
+
+
+def _breadth_params(r: MarketBreadthRow) -> dict[str, object]:
+    return {
+        "id": r.id,
+        "trade_date": r.trade_date,
+        "limit_up_count": r.limit_up_count,
+        "limit_down_count": r.limit_down_count,
+        "consecutive_board_max": r.consecutive_board_max,
+        "broken_board_count": r.broken_board_count,
+        "advancing_count": r.advancing_count,
+        "declining_count": r.declining_count,
+        "flat_count": r.flat_count,
+        "total_turnover": r.total_turnover,
+        "margin_balance_change": r.margin_balance_change,
+        # Wrap the dict in psycopg.types.json.Json so it adapts to JSONB. A NULL dragon_tiger
+        # must bind as SQL NULL (not JSON 'null'): Json(None) would adapt to a JSONB scalar
+        # 'null', not a database NULL. Bind Python None directly when the dict is absent
+        # (NFR-5 fetch-failure / honest empty).
+        "dragon_tiger": None if r.dragon_tiger is None else Json(r.dragon_tiger),
+        "source": r.source,
+        "ingested_at": r.ingested_at,
+        "trace_id": r.trace_id,
     }

@@ -20,6 +20,45 @@ AKSHARE PROBE RECORD (verify before trusting — AkShare function names churn):
                     returns ALL history (1999-12-30 -> present); we filter by date
                     client-side. NO pct_change column; derive from consecutive closes.
   NOTE            : ak.sw_index_daily does NOT exist in 1.18.64 (use index_hist_sw).
+
+  -- Breadth sources (story 8.6, probed 2026-07-16 against akshare 1.18.64). Each is a
+     per-trading-day snapshot; we call it once per date and aggregate into one row.
+     North-bound capital (stock_hsgt_*) is DELIBERATELY NOT collected: exchanges stopped
+     real-time disclosure on 2024-08-19, so it would fabricate empty data.
+  zt pool (涨停)   : ak.stock_zt_pool_em(date="20260714")
+                    -> columns include 序号, 代码, 名称, 涨停价, 最新价, 成交额, 流通市值,
+                       封板资金, 首次封板时间, 最后封板时间, 炸板次数, 涨停统计, 连板数, ...
+                    row count = limit-up count; 连板数 max = consecutive board max.
+  dtgc pool (跌停) : ak.stock_zt_pool_dtgc_em(date="20260714")
+                    -> same column family as zt pool; row count = limit-down count.
+  zbgc pool (炸板) : ak.stock_zt_pool_zbgc_em(date="20260714")
+                    -> same column family; row count = broken-board count.
+  spot (涨跌家数)  : ak.stock_zh_a_spot_em()
+                    -> columns include 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, ...
+                    ALL A-share spots for the latest trading day (no date param). We derive
+                    advancing/declining/flat from 涨跌幅 sign and total_turnover = sum(成交额).
+  dragon tiger    : ak.stock_lhb_detail_em(start_date="20260714", end_date="20260714")
+                    -> columns include 序号, 代码, 名称, 收盘价, 涨跌幅, 龙虎榜净买额, ...
+                    NOTE: takes a start_date/end_date RANGE (not a single date). For one day
+                    we pass the same date as both bounds. One row per stock that appeared on
+                    the dragon-tiger list that day. Empty frame ⇒ no stock listed that day
+                    (honest zero object, not NULL).
+  margin (融资融券): ak.stock_margin_sse(start_date="20260714", end_date="20260714")   (上交所汇总)
+                  & ak.stock_margin_szse(date="20260714")                             (深交所汇总)
+                    -> SSE cols: 信用交易日期, 融资余额, 融资买入额, 融券余量, 融券余量金额,
+                       融券卖出量, 融资融券余额  (values in YUAN, e.g. 759423798637)
+                    -> SZSE cols: 融资买入额, 融资余额, 融券卖出量, 融券余量, 融券余额,
+                       融资融券余额  (values in 亿元/100M yuan, e.g. 6770.18)
+                    UNIT MISMATCH: SSE is in yuan, SZSE is in 亿元 (×1e8). We normalize SZSE
+                    → yuan (×1e8) before summing. Both are 融资融券汇总 (market-wide aggregate),
+                    T-1 data (exchange disclosure lag). We sum 融资余额 across both exchanges
+                    for one date; the wrapper returns MarginBalance(total=...). The day-over-day
+                    diff (margin_balance_change) is computed by the ingest loop across consecutive
+                    days (total[D] - total[D-1]); else margin_balance_change is NULL (NFR-5).
+  NOTE            : stock_zt_pool_* take date="YYYYMMDD" (string, no dashes).
+                    stock_lhb_detail_em takes start_date=end_date="YYYYMMDD" for one day.
+                    stock_margin_sse takes start_date/end_date="YYYYMMDD"; stock_margin_szse
+                    takes date="YYYYMMDD". stock_zh_a_spot_em takes NO date (latest day only).
 ----
 
 Fixture injection: the fetch functions accept an optional `ak_module` param so
@@ -37,6 +76,12 @@ from typing import Any, Protocol
 # 三大宽基 (AkShare symbol form, with exchange prefix).
 BROAD_INDICES: tuple[str, ...] = ("sh000001", "sz399001", "sz399006")
 
+# Cap on the per-stock list serialized into the dragon_tiger JSONB column. A heavy listing
+# day can name hundreds of stocks; we keep the top N by net buy to bound the JSONB payload.
+# The aggregates (stockCount, institutionalNetBuy, hotMoneyNetBuy) stay UNCAPPED — only the
+# per-stock `topStocks` list is trimmed.
+DRAGON_TIGER_TOP_N = 20
+
 
 class AkModule(Protocol):
     """Structural type for the akshare module + fakes."""
@@ -44,6 +89,14 @@ class AkModule(Protocol):
     def stock_zh_index_daily(self, symbol: str) -> Any: ...
     def sw_index_first_info(self) -> Any: ...
     def index_hist_sw(self, symbol: str, period: str) -> Any: ...
+    # Breadth (story 8.6):
+    def stock_zt_pool_em(self, date: str) -> Any: ...
+    def stock_zt_pool_dtgc_em(self, date: str) -> Any: ...
+    def stock_zt_pool_zbgc_em(self, date: str) -> Any: ...
+    def stock_zh_a_spot_em(self) -> Any: ...
+    def stock_lhb_detail_em(self, start_date: str, end_date: str) -> Any: ...
+    def stock_margin_szse(self, date: str) -> Any: ...
+    def stock_margin_sse(self, start_date: str, end_date: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -135,6 +188,359 @@ def fetch_sector_daily(
     rows = _parse_sector_frame(df, sector)
     rows = _apply_date_window(rows, start_date, end_date)
     return _with_pct_change(rows)
+
+
+# --- breadth fetch wrappers (story 8.6) ---
+
+
+@dataclass(frozen=True)
+class LimitPoolStats:
+    """Counts derived from a 涨停/跌停/炸板 pool frame for one trade date.
+
+    row_count = number of stocks in the pool; consecutive_max is only meaningful for the
+    涨停 pool (连板数 column); for the 跌停/炸板 pools consecutive_max stays None.
+    """
+
+    trade_date: date
+    row_count: int
+    consecutive_max: int | None  # max 连板数 from the 涨停 pool; None for dt/zb pools
+
+
+@dataclass(frozen=True)
+class SpotBreadth:
+    """Advancing/declining/flat counts + total turnover from stock_zh_a_spot_em."""
+
+    trade_date: date
+    advancing_count: int  # 涨跌幅 > 0
+    declining_count: int  # 涨跌幅 < 0
+    flat_count: int  # 涨跌幅 == 0 (or NaN/None treated as flat)
+    total_turnover: Decimal  # sum(成交额) across all spots, in yuan
+
+
+@dataclass(frozen=True)
+class DragonTiger:
+    """Aggregated dragon-tiger (龙虎榜) stats for one trade date.
+
+    The golden-example shape stored in market_breadth_daily.dragon_tiger Json:
+      {stockCount, institutionalNetBuy, hotMoneyNetBuy,
+       topStocks:[{code,name,netBuy,reason}]}
+    institutional/hotMoney net buy are best-effort from the 龙虎榜净买额 column family
+    (akshare flattens the buy/sell sides; we take the row-level net where available and
+    0 where the column is absent — honest zero, never fabricated, NFR-5).
+    """
+
+    stock_count: int
+    institutional_net_buy: Decimal
+    hot_money_net_buy: Decimal
+    top_stocks: list[dict[str, object]]  # [{code,name,netBuy,reason}]
+
+
+@dataclass(frozen=True)
+class MarginBalance:
+    """融资融券余额合计 (T-1) for one trade date, in yuan (SSE+SZSE normalized).
+
+    total is the sum of 融资余额 across both exchanges (SSE in yuan, SZSE in 亿元 normalized ×1e8).
+    The DAY-OVER-DAY change is NOT derivable from a single call — it requires a prior day's
+    total, which the ingest loop tracks across the date window and diffs. total is None when
+    BOTH exchange fetches failed or returned no 融资余额 column (NFR-5 honest empty, not fabricated).
+    """
+
+    trade_date: date
+    total: Decimal | None  # SSE+SZSE 融资余额 sum in yuan; None if both exchanges unavailable
+
+
+def fetch_limit_pool(
+    trade_date: date,
+    *,
+    ak_module: AkModule | None = None,
+) -> LimitPoolStats:
+    """涨停池 (stock_zt_pool_em): row count + max 连板数 for one trade date.
+
+    date is formatted as "YYYYMMDD" (akshare convention, no dashes). An empty frame is a
+    valid honest zero (no limit-up stocks that day) — returned as row_count=0,
+    consecutive_max=0 (NOT None: the 涨停 pool always has the 连板数 column).
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    df = ak.stock_zt_pool_em(date=_yyyymmdd(trade_date))
+    row_count, consecutive_max = _pool_counts(df, with_consecutive=True)
+    return LimitPoolStats(
+        trade_date=trade_date,
+        row_count=row_count,
+        consecutive_max=consecutive_max,
+    )
+
+
+def fetch_limit_down_pool(
+    trade_date: date,
+    *,
+    ak_module: AkModule | None = None,
+) -> LimitPoolStats:
+    """跌停池 (stock_zt_pool_dtgc_em): row count for one trade date.
+
+    consecutive_max is None (the 跌停 pool has no 连板数 column).
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    df = ak.stock_zt_pool_dtgc_em(date=_yyyymmdd(trade_date))
+    row_count, _ = _pool_counts(df, with_consecutive=False)
+    return LimitPoolStats(trade_date=trade_date, row_count=row_count, consecutive_max=None)
+
+
+def fetch_broken_board(
+    trade_date: date,
+    *,
+    ak_module: AkModule | None = None,
+) -> LimitPoolStats:
+    """炸板池 (stock_zt_pool_zbgc_em): row count for one trade date.
+
+    consecutive_max is None (the 炸板 pool has no 连板数 column).
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    df = ak.stock_zt_pool_zbgc_em(date=_yyyymmdd(trade_date))
+    row_count, _ = _pool_counts(df, with_consecutive=False)
+    return LimitPoolStats(trade_date=trade_date, row_count=row_count, consecutive_max=None)
+
+
+def fetch_spot_breadth(
+    trade_date: date,
+    *,
+    ak_module: AkModule | None = None,
+) -> SpotBreadth:
+    """A-share spot (stock_zh_a_spot_em): advancing/declining/flat + total turnover.
+
+    stock_zh_a_spot_em returns the LATEST trading day's spots (no date param); the caller
+    must pass trade_date matching that latest day. We derive counts from the 涨跌幅 sign
+    and turnover = sum(成交额). Rows with NaN/None pct are counted as flat (never dropped,
+    NFR-5). turnover is Decimal (sum of yuan, not float).
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    df = ak.stock_zh_a_spot_em()
+    advancing = declining = flat = 0
+    turnover = Decimal("0")
+    for _, row in df.iterrows():
+        pct = _to_decimal_or_none(row.get("涨跌幅"))
+        if pct is None or pct == 0:
+            flat += 1
+        elif pct > 0:
+            advancing += 1
+        else:
+            declining += 1
+        amt = _to_decimal_or_none(row.get("成交额"))
+        if amt is not None:
+            turnover += amt
+    return SpotBreadth(
+        trade_date=trade_date,
+        advancing_count=advancing,
+        declining_count=declining,
+        flat_count=flat,
+        total_turnover=turnover,
+    )
+
+
+def fetch_dragon_tiger(
+    trade_date: date,
+    *,
+    ak_module: AkModule | None = None,
+) -> DragonTiger:
+    """龙虎榜 (stock_lhb_detail_em): aggregate stats for one trade date.
+
+    An empty frame ⇒ an honest zero object (no stock listed that day): stockCount=0,
+    nets=0, topStocks=[]. This is NOT NULL — NULL is reserved for a fetch failure (the
+    per-source try/except in ingest_breadth converts a raised exception to None). We do
+    not attempt to split institutional vs hot-money net buy from the flattened detail
+    frame (that needs the buying/selling seat breakdown); we report the row-level 龙虎榜
+    净买额 sum as institutional_net_buy and leave hot_money_net_buy at 0 — honest given
+    the available columns, and the 8.8 page can refine in a later story.
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    # stock_lhb_detail_em takes a start_date/end_date RANGE; for one day pass both as the
+    # same date (probed akshare 1.18.64 signature).
+    d = _yyyymmdd(trade_date)
+    df = ak.stock_lhb_detail_em(start_date=d, end_date=d)
+    if df is None or len(df) == 0:
+        return DragonTiger(
+            stock_count=0,
+            institutional_net_buy=Decimal("0"),
+            hot_money_net_buy=Decimal("0"),
+            top_stocks=[],
+        )
+    net_sum = Decimal("0")
+    top: list[dict[str, object]] = []
+    for _, row in df.iterrows():
+        net = _to_decimal_or_none(row.get("龙虎榜净买额")) or Decimal("0")
+        net_sum += net
+        top.append(
+            {
+                "code": str(row.get("代码", "")).strip(),
+                "name": str(row.get("名称", "")).strip(),
+                "netBuy": _decimal_to_jsonable(net),
+                "reason": str(row.get("上榜原因", "")).strip(),
+            }
+        )
+    return DragonTiger(
+        stock_count=len(df),
+        institutional_net_buy=net_sum,
+        hot_money_net_buy=Decimal("0"),
+        top_stocks=top,
+    )
+
+
+def fetch_margin(
+    trade_date: date,
+    *,
+    ak_module: AkModule | None = None,
+) -> MarginBalance:
+    """融资融券余额合计 (T-1): sum 融资余额 across SSE+SZSE for the given date, in yuan.
+
+    stock_margin_sse / stock_margin_szse are DATE-SPECIFIC (SSE takes a start/end range, SZSE
+    takes a single date), so each call returns exactly one day's aggregate. We sum 融资余额
+    across both exchanges (SZSE in 亿元 normalized ×1e8 to yuan, matching SSE). The DAY-OVER-DAY
+    change is computed by the ingest loop across consecutive days; this wrapper returns only the
+    balance TOTAL for the date (None when both exchanges are unavailable — honest empty, NFR-5).
+    This keeps the wrapper a faithful "one source, one date" translation (AD-7).
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    total = _sum_margin_balance(ak, trade_date)
+    return MarginBalance(trade_date=trade_date, total=total)
+
+
+def dragon_tiger_to_json(dt: DragonTiger) -> dict[str, object]:
+    """Serialize a DragonTiger to the golden-example Json shape for the DB column.
+
+    The per-stock `topStocks` list is capped to DRAGON_TIGER_TOP_N (20) by net buy (desc)
+    so a heavy listing day cannot produce an unbounded JSONB payload. The aggregate fields
+    (stockCount, institutionalNetBuy, hotMoneyNetBuy) are UNCAPPED — stockCount reflects
+    the full listing count, only the detail list is trimmed.
+    """
+    top = sorted(
+        dt.top_stocks,
+        key=lambda s: _to_decimal_or_none(s.get("netBuy")) or Decimal("0"),
+        reverse=True,
+    )[:DRAGON_TIGER_TOP_N]
+    return {
+        "stockCount": dt.stock_count,
+        "institutionalNetBuy": _decimal_to_jsonable(dt.institutional_net_buy),
+        "hotMoneyNetBuy": _decimal_to_jsonable(dt.hot_money_net_buy),
+        "topStocks": top,
+    }
+
+
+# --- breadth frame parsing helpers ---
+
+
+def _pool_counts(df: Any, *, with_consecutive: bool) -> tuple[int, int | None]:
+    """Row count + optional max 连板数 from a zt/dt/zb pool frame.
+
+    Returns (row_count, consecutive_max_or_None). An empty/None frame is (0, 0) when
+    with_consecutive else (0, None) — honest zero counts, never fabricated (NFR-5).
+    """
+    if df is None or len(df) == 0:
+        return 0, (0 if with_consecutive else None)
+    row_count = len(df)
+    consecutive_max: int | None = None
+    if with_consecutive:
+        consecutive_max = 0
+        col = _first_present_column(df, ("连板数", "连板"))
+        if col is not None:
+            for v in df[col]:
+                iv = _to_int_or_none(v)
+                if iv is not None and iv > (consecutive_max or 0):
+                    consecutive_max = iv
+    return row_count, consecutive_max
+
+
+def _sum_margin_balance(ak: AkModule, trade_date: date) -> Decimal | None:
+    """Sum 融资余额 across SSE + SZSE for one date (both normalized to yuan). None if both fail.
+
+    SSE (stock_margin_sse) returns 融资余额 in YUAN. SZSE (stock_margin_szse) returns 融资余额
+    in 亿元 (×1e8) — we normalize to yuan before summing so the two exchanges are comparable.
+    stock_margin_sse takes a start_date/end_date range; for one day we pass both as the same
+    date. stock_margin_szse takes a single date.
+    """
+    total = Decimal("0")
+    got_any = False
+    d = _yyyymmdd(trade_date)
+
+    # SSE (yuan): stock_margin_sse(start_date, end_date)
+    fn_sse = getattr(ak, "stock_margin_sse", None)
+    if fn_sse is not None:
+        try:
+            df = fn_sse(start_date=d, end_date=d)
+        except Exception:  # noqa: BLE001 — one exchange missing is not fatal
+            df = None
+        if df is not None and len(df) > 0:
+            col = _first_present_column(df, ("融资余额",))
+            if col is not None:
+                got_any = True
+                for v in df[col]:
+                    val = _to_decimal_or_none(v)
+                    if val is not None:
+                        total += val  # SSE already yuan
+
+    # SZSE (亿元 → yuan): stock_margin_szse(date)
+    fn_szse = getattr(ak, "stock_margin_szse", None)
+    if fn_szse is not None:
+        try:
+            df = fn_szse(date=d)
+        except Exception:  # noqa: BLE001 — one exchange missing is not fatal
+            df = None
+        if df is not None and len(df) > 0:
+            col = _first_present_column(df, ("融资余额",))
+            if col is not None:
+                got_any = True
+                for v in df[col]:
+                    val = _to_decimal_or_none(v)
+                    if val is not None:
+                        total += val * Decimal("100000000")  # 亿元 → yuan (×1e8)
+
+    return total if got_any else None
+
+
+def _first_present_column(df: Any, candidates: tuple[str, ...]) -> str | None:
+    """Return the first candidate column name present in the frame (column-name drift guard)."""
+    cols = set(str(c) for c in df.columns)
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+
+def _yyyymmdd(d: date) -> str:
+    """Format a date as akshare's 'YYYYMMDD' (no dashes)."""
+    return d.strftime("%Y%m%d")
+
+
+def _to_int_or_none(v: Any) -> int | None:
+    """Coerce numpy int / float / str to int; None on failure."""
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
+
+def _to_decimal_or_none(v: Any) -> Decimal | None:
+    """Coerce a numeric cell to Decimal, tolerating NaN/None. None on failure/NaN."""
+    if v is None:
+        return None
+    try:
+        # Detect NaN (numpy/pandas) without importing numpy: NaN != NaN.
+        if v != v:  # noqa: PLR0124 — intentional NaN check
+            return None
+    except Exception:  # noqa: BLE001 — non-numeric types fall through
+        pass
+    try:
+        return Decimal(str(v))
+    except Exception:  # noqa: BLE001 — invalid value -> None (honest empty)
+        return None
+
+
+def _decimal_to_jsonable(d: Decimal) -> str:
+    """Render a Decimal as a JSON-safe string (Json columns cannot hold Decimal)."""
+    return str(d)
 
 
 # --- frame parsing (column-name normalization) ---
