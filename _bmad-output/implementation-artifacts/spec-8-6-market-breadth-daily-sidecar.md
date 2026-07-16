@@ -2,8 +2,9 @@
 title: '市场广度数据采集 sidecar --scope breadth (8.6)'
 type: 'feature'
 created: '2026-07-16'
-status: 'in-review'
+status: 'done'
 baseline_revision: '7047f46695c4cf30bb96e0f49d5baed0fb796b00'
+final_revision: 'db7d63741cf562543fb161224b662c2937074b98'
 review_loop_iteration: 0
 followup_review_recommended: true
 context:
