@@ -584,12 +584,55 @@ export interface LeadingSector {
 }
 
 /**
+ * The market-breadth projection for one crash day (Story 8.7). Materialized from
+ * market_breadth_daily (8.6) by refreshPublishedCrashDays: a DISPLAY-ONLY subset of the raw
+ * breadth row — counts + turnover + margin + dragonTiger. It deliberately does NOT carry the
+ * raw row's provenance metadata (id/source/ingestedAt/traceId); the published read model has
+ * its own `source`/`publishedAt`/`traceId` on the parent published_crash_days row.
+ *
+ * Field mapping (raw market_breadth_daily → projected CrashDayBreadth):
+ *   - limitUpCount / limitDownCount / consecutiveBoardMax / brokenBoardCount: non-null counts
+ *     (raw columns are NOT NULL — a breadth row only exists when the date-specific pool sources
+ *     returned data, NFR-5). Copied verbatim as number.
+ *   - advancingCount / decliningCount / flatCount: nullable (stock_zh_a_spot_em serves ONLY the
+ *     latest trading day, so historical-day breadth rows are NULL — NFR-5 honest empty). Copied
+ *     verbatim as number|null; the page renders NULL as "—" (never zeroed, never fabricated).
+ *   - totalTurnover / marginBalanceChange: Decimal in the raw row, `.toNumber()`-converted at
+ *     projection time (mirrors leadingSectors.pctChange). Nullable; NULL passes through as null.
+ *   - dragonTiger: the 8.6 Json aggregate ({stockCount, institutionalNetBuy, hotMoneyNetBuy,
+ *     topStocks:[...]}) or null. Passed through verbatim as `unknown` — the projection layer
+ *     does NOT re-validate the Json shape (8.6 guarantees the form); 8.8 renders it.
+ *
+ * This is the SOLE breadth surface the /crash-calendar/[date] deep-detail page (8.8) consumes;
+ * the page never reads market_breadth_daily directly (AD-3). The projection helper
+ * (toCrashDayBreadth) is a pure exported function with a focused selfcheck (AC7).
+ */
+export interface CrashDayBreadth {
+  limitUpCount: number;
+  limitDownCount: number;
+  consecutiveBoardMax: number;
+  brokenBoardCount: number;
+  advancingCount: number | null;
+  decliningCount: number | null;
+  flatCount: number | null;
+  totalTurnover: number | null;
+  marginBalanceChange: number | null;
+  /** 8.6 dragon-tiger Json aggregate ({stockCount,...,topStocks:[...]}) or null. Passthrough. */
+  dragonTiger: unknown | null;
+}
+
+/**
  * The projected public crash-day row for one tradeDate (Story 8.3). Mirrors
  * published_crash_days. `indices` is copied verbatim from crash_days (IndexCrashDetail[]: the
  * three broad indices' pctChange/close/crashed/forwardReturns for that day); `leadingSectors`
  * is the Top-N down 申万一级 sectors materialized from sector_daily_bars. The /crash-calendar
  * page renders the calendar grid (highlighting crash days), the leading-sector list
  * (ReactionChip tone="down"), and the T+1/T+5/T+20 forward-return table from one row.
+ *
+ * `breadth` (Story 8.7) is the market-breadth projection from market_breadth_daily (8.6), or
+ * `null` when the breadth row is absent / the read failed (NFR-5 — the published row is still
+ * upserted; breadth failure never blocks it). The /crash-calendar/[date] page (8.8) renders
+ * breadth's five sections or the honest empty state when null.
  *
  * Row existence = a currently-published crash day (no status column). Absent when
  * refreshPublishedCrashDays has not projected a crash_days row (V1/§12-Q10 gate: prod does not
@@ -605,6 +648,7 @@ export interface PublishedCrashDay {
   crashCount: number;
   indices: IndexCrashDetail[];
   leadingSectors: LeadingSector[];
+  breadth: CrashDayBreadth | null;
   source: string;
   publishedAt: Date;
 }

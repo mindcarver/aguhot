@@ -1086,3 +1086,15 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
   summary: `market_breadth_daily.trace_id` 恒为 NULL——per-source 失败 log 不回链到持久化行，排障断链
   evidence: spec-8-6 step-04 adversarial 审计：`_aggregate_breadth_day` 硬编码 `trace_id=None`；失败记 `report.failures` log 但不写进行。一行只部分源成功（如 3/5）仍标 `source="akshare"` 整体，无 trace 关联哪些源失败。8.1 同形（沿用），但 breadth 多源放大了断链影响。修复 = 生成 trace_id 写入每行 + 失败 log 带同 trace。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-7-crash-breadth-projection-and-runner.md`
+  summary: breadth 投影的关键集成路径无自动测试——AC2 throw→null / AC3 runner 退出逻辑 / AC4 幂等仅靠结构正确性 + 手动 e2e
+  evidence: spec-8-7 step-04 verification-gap + intent-alignment 审计：selfcheck 仅覆盖纯 helper `toCrashDayBreadth`（AC1 + AC2 null 纯分量）。`refreshPublishedCrashDays` 的 inner try/catch「breadth 失败→null 且行仍 upsert」（AC2 最核心不变量）、`run-market-breadth.ts` 的 spawn/退出码分支（AC3）、upsert by tradeDate 幂等（AC4）均无可执行测试。repo 无 Node PG-test / prisma-mock harness（只有纯 `.selfcheck.ts` + 需 live PG 的 `verify-*` 脚本），引入 prisma-mock 为单不变量过度设计。修复路径 = 平台 CI 接入 service-container PG 后，加 `verify-breadth-projection` 集成脚本（或 prisma stub）覆盖三路径。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-7-crash-breadth-projection-and-runner.md`
+  summary: breadth「缺行」与「读失败」在读模型不可区分 + per-date 警告不带 traceId——失败被静默吞成 null
+  evidence: spec-8-7 step-04 adversarial #1/#2 审计：`Prisma.DbNull`（已修）让「缺行」与「读失败」都落 SQL NULL，页端无法区分「sidecar 没跑」（可重试） vs 「读真的失败了」（该看 log）；inner catch 仅 `console.warn` 不带 runner 的 traceId，cron 运营者无法把 per-date breadth 警告关联回 runner 调用。修复 = 加 `breadthStatus` 判别字段（absent/read_failed/ok）或在 breadth 失败 log 带 traceId；以及 inner catch 区分 systemic 错误（DB 连接/schema drift，应 fail-fast）vs per-date not-found（吞成 null）。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-7-crash-breadth-projection-and-runner.md`
+  summary: runner `--from/--to` 只 bound 投影不传 sidecar——历史区间 re-project 静默读既有 breadth（可能全 null）
+  evidence: spec-8-7 step-04 adversarial #8 审计：sidecar `--incremental` 固定近窗（~7 日），runner 的 `--from/--to` 仅传 `refreshPublishedCrashDays` bound 投影范围。运营者跑 `--from 2024-01-01 --to 2024-03-01` 期望历史 breadth 刷新，但 sidecar 只拉本周 → 投影读 Q1 既有 breadth（若无 → 全 null），`projected N` 无警告。修复 = runner 检测 `--from/--to` 超出 sidecar 近窗时 log caveat，或文档化「历史 backfill breadth 须人直跑 sidecar --backfill」。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-7-crash-breadth-projection-and-runner.md`
+  summary: `refreshPublishedCrashDays` 的 breadth findUnique + upsert 非事务——并发 refresh 竞态（last-writer-wins）
+  evidence: spec-8-7 step-04 edge-case 审计：breadth 读（`findUnique`）与写（`upsert`）两步非事务；两次并发 `refreshPublishedCrashDays`（如 cron 与手动并发）在读写间交错可投影到 stale breadth。V1 无并发触发（runner 手动/单 cron，非并发）故不可达；引入并发 worker 触发时需 `prisma.$transaction` 包住 read+write（覆盖所有 published_* 投影，沿用 spec-2-2 并发 defer 同型）。

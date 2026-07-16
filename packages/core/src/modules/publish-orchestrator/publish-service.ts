@@ -61,7 +61,8 @@
  * writes published_daily_digests — it never reads hot_events / evidence_*.
  */
 
-import type { Prisma, PrismaClient } from "../../../generated/client.js";
+import { Prisma } from "../../../generated/client.js";
+import type { PrismaClient } from "../../../generated/client.js";
 import { newTraceId } from "../../shared/ids.js";
 import type { PublishAction } from "../review-workflow/types.js";
 import type { TargetCandidate } from "../investment-targets/types.js";
@@ -73,6 +74,7 @@ import {
 import { EvidenceLinkStatus } from "./types.js";
 import type {
   AssociationItem,
+  CrashDayBreadth,
   DailyDigestEntry,
   GetPublishedDailyDigestOptions,
   GetPublishedHotEventDetailOptions,
@@ -1445,6 +1447,62 @@ function crashDayToDate(day: string): Date {
 }
 
 /**
+ * Structural input shape for toCrashDayBreadth — the subset of a market_breadth_daily row the
+ * projection reads. Defined structurally (NOT as the Prisma model type) so the helper is a PURE
+ * function: the focused selfcheck (AC7) can feed it plain objects without a live DB, and the
+ * projection site passes the Prisma row which is structurally compatible (Decimal has toNumber).
+ * Mirrors crash-logic.selfcheck.ts's `Dec = { toNumber: () => number }` pattern. The two Decimal
+ * fields are typed as `{ toNumber(): number } | null` — that is the structural contract Prisma's
+ * runtime.Decimal satisfies, so the helper never imports Prisma's Decimal class directly.
+ */
+export interface MarketBreadthProjectionInput {
+  limitUpCount: number;
+  limitDownCount: number;
+  consecutiveBoardMax: number;
+  brokenBoardCount: number;
+  advancingCount: number | null;
+  decliningCount: number | null;
+  flatCount: number | null;
+  totalTurnover: { toNumber(): number } | null;
+  marginBalanceChange: { toNumber(): number } | null;
+  dragonTiger: unknown | null;
+}
+
+/**
+ * Project a raw market_breadth_daily row into the display-only CrashDayBreadth subset (Story 8.7).
+ * PURE function — no DB, no I/O, no Prisma import. Exported so the focused selfcheck (AC7) can pin
+ * the I/O Matrix mapping edges:
+ *   - Decimal fields (totalTurnover/marginBalanceChange) → `.toNumber()` (mirrors
+ *     leadingSectors.pctChange); null passes through as null (no zeroing).
+ *   - nullable breadth fields (advancing/declining/flat, from 8.6's latest-day-only spot source)
+ *     keep their null verbatim — NEVER coerced to 0 (NFR-5 honest empty, not fabricated).
+ *   - dragonTiger (8.6 Json aggregate or null) passes through as `unknown` — the projection layer
+ *     does NOT re-validate the Json shape (8.6 guarantees the form; 8.8 renders it).
+ *   - non-null counts (limitUp/limitDown/consecutiveBoard/brokenBoard) copied verbatim — the raw
+ *     columns are NOT NULL (a breadth row only exists when the date-specific pool sources returned
+ *     data, NFR-5).
+ *
+ * The caller (refreshPublishedCrashDays) handles the null-row case BEFORE calling this: a missing
+ * market_breadth_daily row (findUnique → null) yields `breadth: null` directly without invoking
+ * this helper (so "row absent" and "row present but a field is null" stay distinct).
+ */
+export function toCrashDayBreadth(row: MarketBreadthProjectionInput): CrashDayBreadth {
+  return {
+    limitUpCount: row.limitUpCount,
+    limitDownCount: row.limitDownCount,
+    consecutiveBoardMax: row.consecutiveBoardMax,
+    brokenBoardCount: row.brokenBoardCount,
+    advancingCount: row.advancingCount,
+    decliningCount: row.decliningCount,
+    flatCount: row.flatCount,
+    totalTurnover: row.totalTurnover !== null ? row.totalTurnover.toNumber() : null,
+    marginBalanceChange:
+      row.marginBalanceChange !== null ? row.marginBalanceChange.toNumber() : null,
+    dragonTiger: row.dragonTiger,
+  };
+}
+
+/**
  * Refresh the published_crash_days read model (Story 8.3). A SIBLING to
  * refreshPublishedDailyDigest AND refreshPublishedTrendBriefing, NOT a branch in the
  * hotEventId-keyed refreshPublishedReadModel: a crash day is a tradeDate-keyed statistics
@@ -1458,21 +1516,30 @@ function crashDayToDate(day: string): Date {
  * trade day (materialized, never stale for historical bars). Per-date try/catch isolation mirrors
  * crash-review's upsertCrashDays (AC4): a single date's failure skips it, not the batch.
  *
+ * Story 8.7 — the loop ALSO reads market_breadth_daily (8.6, read-only — AD-7) per crash day and
+ * materializes a `breadth` (CrashDayBreadth) projection into the upsert. The breadth read is in its
+ * OWN inner try/catch (NOT the outer per-date try that skips the whole row on failure): a breadth
+ * read failure OR a missing breadth row yields `breadth: null` and the published crash-day row is
+ * STILL upserted (breadth NEVER blocks the published row — NFR-5 + AC2). The 8.6 nullable fields
+ * (advancing/declining/flat/totalTurnover/marginBalanceChange) keep their null verbatim inside
+ * toCrashDayBreadth (never zeroed); dragonTiger Json passes through as unknown.
+ *
  * Self-heal: prunes published_crash_days rows whose crash_days source no longer exists within the
  * scanned scope (mirrors published_* deleteMany-on-takedown semantics). Idempotent; re-running a
- * range refreshes existing rows (leadingSectors/forwardReturns stay current) without duplicates.
- * Scope note: a bounded (`--from/--to`) call only touches rows in that range — it prunes a
- * published row whose crash_days source vanished in-range, but never deletes rows outside the
- * range. Only an unbounded call (no from/to) is a full reconcile.
+ * range refreshes existing rows (leadingSectors/breadth/forwardReturns stay current) without
+ * duplicates. Scope note: a bounded (`--from/--to`) call only touches rows in that range — it
+ * prunes a published row whose crash_days source vanished in-range, but never deletes rows outside
+ * the range. Only an unbounded call (no from/to) is a full reconcile.
  *
  * Compliance gate (§12 Q10): prod does NOT call this until the financial-info review clears — row
  * absence ⇒ /crash-calendar renders the honest empty state. The dev trigger is run-crash-review.ts
- * calling this right after upsertCrashDays (runner is wiring; the projection write is still owned
- * by publish-orchestrator — crash-review's module boundary is unchanged).
+ * (calling this right after upsertCrashDays) and run-market-breadth.ts (8.7, spawns the breadth
+ * sidecar then calls this). Both runners are wiring; the projection write is still owned by
+ * publish-orchestrator — crash-review's module boundary is unchanged.
  *
- * This query only reads crash_days + sector_daily_bars and writes published_crash_days. It never
- * reads hot_events / evidence_* / index_daily_bars directly (AD-3: published_crash_days is the sole
- * public surface for /crash-calendar).
+ * This query only reads crash_days + sector_daily_bars + market_breadth_daily and writes
+ * published_crash_days. It never reads hot_events / evidence_* / index_daily_bars directly (AD-3:
+ * published_crash_days is the sole public surface for /crash-calendar).
  */
 export async function refreshPublishedCrashDays(
   options: RefreshPublishedCrashDaysOptions,
@@ -1526,6 +1593,47 @@ export async function refreshPublishedCrashDays(
       const indicesJson = row.indices as unknown as Prisma.InputJsonValue;
       const leadingJson = leadingSectors as unknown as Prisma.InputJsonValue;
 
+      // Story 8.7 — market-breadth projection from market_breadth_daily (8.6). This read is wrapped
+      // in its OWN inner try/catch (NOT the outer per-date try that `continue`s on failure): a
+      // breadth read failure must yield `breadth: null` and STILL upsert the published crash-day
+      // row (breadth NEVER blocks the published row — NFR-5 + AC2). A missing breadth row (sidecar
+      // has not run that day / predates breadth collection) → findUnique returns null → breadth
+      // null. The 8.6 nullable fields (advancing/declining/flat/totalTurnover/marginBalanceChange)
+      // keep their null verbatim inside toCrashDayBreadth (never zeroed); dragonTiger Json passes
+      // through as unknown. 8.1/8.6 own market_breadth_daily; this is a read-only projection.
+      let breadth: CrashDayBreadth | null;
+      try {
+        const breadthRow = await prisma.marketBreadthDaily.findUnique({
+          where: { tradeDate: row.tradeDate },
+          select: {
+            limitUpCount: true,
+            limitDownCount: true,
+            consecutiveBoardMax: true,
+            brokenBoardCount: true,
+            advancingCount: true,
+            decliningCount: true,
+            flatCount: true,
+            totalTurnover: true,
+            marginBalanceChange: true,
+            dragonTiger: true,
+          },
+        });
+        breadth = breadthRow === null ? null : toCrashDayBreadth(breadthRow);
+      } catch (breadthErr) {
+        breadth = null;
+        console.warn(
+          `[publish-orchestrator] breadth read failed for ${row.tradeDate.toISOString()} (breadth=null, published row still upserted): ${(breadthErr as Error).message}`,
+        );
+      }
+      // breadth absent (no row / read failed) ⇒ SQL NULL, NOT the JSON value `null`. Prisma.JsonNull
+      // stores the JSON literal null (a distinct value that reads back as null-ish but is NOT column-
+      // absent); Prisma.DbNull writes a true SQL NULL on a `Json?` column. "breadth absent" is
+      // semantically "the column has no value" (matches the 8.6 side, which writes SQL NULL for
+      // absent data), so DbNull is the correct sentinel. Read-back: Prisma returns JS null for SQL
+      // NULL on a `Json?` field (listPublishedCrashDays casts that through unknown to breadth: null).
+      const breadthJson: Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue =
+        breadth === null ? Prisma.DbNull : (breadth as unknown as Prisma.InputJsonValue);
+
       await prisma.publishedCrashDay.upsert({
         where: { tradeDate: row.tradeDate },
         create: {
@@ -1534,6 +1642,7 @@ export async function refreshPublishedCrashDays(
           crashCount: row.crashCount,
           indices: indicesJson,
           leadingSectors: leadingJson,
+          breadth: breadthJson,
           source: row.source,
           traceId,
         },
@@ -1542,6 +1651,7 @@ export async function refreshPublishedCrashDays(
           crashCount: row.crashCount,
           indices: indicesJson,
           leadingSectors: leadingJson,
+          breadth: breadthJson,
           source: row.source,
           traceId,
         },
@@ -1586,8 +1696,14 @@ export async function refreshPublishedCrashDays(
  * page can render the calendar grids and resolve the default detail (first row = latest crash day).
  * forwardReturns T+N null (too few future bars) is preserved for the page to render as "—".
  *
+ * Story 8.7 — each row also carries `breadth` (CrashDayBreadth|null): the market-breadth projection
+ * from market_breadth_daily (8.6). Null when the breadth row was absent or the projection read
+ * failed (NFR-5). This is the SOLE breadth surface the /crash-calendar/[date] deep-detail page
+ * (8.8) consumes; the page never reads market_breadth_daily directly (AC6).
+ *
  * This query only SELECTs published_crash_days. It NEVER reads crash_days / index_daily_bars /
- * sector_daily_bars / hot_events (AD-3). Row existence = a published crash day (no status column).
+ * sector_daily_bars / market_breadth_daily / hot_events (AD-3). Row existence = a published crash
+ * day (no status column).
  */
 export async function listPublishedCrashDays(
   options: ListPublishedCrashDaysOptions,
@@ -1603,6 +1719,7 @@ export async function listPublishedCrashDays(
       crashCount: true,
       indices: true,
       leadingSectors: true,
+      breadth: true,
       source: true,
       publishedAt: true,
     },
@@ -1614,6 +1731,10 @@ export async function listPublishedCrashDays(
     crashCount: r.crashCount,
     indices: r.indices as unknown as PublishedCrashDay["indices"],
     leadingSectors: r.leadingSectors as unknown as LeadingSector[],
+    // Story 8.7 — breadth is CrashDayBreadth|null; absent (null) when market_breadth_daily had
+    // no row for this crash day or the projection read failed. Cast through unknown (Prisma's Json
+    // envelope does not carry the CrashDayBreadth element type across the read boundary).
+    breadth: r.breadth as unknown as PublishedCrashDay["breadth"],
     source: r.source,
     publishedAt: r.publishedAt,
   }));

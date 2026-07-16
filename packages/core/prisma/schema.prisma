@@ -1276,12 +1276,24 @@ model CrashDay {
 // consumer and gives the compliance gate a single control point). Historical bars are
 // immutable, so projection-time materialization is never stale. Missing sector rows ⇒
 // leadingSectors = [] (the page shows the honest "暂不可用" line, NFR-5).
+//
+// `breadth` (Story 8.7) is the market-breadth projection from market_breadth_daily (8.6):
+// limit-up/down counts, advancing/declining/flat, turnover, margin-balance change, dragon-
+// tiger. It is NULLABLE: a crash day whose market_breadth_daily row is absent (sidecar has
+// not run that day / predates breadth collection) OR whose breadth read failed projects
+// `breadth = null` — the row is still upserted (breadth failure NEVER blocks the published
+// crash-day row, NFR-5 honest empty). Decimal fields (totalTurnover/marginBalanceChange)
+// are `.toNumber()`-converted at projection time (mirrors leadingSectors.pctChange); the
+// 8.6 nullable breadth fields keep their null verbatim (never zeroed). This is the SOLE
+// breadth surface the /crash-calendar/[date] page (8.8) consumes; it never reads
+// market_breadth_daily directly (AD-3).
 model PublishedCrashDay {
   tradeDate      DateTime @id @map("trade_date") @db.Date // the crash trading day (UTC midnight); PK + unique
   threshold      Decimal  @db.Decimal(8, 4) // CRASH_THRESHOLD used for this judgement (signed %, copied from crash_days)
   crashCount     Int      @map("crash_count") // how many of the 3 indices crashed (1..3)
   indices        Json // IndexCrashDetail[] copied verbatim from crash_days
   leadingSectors Json     @map("leading_sectors") // LeadingSector[] ({sectorCode,sectorName,pctChange}) Top-N down, from sector_daily_bars
+  breadth        Json?    @map("breadth") // CrashDayBreadth|null — market-breadth projection from market_breadth_daily (8.7); null when the breadth row is absent or the read failed (NFR-5 honest empty, never fabricated)
   source         String // market-data lineage ("akshare")
   publishedAt    DateTime @default(now()) @map("published_at") // UTC projection instant (bumped on reproject)
   traceId        String?  @map("trace_id")
