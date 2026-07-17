@@ -264,7 +264,7 @@ def _breadth_row(
     d: date,
     *,
     limit_up: int = 3,
-    turnover: str = "21000000000.00",
+    turnover: str | None = "21000000000.00",
     margin: str | None = "-500000000.00",
     dragon: object = _UNSET,
 ) -> MarketBreadthRow:
@@ -280,7 +280,7 @@ def _breadth_row(
         advancing_count=3,
         declining_count=2,
         flat_count=1,
-        total_turnover=Decimal(turnover),
+        total_turnover=Decimal(turnover) if turnover is not None else None,
         margin_balance_change=Decimal(margin) if margin is not None else None,
         dragon_tiger=dragon_val,
         source="akshare",
@@ -289,31 +289,42 @@ def _breadth_row(
     )
 
 
-def test_breadth_upsert_is_idempotent(isolated_schema):
-    """AC2: re-running the same trade_date is a no-op — no duplicate, no overwrite."""
+def test_breadth_upsert_self_heals_partial_same_day_row(isolated_schema):
+    """Same-day reruns update current counts, fill NULLs, and never create duplicates."""
     row1 = _breadth_row(
         "01947cdc-1000-7000-8000-0000000000b1",
         date(2026, 7, 14),
         limit_up=3,
-        turnover="21000000000.00",
-        margin="-500000000.00",
+        turnover=None,
+        margin=None,
+        dragon=None,
     )
     with connect(isolated_schema) as conn:
         n1 = upsert_market_breadth(conn, [row1])
-        # second run: SAME trade_date, different id + different counts to prove NO overwrite
+        # A later run fills fields that were unavailable earlier in the day.
         row2 = _breadth_row(
             "01947cdc-1000-7000-8000-0000000000b2",
             date(2026, 7, 14),
-            limit_up=999,
-            turnover="99999999.99",
+            limit_up=99,
+            turnover="31000000000.00",
+            margin="-400000000.00",
+        )
+        n2 = upsert_market_breadth(conn, [row2])
+        # A transiently partial third run may refresh required counts, but must not
+        # erase optional values already captured by row2.
+        row3 = _breadth_row(
+            "01947cdc-1000-7000-8000-0000000000b3",
+            date(2026, 7, 14),
+            limit_up=88,
+            turnover=None,
             margin=None,
             dragon=None,
         )
-        n2 = upsert_market_breadth(conn, [row2])
+        n3 = upsert_market_breadth(conn, [row3])
 
     assert n1 == 1
     assert n2 == 1  # batch size; idempotency is row-level
-    # the real idempotency proof: re-open, count, and read preserved values
+    assert n3 == 1
     with connect(isolated_schema) as conn:
         assert count_breadth_rows(conn) == 1  # still exactly 1 (no duplicate)
         with conn.cursor() as cur:
@@ -322,11 +333,11 @@ def test_breadth_upsert_is_idempotent(isolated_schema):
                 "FROM market_breadth_daily WHERE trade_date='2026-07-14'"
             )
             lu, to, margin, dragon = cur.fetchone()
-    assert lu == 3  # original preserved, NOT overwritten by the 999 rerun
-    assert str(to) == "21000000000.00"
-    assert str(margin) == "-500000000.00"  # original margin preserved (not NULLed)
+    assert lu == 88  # required counts take the latest same-day observation
+    assert str(to) == "31000000000.00"  # filled by row2, not erased by row3 NULL
+    assert str(margin) == "-400000000.00"
     assert dragon is not None
-    assert dragon["stockCount"] == 2  # original dragon_tiger preserved (not NULLed)
+    assert dragon["stockCount"] == 2
 
 
 def test_breadth_upsert_nullable_fields_accept_null(isolated_schema):

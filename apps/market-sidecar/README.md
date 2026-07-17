@@ -23,9 +23,9 @@ AD-2):
 
 Each row carries `pct_change` + `close` as **Decimal** (not float — Consistency
 Convention: 涨跌和比率以 decimal 存储), `source="akshare"`, `ingested_at` (UTC),
-and an app-assigned UUIDv7 `id`. Upserts are idempotent (`ON CONFLICT DO
-NOTHING`): re-running a trading day is a no-op and never overwrites an existing
-row (AC3).
+and an app-assigned UUIDv7 `id`. Index/sector bars use `ON CONFLICT DO NOTHING`.
+Breadth uses `DO UPDATE`: required counts take the latest run while nullable
+fields keep the latest non-null value, allowing partial same-day rows to heal.
 
 ## AkShare functions (verified)
 
@@ -41,7 +41,7 @@ pinned version and recorded at the top of `src/market_sidecar/akshare_client.py`
 | Breadth: 涨停池 | `ak.stock_zt_pool_em(date="20260714")` | `序号, 代码, 名称, …, 连板数` (row count = limit-up; 连板数 max = consecutive board max) |
 | Breadth: 跌停池 | `ak.stock_zt_pool_dtgc_em(date="20260714")` | same column family (row count = limit-down) |
 | Breadth: 炸板池 | `ak.stock_zt_pool_zbgc_em(date="20260714")` | same column family (row count = broken-board) |
-| Breadth: 涨跌家数 | `ak.stock_zh_a_spot_em()` | `代码, 名称, 最新价, 涨跌幅, 成交额, …` (ALL A-share spots, latest day only; advancing/declining from 涨跌幅 sign, turnover = sum 成交额) |
+| Breadth: 涨跌家数 | `ak.stock_zh_a_spot_em()` → fallback `ak.stock_zh_a_spot()` | `代码, 名称, 最新价, 涨跌幅, 成交额, …` (ALL A-share spots, latest day only; advancing/declining from 涨跌幅 sign, turnover = sum 成交额) |
 | Breadth: 龙虎榜 | `ak.stock_lhb_detail_em(start_date="20260714", end_date="20260714")` | `序号, 代码, 名称, …, 龙虎榜净买额, 上榜原因` (takes a start/end RANGE; one day = same date for both; one row per listed stock; empty frame = no listings that day) |
 | Breadth: 融资融券 (上交所) | `ak.stock_margin_sse(start_date="20260714", end_date="20260714")` | `信用交易日期, 融资余额, 融资买入额, …` (汇总; 融资余额 in **yuan**; takes a start/end RANGE) |
 | Breadth: 融资融券 (深交所) | `ak.stock_margin_szse(date="20260714")` | `融资买入额, 融资余额, …` (汇总; 融资余额 in **亿元/100M yuan**; the sidecar normalizes ×1e8 to yuan before summing with SSE) |
@@ -85,9 +85,10 @@ The CLI reads `DATABASE_URL` from the repo-root `.env` (same string Node uses).
 Exit code is non-zero if the per-item failure ratio exceeds the threshold
 (`ingest.FAILURE_THRESHOLD`, default 0.5) — a scheduler retry signal (AD-4).
 
-`apps/worker` schedules `--incremental --scope index` every 30 minutes, then
-runs crash-day detection and refreshes `published_crash_days`. The CLI commands
-above remain available for backfills and operator-triggered recovery.
+`apps/worker` schedules incremental index and breadth collection every 30 minutes.
+It publishes the base crash day after index detection, then re-projects
+`published_crash_days.breadth` after breadth succeeds. The CLI commands above
+remain available for backfills and operator-triggered recovery.
 
 ## Test
 
@@ -109,8 +110,8 @@ The live smoke (`--smoke`) is **not** part of the test suite — it hits
 
 ## Out of scope (deferred)
 
-- Scheduled sector and breadth collection — index collection for the crash-calendar
-  highlight path is wired through `apps/worker`; the other scopes remain manual.
+- Scheduled sector collection — index and breadth collection for the crash calendar
+  are wired through `apps/worker`; sector backfills remain manual.
 - `CrashDay` / `published_crash_days` read model — stories 8.2/8.3.
 - `published_crash_days.breadth` projection + `run-market-breadth.ts` runner — story 8.7.
 - `/crash-calendar/[date]` deep detail page — story 8.8.

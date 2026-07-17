@@ -33,7 +33,7 @@ AKSHARE PROBE RECORD (verify before trusting — AkShare function names churn):
                     -> same column family as zt pool; row count = limit-down count.
   zbgc pool (炸板) : ak.stock_zt_pool_zbgc_em(date="20260714")
                     -> same column family; row count = broken-board count.
-  spot (涨跌家数)  : ak.stock_zh_a_spot_em()
+  spot (涨跌家数)  : ak.stock_zh_a_spot_em(), fallback ak.stock_zh_a_spot()
                     -> columns include 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, ...
                     ALL A-share spots for the latest trading day (no date param). We derive
                     advancing/declining/flat from 涨跌幅 sign and total_turnover = sum(成交额).
@@ -129,6 +129,7 @@ class AkModule(Protocol):
     def stock_zt_pool_dtgc_em(self, date: str) -> Any: ...
     def stock_zt_pool_zbgc_em(self, date: str) -> Any: ...
     def stock_zh_a_spot_em(self) -> Any: ...
+    def stock_zh_a_spot(self) -> Any: ...
     def stock_lhb_detail_em(self, start_date: str, end_date: str) -> Any: ...
     def stock_margin_szse(self, date: str) -> Any: ...
     def stock_margin_sse(self, start_date: str, end_date: str) -> Any: ...
@@ -243,7 +244,7 @@ class LimitPoolStats:
 
 @dataclass(frozen=True)
 class SpotBreadth:
-    """Advancing/declining/flat counts + total turnover from stock_zh_a_spot_em."""
+    """Advancing/declining/flat counts + total turnover from an A-share spot snapshot."""
 
     trade_date: date
     advancing_count: int  # 涨跌幅 > 0
@@ -340,15 +341,23 @@ def fetch_spot_breadth(
     *,
     ak_module: AkModule | None = None,
 ) -> SpotBreadth:
-    """A-share spot (stock_zh_a_spot_em): advancing/declining/flat + total turnover.
+    """A-share spot snapshot: advancing/declining/flat + total turnover.
 
-    stock_zh_a_spot_em returns the LATEST trading day's spots (no date param); the caller
-    must pass trade_date matching that latest day. We derive counts from the 涨跌幅 sign
-    and turnover = sum(成交额). Rows with NaN/None pct are counted as flat (never dropped,
-    NFR-5). turnover is Decimal (sum of yuan, not float).
+    Eastmoney is primary. If its paginated endpoint fails after bounded retries, fall back to
+    AkShare's Sina snapshot, which exposes the same normalized 涨跌幅/成交额 columns. Both return
+    only the latest trading day, so the caller must use this result only for the window end.
     """
     ak = ak_module if ak_module is not None else _real_ak()
-    df = _call_ak("spot", lambda: ak.stock_zh_a_spot_em())
+    try:
+        df = _call_ak("spot_em", lambda: ak.stock_zh_a_spot_em())
+    except Exception as em_exc:
+        log.warning("spot_em failed; falling back to Sina spot: %s", em_exc)
+        try:
+            df = _call_ak("spot_sina", lambda: ak.stock_zh_a_spot())
+        except Exception as sina_exc:
+            raise RuntimeError(
+                f"both spot sources failed (eastmoney={em_exc}; sina={sina_exc})"
+            ) from sina_exc
     advancing = declining = flat = 0
     turnover = Decimal("0")
     for _, row in df.iterrows():

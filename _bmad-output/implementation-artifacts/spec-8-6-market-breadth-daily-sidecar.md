@@ -30,7 +30,7 @@ warnings: ['external-data-source', 'new-table-migration', 'non-breaking-scope-ex
 - 外部源经端口(AD-7):广度 AkShare 调用全部隔离在 sidecar 的 `akshare_client.py`;Node 领域模块不直连 AkShare。
 - 诚实空 / 不伪造(NFR-5):`margin_balance_change`(T-1)与 `dragon_tiger` 可空;核心计数源缺失 → 该交易日缺行,不伪造。无龙虎榜上榜日写 `{stockCount:0,...}`(真零),fetch 失败写 `NULL`。
 - 可追溯(NFR-2):每行 `source="akshare"`、`ingested_at`(UTC ISO8601)、`trace_id`。
-- 幂等:`ON CONFLICT (trade_date) DO NOTHING`,重跑同日不产生重复行、不改写既有行。
+- 幂等与自愈:`ON CONFLICT (trade_date) DO UPDATE`,重跑同日不产生重复行;必填计数取最新值,nullable 字段用 `COALESCE` 防止有效值被 NULL 降级。
 - 主键 UUIDv7(复用 `uuid_extensions`);时间 UTC;表名 snake_case 单数(`market_breadth_daily`),列 snake_case(Prisma camelCase + `@map`)。
 - per-source 错误隔离:5 类广度源各自 try/except,一类失败记 skip 不中断其他;整批失败比例 > `FAILURE_THRESHOLD`(0.5,复用 8.1 常量)则非零退出(调度重试信号)。
 - 钉 akshare 版本 1.18.64(列名漂移防御,对齐 8.1)。
@@ -53,7 +53,7 @@ warnings: ['external-data-source', 'new-table-migration', 'non-breaking-scope-ex
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 |---|---|---|---|
 | 回填广度(AC1) | `ingest --backfill --scope breadth` | 近 N 日每日 1 行入 `market_breadth_daily`,核心计数非空,`source=akshare` | per-source try/except |
-| 增量幂等(AC2) | 同日重跑 `--incremental --scope breadth` | 第 2 次不产生新行、不改写既有行 | `ON CONFLICT DO NOTHING` |
+| 增量幂等与自愈(AC2) | 同日重跑 `--incremental --scope breadth` | 不产生新行；更新最新必填计数，并用新非空值补全可选字段 | `ON CONFLICT DO UPDATE` + nullable `COALESCE` |
 | margin 缺(AC3) | 当日 margin(T-1)不可得 | `margin_balance_change=NULL`,其余字段照写,整行不缺 | 该源 skip 不中断 |
 | lhb 无上榜(AC3) | 当日无个股触发龙虎榜 | `dragon_tiger={stockCount:0,institutionalNetBuy:0,hotMoneyNetBuy:0,topStocks:[]}` 或 `NULL`(诚实,不伪造) | 不抛、不中断 |
 | smoke(AC5,非 CI) | `ingest --smoke --scope breadth` | 近 5 日 T1 数据入库 | 后端不可达 → skip+warn |
@@ -67,7 +67,7 @@ warnings: ['external-data-source', 'new-table-migration', 'non-breaking-scope-ex
 packages/core/prisma/schema.prisma                                                 # +model MarketBreadthDaily (Node 拥有, 插入 SectorDailyBar 之后)
 packages/core/prisma/migrations/20260716000001_add_market_breadth_daily/migration.sql  # CREATE TABLE + unique(trade_date) + index(trade_date)
 apps/market-sidecar/src/market_sidecar/akshare_client.py                           # +5 breadth fetch wrappers + probe 记录更新 (fixture-injectable)
-apps/market-sidecar/src/market_sidecar/db.py                                       # +MarketBreadthRow dataclass + upsert_market_breadth (ON CONFLICT trade_date DO NOTHING)
+apps/market-sidecar/src/market_sidecar/db.py                                       # +MarketBreadthRow dataclass + self-healing upsert_market_breadth
 apps/market-sidecar/src/market_sidecar/ingest.py                                   # +ingest_breadth(mode): per-source 隔离 + 单日聚合 + window 复用
 apps/market-sidecar/src/market_sidecar/__main__.py                                 # +"breadth" 进 --scope choices; dispatch; --smoke 不再强制 index
 apps/market-sidecar/src/market_sidecar/fixtures/__init__.py                        # +breadth 形态 DataFrames (zt pools/spot/lhb/margin) + expected 计数 map
@@ -82,7 +82,7 @@ apps/market-sidecar/README.md                                                   
 - `packages/core/prisma/schema.prisma` -- ADD `model MarketBreadthDaily`(`@@map("market_breadth_daily")`, `@@unique([tradeDate])`, `@@index([tradeDate])`; `tradeDate @db.Date`, 计数 `Int`, `totalTurnover Decimal @db.Decimal(20,2)`, `marginBalanceChange Decimal? @db.Decimal(20,2)`, `dragonTiger Json?`, `source String`, `ingestedAt`, `traceId String?`, app-assigned `id String @id`) -- Node 拥有新表;nullable margin/dragon_tiger 承载 NFR-5。
 - `packages/core/prisma/migrations/20260716000001_add_market_breadth_daily/migration.sql` -- CREATE TABLE + `UNIQUE(trade_date)` + `INDEX(trade_date)` DDL(照抄 8.1 迁移模板) -- forward-only 迁移,不 reset。
 - `apps/market-sidecar/src/market_sidecar/akshare_client.py` -- ADD 5 breadth fetch wrappers(`fetch_limit_pool`/`fetch_broken_board`/`fetch_spot_breadth`/`fetch_dragon_tiger`/`fetch_margin`,内部调 `stock_zt_pool_em`/`stock_zt_pool_dtgc_em`/`stock_zt_pool_zbgc_em`/`stock_zh_a_spot_em`/`stock_lhb_*`/`stock_margin_*`),顶部 probe 记录补 akshare 1.18.64 + 探测日期 + 函数清单;保持 `ak_module` 可注入 -- 广度数据采集,fixture 注入无外网。
-- `apps/market-sidecar/src/market_sidecar/db.py` -- ADD `MarketBreadthRow` frozen dataclass + `upsert_market_breadth(conn, rows)`(`ON CONFLICT (trade_date) DO NOTHING`,Decimal 绑定) -- 广度持久化,镜像 `upsert_index_bars`。
+- `apps/market-sidecar/src/market_sidecar/db.py` -- ADD `MarketBreadthRow` frozen dataclass + `upsert_market_breadth(conn, rows)`(`ON CONFLICT (trade_date) DO UPDATE`,nullable `COALESCE`,Decimal 绑定) -- 广度持久化与同日自愈。
 - `apps/market-sidecar/src/market_sidecar/ingest.py` -- ADD `ingest_breadth(mode, conn)`:复用 `_window()`/`_new_id()`/`_utc_now_iso()`;per-source try/except 聚合为单日 `MarketBreadthRow`;`IngestReport` 失败比例阈值复用 -- 单日聚合编排 + per-source 隔离。
 - `apps/market-sidecar/src/market_sidecar/__main__.py` -- 把 `--scope` choices 由 `("index","sector","both")` 改为 `("index","sector","both","breadth")`;dispatch 增加 `scope=="breadth"` → `ingest_breadth`;`--smoke` 不再无条件强制 index(scope==breadth 时走 breadth smoke 通道,`SMOKE_DAYS=5`) -- 非破坏性 CLI 扩展。
 - `apps/market-sidecar/src/market_sidecar/fixtures/__init__.py` -- ADD breadth 形态 DataFrames(zt 涨停/跌停/炸板池、spot、lhb、margin 各一份)+ expected 计数/聚合断言 map -- 确定性测试源,镜像 8.1 fixtures 范式。
@@ -92,7 +92,7 @@ apps/market-sidecar/README.md                                                   
 
 **Acceptance Criteria:**
 - **AC1** Given 本地 PG 可用 + akshare 可达,when `python -m market_sidecar ingest --backfill --scope breadth`,then 近 N 日每日 1 行写入 `market_breadth_daily`,核心计数(`limit_up_count`/`limit_down_count`/`advancing_count`/`declining_count`/`total_turnover`)非空,`source="akshare"`,`ingested_at` 非空。
-- **AC2** Given 某交易日广度行已写入,when 同日重跑 `--incremental --scope breadth`,then 表行数不变、既有字段值不变(`ON CONFLICT (trade_date) DO NOTHING` 幂等)。
+- **AC2** Given 某交易日广度行已写入,when 同日重跑 `--incremental --scope breadth`,then 表行数不变、最新必填计数可更新、新非空可选值补全旧 NULL,且新 NULL 不覆盖既有有效值。
 - **AC3** Given 当日 margin(T-1)不可得 或 龙虎榜无上榜,when ingest,then `margin_balance_change=NULL` / `dragon_tiger` 为诚实空(零对象或 NULL),其余字段照写,整行不缺、不伪造(NFR-5)。
 - **AC4** Given 某 breadth 源 fetch 抛错(如 lhb),when ingest,then 该源 skip 记 log,其他 4 源照常聚合写入该日行;失败比例未超阈值时退出码 0(per-source 隔离)。
 - **AC5** Given canned breadth fixtures,when `uv run pytest`,then 全绿;测试不触外网、不强依赖 live DB(throwaway schema 或无 DB)。
@@ -121,7 +121,7 @@ apps/market-sidecar/README.md                                                   
 - addressed_findings:
   - `[high]` `[patch]` P1: backfill spot 造假 → spot 单次取、仅窗口末日（`day==end`）填、历史日 4 字段 NULL（schema/migration nullable + 测试钉「不造假」）。
   - `[medium]` `[patch]` P2: `margin_balance_change` 死代码 → `fetch_margin` 返回余额合计、ingest 循环算日间差（diff-implement 路径，失败重置 prev）。
-  - `[medium]` `[patch]` P8: PG-skip 验证脆弱 → 加 always-run（无 PG/无网）SQL 契约测试钉 `ON CONFLICT DO NOTHING` + null/dict 适配。
+  - `[medium]` `[patch]` P8: PG-skip 验证脆弱 → 加 always-run（无 PG/无网）SQL 契约测试钉 conflict self-heal + null/dict 适配。
   - `[low]` `[patch]` P3: `Json(None)` → SQL NULL。
   - `[low]` `[patch]` P4: dragon_tiger `top_stocks` 上限 20（按净买排序）。
   - `[low]` `[patch]` P5: `_BoomLhb` 测试 stub 签名对齐 `(start_date, end_date)`。
@@ -129,7 +129,7 @@ apps/market-sidecar/README.md                                                   
   - `[low]` `[patch]` P7: `dragon_tiger_json = None` 前置初始化（防 BaseException UnboundLocalError）。
   - `[low]` `[patch]` P9: 复核非交易日 skip guard（spot 历史日 NULL 后仍正确 skip 非交易日 / 写交易日，加测试）。
   - `[medium]` `[defer]` 龙虎榜 机构/游资 拆分未实现（institutionalNetBuy 误标 total、hotMoneyNetBuy 恒 0）→ 见 deferred-work。
-  - `[medium]` `[defer]` `ON CONFLICT DO NOTHING` 自愈缺口（瞬时失败锁死 NULL/坏值）→ 见 deferred-work。
+  - `[medium]` `[resolved #23]` conflict upsert 已改为必填计数更新 + nullable `COALESCE`,瞬时失败不再永久锁死 NULL。
   - `[medium]` `[defer]` 历史涨跌家数/成交额无免费源（spot 仅当日；8.8 历史 crash day 永显空态）→ 见 deferred-work。
   - `[low]` `[defer]` A 股交易日历（`_iter_dates` 遍历非交易日 + 失败比例分母偏移）→ 见 deferred-work。
   - `[low]` `[defer]` SZSE margin 单位漂移无 sanity 上限 → 见 deferred-work。

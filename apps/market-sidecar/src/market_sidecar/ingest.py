@@ -170,13 +170,13 @@ def ingest_breadth(
     window we aggregate AkShare sources into a SINGLE market_breadth_daily row. The
     date-specific sources are fetched per-day: 涨停池 / 跌停池 / 炸板池 (stock_zt_pool_*),
     龙虎榜 (stock_lhb_detail_em), 融资融券 (stock_margin_*). The SPOT source
-    (stock_zh_a_spot_em) takes NO date and returns ONLY the latest trading day's snapshot,
+    (Eastmoney with Sina fallback) takes NO date and returns ONLY the latest trading day's snapshot,
     so it is fetched ONCE per ingest run and its THREE derived fields (advancing/declining/
     flat) are populated ONLY on the row whose trade_date equals the window end (the latest
     day); every other day carries NULL for those three fields (NFR-5 honest empty — never
-    fabricate the latest-day snapshot onto historical trade_dates). total_turnover is
-    NOT from spot — it is derived from index daily 成交额 (sh000001 + sz399107, fetched
-    ONCE per run) so it is available on EVERY trading day, including historical ones.
+    fabricate the latest-day snapshot onto historical trade_dates). total_turnover prefers
+    index daily 成交额 (sh000001 + sz399107, fetched ONCE per run) for every date; when that
+    source fails, only the latest day may fall back to the spot snapshot's measured turnover.
 
     Per-source error isolation (AC4, mirrors 8.1's per-item isolation): each source is
     fetched in its own try/except. A failed source is skipped + logged; the other sources
@@ -196,7 +196,7 @@ def ingest_breadth(
     report = IngestReport(scope="breadth", mode=mode)
     rows: list[MarketBreadthRow] = []
 
-    # P1: fetch spot ONCE — stock_zh_a_spot_em() returns the LATEST trading day only (no date
+    # P1: fetch spot ONCE — the spot adapters return the LATEST trading day only (no date
     # param). We stamp its four derived fields onto ONLY the latest-day row (trade_date == end);
     # every other day gets NULL for these fields (honest empty, never fabricated). A spot fetch
     # failure leaves latest_spot = None → the latest-day row also gets NULL spot fields (NFR-5).
@@ -353,7 +353,13 @@ def _aggregate_breadth_day(
             advancing_count=spot.advancing_count if spot is not None else None,
             declining_count=spot.declining_count if spot is not None else None,
             flat_count=spot.flat_count if spot is not None else None,
-            total_turnover=turnover_by_day.get(day),
+            # Historical turnover comes from the two index series. For the latest day only,
+            # the spot snapshot is an honest fallback when the index endpoint is unavailable.
+            total_turnover=(
+                turnover_by_day[day]
+                if day in turnover_by_day
+                else (spot.total_turnover if spot is not None else None)
+            ),
             margin_balance_change=margin_change,
             dragon_tiger=dragon_tiger_json,
             source=SOURCE,

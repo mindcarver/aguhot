@@ -78,6 +78,9 @@ class FakeAk:
     def stock_zh_a_spot_em(self):
         return self._breadth.get("spot", spot_em_20260714())
 
+    def stock_zh_a_spot(self):
+        return self._breadth.get("spot_sina", spot_em_20260714())
+
     def stock_lhb_detail_em(self, start_date: str, end_date: str):  # noqa: ANN001
         return self._breadth.get("lhb", lhb_detail_20260714())
 
@@ -283,6 +286,20 @@ def test_fetch_spot_breadth_counts_advancing_declining_flat_and_turnover():
     assert b.declining_count == EXPECTED_BREADTH["declining_count"]
     assert b.flat_count == EXPECTED_BREADTH["flat_count"]
     assert isinstance(b.total_turnover, Decimal)
+    assert str(b.total_turnover) == EXPECTED_BREADTH["total_turnover"]
+
+
+def test_fetch_spot_breadth_falls_back_to_sina_snapshot():
+    """A sustained Eastmoney failure uses the equivalent Sina snapshot, not NULL breadth."""
+
+    class _EastmoneyDown(FakeAk):
+        def stock_zh_a_spot_em(self):
+            raise RuntimeError("eastmoney unavailable")
+
+    b = akc.fetch_spot_breadth(BREADTH_TRADE_DATE, ak_module=_EastmoneyDown())
+    assert b.advancing_count == EXPECTED_BREADTH["advancing_count"]
+    assert b.declining_count == EXPECTED_BREADTH["declining_count"]
+    assert b.flat_count == EXPECTED_BREADTH["flat_count"]
     assert str(b.total_turnover) == EXPECTED_BREADTH["total_turnover"]
 
 
@@ -631,12 +648,10 @@ def test_ingest_breadth_per_source_isolation_optional_source_failure_keeps_row(m
     assert rep.exit_code == 0
 
 
-def test_ingest_breadth_index_amounts_failure_nulls_turnover_keeps_row(monkeypatch):
-    """AC2: index_amounts (total_turnover source) failing → total_turnover NULL, row still written.
+def test_ingest_breadth_index_amounts_failure_uses_latest_spot_turnover(monkeypatch):
+    """Index turnover failure uses the latest spot snapshot without fabricating history.
 
-    The fetch_index_amounts try/except in ingest_breadth isolates the failure: every day's
-    total_turnover=None (NFR-5, never fabricated), but the breadth row is still written with
-    its other fields intact (core counts, advancing/declining/flat from spot, dragon_tiger, margin).
+    Spot is latest-day-only, so it may fill only the window end. Historical rows remain NULL.
     """
     from market_sidecar import ingest as ing_mod
 
@@ -654,9 +669,11 @@ def test_ingest_breadth_index_amounts_failure_nulls_turnover_keeps_row(monkeypat
         mode="smoke", ak_module=_BoomIndexEm(), today=BREADTH_TRADE_DATE
     )
     row = next(r for r in captured if r.trade_date == BREADTH_TRADE_DATE)
-    # row still written; total_turnover is NULL on index-amount fetch failure
+    # Latest-day turnover is measured from the spot snapshot.
     assert row is not None
-    assert row.total_turnover is None
+    assert str(row.total_turnover) == EXPECTED_BREADTH["total_turnover"]
+    historical = next(r for r in captured if r.trade_date < BREADTH_TRADE_DATE)
+    assert historical.total_turnover is None
     # other fields intact
     assert row.limit_up_count == EXPECTED_BREADTH["limit_up_count"]
     assert row.advancing_count == EXPECTED_BREADTH["advancing_count"]
@@ -795,6 +812,9 @@ def test_ingest_breadth_spot_fetch_failure_nulls_latest_day_spot_not_dropped(mon
     class _BoomSpot(FakeAk):
         def stock_zh_a_spot_em(self):
             raise RuntimeError("spot backend down")
+
+        def stock_zh_a_spot(self):
+            raise RuntimeError("fallback spot backend down")
 
     captured: list = []
     monkeypatch.setattr(
@@ -938,7 +958,7 @@ def test_ingest_breadth_historical_non_trading_day_still_skipped_with_null_spot(
 
 # ===========================================================================
 # P8 — breadth SQL contract test. ALWAYS RUNS (no PG, no network). Guards the
-# idempotency clause + the null/JSON adaptation even when test_upsert.py auto-skips
+# self-healing conflict clause + null/JSON adaptation even when test_upsert.py auto-skips
 # because DATABASE_URL is missing from the subprocess env.
 # ===========================================================================
 
@@ -949,7 +969,7 @@ def test_breadth_upsert_sql_contract_idempotency_and_null_adaptation():
     These assertions run with ZERO infra (no PG, no network) so the contract is guarded even
     when the PG-backed test_upsert.py module auto-skips due to a missing DATABASE_URL in the
     subprocess env. Two invariants:
-      1. Idempotency: _BREADTH_UPSERT contains ON CONFLICT ("trade_date") DO NOTHING.
+      1. Self-heal: _BREADTH_UPSERT updates same-day counts and preserves known optional values.
       2. NULL vs JSON: the params builder binds a NULL dragon_tiger as Python None (→ SQL NULL),
          NOT as Json(None) (which would adapt to a JSONB scalar 'null'). A dict binds as Json(...).
     """
@@ -958,16 +978,26 @@ def test_breadth_upsert_sql_contract_idempotency_and_null_adaptation():
     from market_sidecar import db as db_mod
     from market_sidecar.db import MarketBreadthRow
 
-    # 1. idempotency clause present: ON CONFLICT on the trade_date unique key, DO NOTHING.
-    # Quoting in the actual SQL is unquoted (trade_date is a lowercase, non-reserved name so
-    # Postgres needs no quotes); we assert the clause exists with the right column + action,
-    # tolerating quote style so the test isn't brittle to a cosmetic re-quote.
+    # 1. Same-day conflict updates required counts and COALESCEs nullable source fields.
     import re
 
     assert re.search(
-        r'ON CONFLICT\s+\(?["]?trade_date["]?\)?\s+DO NOTHING',
+        r'ON CONFLICT\s+\(?["]?trade_date["]?\)?\s+DO UPDATE SET',
         db_mod._BREADTH_UPSERT,
-    ), "breadth upsert must be idempotent on trade_date (ON CONFLICT ... DO NOTHING)"
+    ), "breadth upsert must self-heal on trade_date conflict"
+    assert "limit_up_count = EXCLUDED.limit_up_count" in db_mod._BREADTH_UPSERT
+    for column in (
+        "advancing_count",
+        "declining_count",
+        "flat_count",
+        "total_turnover",
+        "margin_balance_change",
+        "dragon_tiger",
+    ):
+        assert (
+            f"{column} = COALESCE(EXCLUDED.{column}, market_breadth_daily.{column})"
+            in db_mod._BREADTH_UPSERT
+        )
 
     # 2a. a null dragon_tiger binds as Python None (→ SQL NULL), NOT Json(None)
     null_row = MarketBreadthRow(

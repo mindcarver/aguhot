@@ -1072,8 +1072,8 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
   summary: 龙虎榜 `dragon_tiger.institutionalNetBuy`/`hotMoneyNetBuy` 机构 vs 游资拆分未实现——当前 `institutionalNetBuy` 存的是全市场龙虎榜净买额合计（误标签），`hotMoneyNetBuy` 恒为 0
   evidence: spec-8-6 step-04 adversarial + intent-alignment 审计：`fetch_dragon_tiger` 用 `stock_lhb_detail_em`（扁平 per-stock 框，无营业部 seat 拆分），把 `龙虎榜净买额` 列求和进 `institutional_net_buy`，`hot_money_net_buy=Decimal("0")` 硬编码。提案 §4 golden-example + 8.8 详情页要「机构净买 vs 游资净买」拆分，需 `stock_lhb_stock_detail_em`（per-seat 买卖明细）+ 机构/游资 seat 分类启发式（akshare 不直接标注 seat 归属）。当前把 total 误标为 institutional 会误导 8.8 消费者；修复需 seat 分类研究，归 8.8（消费方）或独立 follow-up。
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
-  summary: `market_breadth_daily` upsert 用 `ON CONFLICT (trade_date) DO NOTHING`——瞬时源失败把 dragon_tiger/margin 永久锁为 NULL/坏值，重跑无法自愈
-  evidence: spec-8-6 step-04 adversarial 审计：breadth 是可重算的日聚合，但沿用 8.1 的 DO NOTHING 语义（AC2 幂等）。一次瞬时网络抖动让 dragon_tiger/margin 捕获异常→NULL，后续成功 fetch 因 DO NOTHING 永远无法修复该日。无 `--force`/DO UPDATE 自愈路径。修复 = 改 `ON CONFLICT (trade_date) DO UPDATE SET ...`（同输入仍幂等，且能自愈）或加 `--force` flag，但变更 AC2「不改写既有行」语义，需决策。
+  summary: `[resolved #23]` `market_breadth_daily` 同日半成品自愈缺口
+  evidence: 已改为 `ON CONFLICT (trade_date) DO UPDATE`:必填计数取最新值,nullable 字段 `COALESCE(EXCLUDED,existing)`;真实 2026-07-17 重跑已补全 spot 字段且新 NULL 不覆盖已有有效值。
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-8-6-market-breadth-daily-sidecar.md`
   summary: 涨跌家数/两市成交额历史回填无免费源——`stock_zh_a_spot_em` 仅当日；历史大跌日（8.8）的 advancing/declining/turnover 永远为 NULL
   evidence: spec-8-6 step-04 四层审计一致：`stock_zh_a_spot_em()` 无 date 参数、仅返回最新交易日快照。8.6 已修复造假（历史日这 4 字段 NULL，NFR-5），但代价是历史 crash day 的涨跌家数/成交额在 8.8 详情页永远显空态。turnover 可考虑从 8.1 `index_daily_bars` 派生（跨表）；advancing/declining 需全市场逐股日线聚合（免费源不可得，Tushare Pro 或自算）。属产品决策：接受历史空态 / 派生 turnover / 付费源。

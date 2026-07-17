@@ -13,21 +13,24 @@ const order: string[] = [];
 
 const result = await runMarketDataRefresh({
   ingestIndices: () => {
-    order.push("ingest");
+    order.push("ingest-index");
+  },
+  ingestBreadth: () => {
+    order.push("ingest-breadth");
   },
   detectCrashDays: async () => {
     order.push("detect");
     return { upserted: 2, crashDays: [{ day: "2026-07-16" }, { day: "2026-07-17" }] };
   },
   publishCrashDays: async () => {
-    order.push("publish");
+    order.push(order.includes("ingest-breadth") ? "publish-breadth" : "publish-base");
     return { projected: 2, pruned: 0 };
   },
 });
 
 assertions.push({
-  name: "ingest → detect → publish order is fixed",
-  ok: order.join(",") === "ingest,detect,publish",
+  name: "index → detect → base publish → breadth → enriched publish order is fixed",
+  ok: order.join(",") === "ingest-index,detect,publish-base,ingest-breadth,publish-breadth",
   detail: order.join(" → "),
 });
 assertions.push({
@@ -47,8 +50,11 @@ let failedLoudly = false;
 try {
   await runMarketDataRefresh({
     ingestIndices: () => {
-      afterFailure.push("ingest");
+      afterFailure.push("ingest-index");
       throw new Error("source unavailable");
+    },
+    ingestBreadth: () => {
+      afterFailure.push("ingest-breadth");
     },
     detectCrashDays: async () => {
       afterFailure.push("detect");
@@ -65,8 +71,40 @@ try {
 
 assertions.push({
   name: "ingest failure stops detection and publication",
-  ok: failedLoudly && afterFailure.join(",") === "ingest",
+  ok: failedLoudly && afterFailure.join(",") === "ingest-index",
   detail: afterFailure.join(" → "),
+});
+
+const breadthFailureOrder: string[] = [];
+let breadthFailedLoudly = false;
+try {
+  await runMarketDataRefresh({
+    ingestIndices: () => {
+      breadthFailureOrder.push("ingest-index");
+    },
+    detectCrashDays: async () => {
+      breadthFailureOrder.push("detect");
+      return { upserted: 1, crashDays: [{}] };
+    },
+    publishCrashDays: async () => {
+      breadthFailureOrder.push("publish");
+      return { projected: 1, pruned: 0 };
+    },
+    ingestBreadth: () => {
+      breadthFailureOrder.push("ingest-breadth");
+      throw new Error("breadth unavailable");
+    },
+  });
+} catch (error) {
+  breadthFailedLoudly = error instanceof Error && error.message === "breadth unavailable";
+}
+
+assertions.push({
+  name: "breadth failure happens after the base crash-day projection",
+  ok:
+    breadthFailedLoudly &&
+    breadthFailureOrder.join(",") === "ingest-index,detect,publish,ingest-breadth",
+  detail: breadthFailureOrder.join(" → "),
 });
 
 let failed = 0;

@@ -2,9 +2,9 @@
 
 The sidecar NEVER creates tables (Node/Prisma owns schema, AD-2) and NEVER uses
 an ORM (no Prisma/SQLAlchemy/Alembic). It writes via raw SQL only. Upserts are
-idempotent on the unique key (index_code,trade_date) / (sector_code,trade_date)
-with ON CONFLICT DO NOTHING — a re-run of the same trading day is a no-op and
-NEVER overwrites an existing row (AC3). pct_change/close are bound as Python
+idempotent on the unique key (index_code,trade_date) / (sector_code,trade_date).
+Bar re-runs use ON CONFLICT DO NOTHING (AC3); breadth re-runs update the latest
+counts and fill optional fields without replacing known values with NULL. pct_change/close are bound as Python
 Decimal (psycopg sends Decimal as numeric), matching the schema's DECIMAL columns
 (Consistency Convention: 涨跌和比率以 decimal 存储, not float).
 """
@@ -42,10 +42,10 @@ VALUES (%(id)s, %(sector_code)s, %(sector_name)s, %(trade_date)s, %(pct_change)s
 ON CONFLICT (sector_code, trade_date) DO NOTHING
 """
 
-# Story 8.6 — market breadth single-row-per-trade_date aggregate. ON CONFLICT (trade_date)
-# DO NOTHING: re-running a trading day is a no-op and NEVER overwrites an existing row (AC2).
-# dragon_tiger is a Json column (wrapped in psycopg.types.json.Json in _breadth_params so it
-# adapts to JSONB; None → NULL); margin_balance_change is nullable (None → NULL, NFR-5).
+# Story 8.6 — market breadth single-row-per-trade_date aggregate. Same-day re-runs update
+# the non-null pool counts (which can change before market close) and fill optional values.
+# COALESCE prevents a transient source failure from erasing a value captured by an earlier run.
+# dragon_tiger is a Json column (wrapped in psycopg.types.json.Json in _breadth_params).
 _BREADTH_UPSERT = """
 INSERT INTO market_breadth_daily
     (id, trade_date, limit_up_count, limit_down_count, consecutive_board_max,
@@ -55,7 +55,20 @@ VALUES (%(id)s, %(trade_date)s, %(limit_up_count)s, %(limit_down_count)s,
         %(consecutive_board_max)s, %(broken_board_count)s, %(advancing_count)s,
         %(declining_count)s, %(flat_count)s, %(total_turnover)s,
         %(margin_balance_change)s, %(dragon_tiger)s, %(source)s, %(ingested_at)s, %(trace_id)s)
-ON CONFLICT (trade_date) DO NOTHING
+ON CONFLICT (trade_date) DO UPDATE SET
+    limit_up_count = EXCLUDED.limit_up_count,
+    limit_down_count = EXCLUDED.limit_down_count,
+    consecutive_board_max = EXCLUDED.consecutive_board_max,
+    broken_board_count = EXCLUDED.broken_board_count,
+    advancing_count = COALESCE(EXCLUDED.advancing_count, market_breadth_daily.advancing_count),
+    declining_count = COALESCE(EXCLUDED.declining_count, market_breadth_daily.declining_count),
+    flat_count = COALESCE(EXCLUDED.flat_count, market_breadth_daily.flat_count),
+    total_turnover = COALESCE(EXCLUDED.total_turnover, market_breadth_daily.total_turnover),
+    margin_balance_change = COALESCE(EXCLUDED.margin_balance_change, market_breadth_daily.margin_balance_change),
+    dragon_tiger = COALESCE(EXCLUDED.dragon_tiger, market_breadth_daily.dragon_tiger),
+    source = EXCLUDED.source,
+    ingested_at = EXCLUDED.ingested_at,
+    trace_id = EXCLUDED.trace_id
 """
 
 
@@ -107,10 +120,9 @@ class MarketBreadthRow:
     and NOT NULL — they come from stock_zt_pool_* which take a date. The SPOT-derived fields
     (advancing/declining/flat) are NULLABLE: stock_zh_a_spot_em() takes NO date and serves ONLY
     the latest trading day, so a historical-day row carries None for these three fields (NFR-5
-    honest empty, never fabricated onto past trade_dates). total_turnover is NOT spot-derived —
-    it is summed from index daily 成交额 (sh000001 + sz399107, HISTORICAL), so it is populated on
-    every trading day whose index bars exist (including historical days); None only when the
-    index fetch failed or a date is missing from one index (NFR-5, never half-summed).
+    honest empty, never fabricated onto past trade_dates). total_turnover prefers the historical
+    index daily 成交额 sum (sh000001 + sz399107); the latest day may use the spot snapshot total
+    when the index endpoint is unavailable. Historical dates are never filled from latest spot.
     margin_balance_change is the day-over-day 融资余额 diff (None on the first day in the window
     or when margin is unavailable). dragon_tiger is the golden-example dict shape (see
     akshare_client.dragon_tiger_to_json) or None on fetch failure.
@@ -182,10 +194,10 @@ def upsert_sector_bars(conn: Connection, bars: list[SectorBar]) -> int:
 
 
 def upsert_market_breadth(conn: Connection, rows: list[MarketBreadthRow]) -> int:
-    """Upsert market breadth rows idempotently. Same semantics as the bar upserts.
+    """Upsert breadth rows and self-heal partial same-day data.
 
-    ON CONFLICT (trade_date) DO NOTHING means a repeat for the same trade_date is a no-op
-    (AC2). dragon_tiger dict is sent as JSONB via psycopg's default JSON adapter.
+    Required pool counts take the latest run; nullable fields use the latest non-null value.
+    Row identity remains one-per-trade-date, so repeated identical input is idempotent.
     """
     if not rows:
         return 0
