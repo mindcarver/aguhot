@@ -18,6 +18,8 @@ from market_sidecar.fixtures import (
     EXPECTED_SECTOR_PCT,
     dt_pool_20260714,
     empty_frame,
+    index_daily_em_sh000001,
+    index_daily_em_sz399107,
     index_daily_sh000001,
     index_hist_sw_801010,
     lhb_detail_20260714,
@@ -48,6 +50,14 @@ class FakeAk:
 
     def stock_zh_index_daily(self, symbol: str):  # noqa: ANN001
         return self._index.get(symbol, index_daily_sh000001())
+
+    def stock_zh_index_daily_em(self, symbol: str, start_date: str, end_date: str):  # noqa: ANN001
+        # breadth_frames keys: index_em_sh / index_em_sz (canned _em frames carry 成交额).
+        if symbol == "sh000001":
+            return self._breadth.get("index_em_sh", index_daily_em_sh000001())
+        if symbol == "sz399107":
+            return self._breadth.get("index_em_sz", index_daily_em_sz399107())
+        return empty_frame()
 
     def sw_index_first_info(self):
         return self._list if self._list is not None else sector_first_info()
@@ -259,6 +269,64 @@ def test_fetch_spot_breadth_counts_advancing_declining_flat_and_turnover():
     assert str(b.total_turnover) == EXPECTED_BREADTH["total_turnover"]
 
 
+def test_fetch_index_amounts_sums_both_indices_per_date():
+    """AC1: 两市成交额 = sh000001 + sz399107 成交额 per date (HISTORICAL, all days)."""
+    m = akc.fetch_index_amounts(
+        start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=FakeAk()
+    )
+    assert m[date(2026, 7, 14)] == Decimal(EXPECTED_BREADTH["market_turnover_20260714"])
+    assert m[date(2026, 7, 13)] == Decimal(EXPECTED_BREADTH["market_turnover_20260713"])
+    assert m[date(2026, 7, 10)] == Decimal("830000000000")  # 450e9 + 380e9
+    # outside the frame range → not present (not fabricated)
+    assert date(2026, 7, 7) not in m
+
+
+def test_fetch_index_amounts_date_missing_in_one_index_is_omitted():
+    """AC2: a date present in only ONE index is omitted — no half-sum (NFR-5)."""
+    import pandas as pd  # noqa: PLC0415 — local to the test
+
+    sz = index_daily_em_sz399107()
+    sz_missing_0710 = sz[sz["日期"] != pd.to_datetime("2026-07-10")].reset_index(drop=True)
+    ak = FakeAk(breadth_frames={"index_em_sz": sz_missing_0710})
+    m = akc.fetch_index_amounts(
+        start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=ak
+    )
+    # sh has 07-10 but sz now doesn't → omitted (not the sh-only half-sum)
+    assert date(2026, 7, 10) not in m
+    # both still have 07-14 → present
+    assert m[date(2026, 7, 14)] == Decimal(EXPECTED_BREADTH["market_turnover_20260714"])
+
+
+def test_fetch_index_amounts_empty_or_missing_column_returns_empty():
+    """AC2: empty frame / missing 成交额 or 日期 column → empty map (no raise, honest empty).
+
+    The no-amount-column AND no-date-column cases must return {} (never raise a KeyError that
+    would null every day's turnover via the outer try/except). Covers column-name drift on
+    either column.
+    """
+    import pandas as pd  # noqa: PLC0415 — local to the test
+
+    # empty frames
+    ak_empty = FakeAk(breadth_frames={"index_em_sh": empty_frame(), "index_em_sz": empty_frame()})
+    assert akc.fetch_index_amounts(
+        start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=ak_empty
+    ) == {}
+
+    # rows present but NO 成交额 column (amount col drift) → empty, no raise
+    no_amt = pd.DataFrame({"日期": pd.to_datetime(["2026-07-14"]), "收盘": [3180.0]})
+    ak_no_amt = FakeAk(breadth_frames={"index_em_sh": no_amt, "index_em_sz": no_amt})
+    assert akc.fetch_index_amounts(
+        start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=ak_no_amt
+    ) == {}
+
+    # rows present but NO 日期 column (date col drift) → empty, no raise
+    no_date = pd.DataFrame({"成交额": [4.8e11], "收盘": [3180.0]})
+    ak_no_date = FakeAk(breadth_frames={"index_em_sh": no_date, "index_em_sz": no_date})
+    assert akc.fetch_index_amounts(
+        start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=ak_no_date
+    ) == {}
+
+
 def test_fetch_dragon_tiger_aggregates_listings():
     """龙虎榜: stock count + net buy sum + topStocks (AC5)."""
     dt = akc.fetch_dragon_tiger(BREADTH_TRADE_DATE, ak_module=FakeAk())
@@ -380,7 +448,8 @@ def test_ingest_breadth_aggregates_sources_into_single_row(monkeypatch):
     assert row.advancing_count == EXPECTED_BREADTH["advancing_count"]
     assert row.declining_count == EXPECTED_BREADTH["declining_count"]
     assert row.flat_count == EXPECTED_BREADTH["flat_count"]
-    assert str(row.total_turnover) == EXPECTED_BREADTH["total_turnover"]
+    # total_turnover is now index-em derived (两市成交额 = sh000001 + sz399107), NOT spot.
+    assert str(row.total_turnover) == EXPECTED_BREADTH["market_turnover_20260714"]
     assert row.source == "akshare"
     assert row.dragon_tiger is not None
     assert row.dragon_tiger["stockCount"] == EXPECTED_BREADTH["lhb_stock_count"]
@@ -416,6 +485,40 @@ def test_ingest_breadth_per_source_isolation_optional_source_failure_keeps_row(m
     assert row.limit_up_count == EXPECTED_BREADTH["limit_up_count"]
     # the failed source is recorded, but exit code is 0 (failure ratio under threshold)
     assert any("dragon_tiger" in f for f in rep.failures)
+    assert rep.exit_code == 0
+
+
+def test_ingest_breadth_index_amounts_failure_nulls_turnover_keeps_row(monkeypatch):
+    """AC2: index_amounts (total_turnover source) failing → total_turnover NULL, row still written.
+
+    The fetch_index_amounts try/except in ingest_breadth isolates the failure: every day's
+    total_turnover=None (NFR-5, never fabricated), but the breadth row is still written with
+    its other fields intact (core counts, advancing/declining/flat from spot, dragon_tiger, margin).
+    """
+    from market_sidecar import ingest as ing_mod
+
+    class _BoomIndexEm(FakeAk):
+        def stock_zh_index_daily_em(self, symbol: str, start_date: str, end_date: str):  # noqa: ANN001
+            raise RuntimeError("index em backend down")
+
+    captured: list = []
+    monkeypatch.setattr(
+        ing_mod, "upsert_market_breadth", lambda conn, rows: captured.extend(rows) or len(rows)
+    )
+    monkeypatch.setattr(ing_mod, "connect", lambda *_a, **_k: _FakeConn())
+
+    rep = ing_mod.ingest_breadth(
+        mode="smoke", ak_module=_BoomIndexEm(), today=BREADTH_TRADE_DATE
+    )
+    row = next(r for r in captured if r.trade_date == BREADTH_TRADE_DATE)
+    # row still written; total_turnover is NULL on index-amount fetch failure
+    assert row is not None
+    assert row.total_turnover is None
+    # other fields intact
+    assert row.limit_up_count == EXPECTED_BREADTH["limit_up_count"]
+    assert row.advancing_count == EXPECTED_BREADTH["advancing_count"]
+    assert row.dragon_tiger is not None
+    assert any("index_amounts" in f for f in rep.failures)
     assert rep.exit_code == 0
 
 
@@ -475,9 +578,11 @@ def test_ingest_breadth_no_fabrication_on_historical_day_spot_only_on_latest(mon
     """P1 (HIGH): the latest-day spot snapshot is NEVER fabricated onto historical trade_dates.
 
     stock_zh_a_spot_em() takes NO date and returns ONLY the latest trading day's snapshot. The
-    ingest loop must fetch spot ONCE and populate the four spot-derived fields
-    (advancing/declining/flat/turnover) ONLY on the row whose trade_date == window end (today);
-    every historical day carries None for those four fields (honest empty, NFR-5).
+    ingest loop must fetch spot ONCE and populate the three spot-derived fields
+    (advancing/declining/flat) ONLY on the row whose trade_date == window end (today);
+    every historical day carries None for those three fields (honest empty, NFR-5).
+    total_turnover is NOT a spot field — it is index-em derived (sh000001 + sz399107) and is
+    available on any trading day whose index bars exist, historical or latest.
 
     Under FakeAk every calendar day in the window returns NON-empty date-specific pools, so each
     day produces a row. We then assert: the latest-day row has populated spot fields; EVERY other
@@ -506,28 +611,41 @@ def test_ingest_breadth_no_fabrication_on_historical_day_spot_only_on_latest(mon
     assert latest.advancing_count == EXPECTED_BREADTH["advancing_count"]
     assert latest.declining_count == EXPECTED_BREADTH["declining_count"]
     assert latest.flat_count == EXPECTED_BREADTH["flat_count"]
-    assert str(latest.total_turnover) == EXPECTED_BREADTH["total_turnover"]
+    # total_turnover is index-em derived (NOT spot): 两市成交额 for the latest day too.
+    assert str(latest.total_turnover) == EXPECTED_BREADTH["market_turnover_20260714"]
 
-    # HISTORICAL days: the four spot-derived fields MUST be None (never fabricated). This is the
-    # explicit "no fabrication on historical day" assertion — the old code stamped the SAME
-    # latest-day advancing/declining/flat/turnover onto every past trade_date.
+    # HISTORICAL days: the three SPOT-derived fields (advancing/declining/flat) MUST be None
+    # (never fabricated onto past trade_dates). total_turnover is NOT a spot field anymore — it
+    # is index-em derived and may be present on a historical day whose index bars exist (e.g.
+    # 07-10/07-13) — so it is NOT part of this "no fabrication" assertion.
     for r in historical:
         assert r.advancing_count is None, f"fabricated advancing on historical {r.trade_date}"
         assert r.declining_count is None, f"fabricated declining on historical {r.trade_date}"
         assert r.flat_count is None, f"fabricated flat on historical {r.trade_date}"
-        assert r.total_turnover is None, f"fabricated turnover on historical {r.trade_date}"
 
     # The date-specific pools ARE per-day and remain populated on historical rows (not nulled).
     for r in historical:
         assert r.limit_up_count == EXPECTED_BREADTH["limit_up_count"]
         assert r.limit_down_count == EXPECTED_BREADTH["limit_down_count"]
 
+    # total_turnover is index-em derived (NOT spot) — a historical day WITH index bars gets the
+    # REAL summed value (the headline outcome of this change), while a historical day outside the
+    # index frame stays None (NFR-5 honest empty, never fabricated). This positively verifies the
+    # contract the "no fabrication" assertion above no longer covers for turnover.
+    by_date = {r.trade_date: r for r in historical}
+    assert str(by_date[date(2026, 7, 13)].total_turnover) == EXPECTED_BREADTH["market_turnover_20260713"]
+    assert str(by_date[date(2026, 7, 10)].total_turnover) == "830000000000"  # 450e9 + 380e9
+    # 07-09 is in the window but not in the index-em frame → None (not fabricated)
+    assert by_date[date(2026, 7, 9)].total_turnover is None
+
 
 def test_ingest_breadth_spot_fetch_failure_nulls_latest_day_spot_not_dropped(monkeypatch):
     """P1/NFR-5: a latest-day spot fetch failure → NULL spot fields on the latest row (not dropped).
 
     Spot is no longer a core source. If stock_zh_a_spot_em raises, the latest-day row is still
-    written (the date-specific pools succeeded) but its four spot fields are None — honest empty.
+    written (the date-specific pools succeeded) but its three spot fields (advancing/declining/
+    flat) are None — honest empty. total_turnover is NOT a spot field (index-em derived), so a
+    spot failure does NOT null it — it stays populated from the index amounts.
     """
     from market_sidecar import ingest as ing_mod
 
@@ -550,7 +668,8 @@ def test_ingest_breadth_spot_fetch_failure_nulls_latest_day_spot_not_dropped(mon
     assert latest.advancing_count is None
     assert latest.declining_count is None
     assert latest.flat_count is None
-    assert latest.total_turnover is None
+    # total_turnover survives (index-em derived, spot-independent) for the latest day
+    assert str(latest.total_turnover) == EXPECTED_BREADTH["market_turnover_20260714"]
     # date-specific pools still present
     assert latest.limit_up_count == EXPECTED_BREADTH["limit_up_count"]
     # the failure is recorded

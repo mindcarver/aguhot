@@ -105,12 +105,15 @@ class MarketBreadthRow:
 
     Date-specific pool counts (limit_up/down, consecutive_board_max, broken_board_count) are int
     and NOT NULL — they come from stock_zt_pool_* which take a date. The SPOT-derived fields
-    (advancing/declining/flat, total_turnover) are NULLABLE: stock_zh_a_spot_em() takes NO date and
-    serves ONLY the latest trading day, so a historical-day row carries None for these four fields
-    (NFR-5 honest empty, never fabricated onto past trade_dates). margin_balance_change is the
-    day-over-day 融资余额 diff (None on the first day in the window or when margin is unavailable).
-    dragon_tiger is the golden-example dict shape (see akshare_client.dragon_tiger_to_json) or
-    None on fetch failure.
+    (advancing/declining/flat) are NULLABLE: stock_zh_a_spot_em() takes NO date and serves ONLY
+    the latest trading day, so a historical-day row carries None for these three fields (NFR-5
+    honest empty, never fabricated onto past trade_dates). total_turnover is NOT spot-derived —
+    it is summed from index daily 成交额 (sh000001 + sz399107, HISTORICAL), so it is populated on
+    every trading day whose index bars exist (including historical days); None only when the
+    index fetch failed or a date is missing from one index (NFR-5, never half-summed).
+    margin_balance_change is the day-over-day 融资余额 diff (None on the first day in the window
+    or when margin is unavailable). dragon_tiger is the golden-example dict shape (see
+    akshare_client.dragon_tiger_to_json) or None on fetch failure.
     """
 
     id: str
@@ -122,7 +125,7 @@ class MarketBreadthRow:
     advancing_count: int | None  # spot pctChange > 0; None on non-latest days (spot is latest-day-only)
     declining_count: int | None  # spot pctChange < 0; None on non-latest days
     flat_count: int | None  # spot pctChange == 0; None on non-latest days
-    total_turnover: Decimal | None  # spot 成交额 sum; None on non-latest days
+    total_turnover: Decimal | None  # 两市成交额 = sh000001 + sz399107 成交额 sum (index-em, HISTORICAL); None on fetch failure / date missing from one index
     margin_balance_change: Decimal | None
     dragon_tiger: dict[str, object] | None
     source: str

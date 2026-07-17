@@ -42,6 +42,52 @@ def index_daily_sh000001() -> pd.DataFrame:
     )
 
 
+def index_daily_em_sh000001() -> pd.DataFrame:
+    """Canned stock_zh_index_daily_em(symbol='sh000001') shape (eastmoney index kline).
+
+    Unlike the sine-based stock_zh_index_daily, the _em variant carries 成交额. 上证综指
+    covers all SH → 成交额 = 沪市成交额. 3 trading days; only 日期 + 成交额 are consumed
+    by fetch_index_amounts (other columns are realistic filler).
+    """
+    return pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2026-07-10", "2026-07-13", "2026-07-14"]),
+            "开盘": [3200.0, 3210.0, 3190.0],
+            "收盘": [3198.0, 3205.0, 3180.0],
+            "最高": [3210.0, 3215.0, 3200.0],
+            "最低": [3190.0, 3198.0, 3175.0],
+            "成交量": [3_000_000, 3_100_000, 3_500_000],
+            "成交额": [450_000_000_000, 460_000_000_000, 480_000_000_000],
+            "振幅": [0.6, 0.5, 0.8],
+            "涨跌幅": [-0.1, 0.2, -0.8],
+            "涨跌额": [-3.0, 6.0, -25.0],
+            "换手率": [0.9, 0.9, 1.0],
+        }
+    )
+
+
+def index_daily_em_sz399107() -> pd.DataFrame:
+    """Canned stock_zh_index_daily_em(symbol='sz399107') shape (深证综指, covers all SZ).
+
+    成交额 = 深市成交额. Same 3 trading days as sh so per-date sum = 两市成交额.
+    """
+    return pd.DataFrame(
+        {
+            "日期": pd.to_datetime(["2026-07-10", "2026-07-13", "2026-07-14"]),
+            "开盘": [1900.0, 1910.0, 1885.0],
+            "收盘": [1895.0, 1905.0, 1870.0],
+            "最高": [1910.0, 1915.0, 1895.0],
+            "最低": [1888.0, 1898.0, 1865.0],
+            "成交量": [2_000_000, 2_100_000, 2_400_000],
+            "成交额": [380_000_000_000, 390_000_000_000, 410_000_000_000],
+            "振幅": [1.1, 0.9, 1.6],
+            "涨跌幅": [-0.3, 0.5, -1.8],
+            "涨跌额": [-5.0, 10.0, -35.0],
+            "换手率": [1.2, 1.2, 1.4],
+        }
+    )
+
+
 def sector_first_info() -> pd.DataFrame:
     """Canned sw_index_first_info() shape: 行业代码/行业名称/... (31 real; we use 3)."""
     return pd.DataFrame(
@@ -246,6 +292,10 @@ EXPECTED_BREADTH = {
     "declining_count": 2,
     "flat_count": 1,
     "total_turnover": "21000000000.0",  # 21e9 yuan (sum of float64 成交额 via Decimal(str))
+    # fetch_index_amounts (index-em derived, HISTORICAL): 两市成交额 = sh000001 + sz399107.
+    # 07-14: 480e9 (sh) + 410e9 (sz) = 890e9 yuan; 07-13: 460e9 + 390e9 = 850e9.
+    "market_turnover_20260714": "890000000000",
+    "market_turnover_20260713": "850000000000",
     "lhb_stock_count": 2,
     "lhb_net_sum": "120000000.0",  # 1.5e8 + (-3e7) = 1.2e8 (float64 str -> Decimal)
     "margin_total": "12000000000",  # 8e9 yuan (SSE) + 40亿元→4e9 yuan (SZSE) = 12e9 yuan

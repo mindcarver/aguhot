@@ -171,10 +171,12 @@ def ingest_breadth(
     date-specific sources are fetched per-day: 涨停池 / 跌停池 / 炸板池 (stock_zt_pool_*),
     龙虎榜 (stock_lhb_detail_em), 融资融券 (stock_margin_*). The SPOT source
     (stock_zh_a_spot_em) takes NO date and returns ONLY the latest trading day's snapshot,
-    so it is fetched ONCE per ingest run and its four derived fields (advancing/declining/
-    flat/turnover) are populated ONLY on the row whose trade_date equals the window end
-    (the latest day); every other day carries NULL for those four fields (NFR-5 honest
-    empty — never fabricate the latest-day snapshot onto historical trade_dates).
+    so it is fetched ONCE per ingest run and its THREE derived fields (advancing/declining/
+    flat) are populated ONLY on the row whose trade_date equals the window end (the latest
+    day); every other day carries NULL for those three fields (NFR-5 honest empty — never
+    fabricate the latest-day snapshot onto historical trade_dates). total_turnover is
+    NOT from spot — it is derived from index daily 成交额 (sh000001 + sz399107, fetched
+    ONCE per run) so it is available on EVERY trading day, including historical ones.
 
     Per-source error isolation (AC4, mirrors 8.1's per-item isolation): each source is
     fetched in its own try/except. A failed source is skipped + logged; the other sources
@@ -205,6 +207,17 @@ def ingest_breadth(
         report.failures.append(f"spot {end}: {type(exc).__name__}: {exc}")
         log.exception("failed spot (latest-day) %s", end)
 
+    # 两市成交额 per date from index daily 成交额 (sh000001 上证综指 + sz399107 深证综指 = 两市
+    # 全市场). Fetched ONCE over the window — HISTORICAL (unlike spot's latest-day-only turnover).
+    # Failure → empty dict → every day's total_turnover=None (NFR-5), never blocks the breadth row
+    # (per-source isolation, mirrors spot). advancing/declining/flat still come from spot (latest day).
+    turnover_by_day: dict[date, Decimal] = {}
+    try:
+        turnover_by_day = akc.fetch_index_amounts(start=start, end=end, ak_module=ak_module)
+    except Exception as exc:
+        report.failures.append(f"index_amounts {start}..{end}: {type(exc).__name__}: {exc}")
+        log.exception("failed index_amounts %s..%s", start, end)
+
     # P2: track the previous trading day's margin total to compute the day-over-day diff.
     prev_margin_total: Decimal | None = None
 
@@ -219,7 +232,7 @@ def ingest_breadth(
         is_latest = day == end
         day_spot = latest_spot if is_latest else None
         breadth, day_margin_total = _aggregate_breadth_day(
-            day, day_spot, prev_margin_total, ak_module, report
+            day, day_spot, turnover_by_day, prev_margin_total, ak_module, report
         )
         if breadth is None:
             # Core pool sources failed → no row for this day (NFR-5). Already counted as failed.
@@ -242,6 +255,7 @@ def ingest_breadth(
 def _aggregate_breadth_day(
     day: date,
     spot: akc.SpotBreadth | None,
+    turnover_by_day: dict[date, Decimal],
     prev_margin_total: Decimal | None,
     ak_module: akc.AkModule | None,
     report: IngestReport,
@@ -339,7 +353,7 @@ def _aggregate_breadth_day(
             advancing_count=spot.advancing_count if spot is not None else None,
             declining_count=spot.declining_count if spot is not None else None,
             flat_count=spot.flat_count if spot is not None else None,
-            total_turnover=spot.total_turnover if spot is not None else None,
+            total_turnover=turnover_by_day.get(day),
             margin_balance_change=margin_change,
             dragon_tiger=dragon_tiger_json,
             source=SOURCE,

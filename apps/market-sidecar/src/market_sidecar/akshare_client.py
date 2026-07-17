@@ -59,6 +59,13 @@ AKSHARE PROBE RECORD (verify before trusting — AkShare function names churn):
                     stock_lhb_detail_em takes start_date=end_date="YYYYMMDD" for one day.
                     stock_margin_sse takes start_date/end_date="YYYYMMDD"; stock_margin_szse
                     takes date="YYYYMMDD". stock_zh_a_spot_em takes NO date (latest day only).
+  index daily em  : ak.stock_zh_index_daily_em(symbol="sh000001"|"sz399107",
+                    start_date="20260707", end_date="20260714")
+                    -> columns: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+                    Unlike stock_zh_index_daily (sine; only volume, NO 成交额), the _em variant
+                    carries 成交额 — used to derive 两市成交额 = sh000001 + sz399107 amount sum
+                    (HISTORICAL; spot's total_turnover is latest-day only). sz399107 = 深证综指
+                    (all SZ), sh000001 = 上证综指 (all SH) → 两市全市场.
 ----
 
 Fixture injection: the fetch functions accept an optional `ak_module` param so
@@ -76,6 +83,10 @@ from typing import Any, Protocol
 # 三大宽基 (AkShare symbol form, with exchange prefix).
 BROAD_INDICES: tuple[str, ...] = ("sh000001", "sz399001", "sz399006")
 
+# 两市成交额派生用 (沪市综指覆盖全 SH + 深证综指覆盖全 SZ = 两市全市场)。仅 breadth ingest 取成交额
+# 时用；刻意 NOT 进 BROAD_INDICES —— 它不参与 8.1/8.2 的 crash 判定（避免改变大跌日检测结果）。
+MARKET_TURNOVER_INDICES: tuple[str, ...] = ("sh000001", "sz399107")
+
 # Cap on the per-stock list serialized into the dragon_tiger JSONB column. A heavy listing
 # day can name hundreds of stocks; we keep the top N by net buy to bound the JSONB payload.
 # The aggregates (stockCount, institutionalNetBuy, hotMoneyNetBuy) stay UNCAPPED — only the
@@ -87,6 +98,7 @@ class AkModule(Protocol):
     """Structural type for the akshare module + fakes."""
 
     def stock_zh_index_daily(self, symbol: str) -> Any: ...
+    def stock_zh_index_daily_em(self, symbol: str, start_date: str, end_date: str) -> Any: ...
     def sw_index_first_info(self) -> Any: ...
     def index_hist_sw(self, symbol: str, period: str) -> Any: ...
     # Breadth (story 8.6):
@@ -336,6 +348,42 @@ def fetch_spot_breadth(
     )
 
 
+def fetch_index_amounts(
+    *,
+    start: date,
+    end: date,
+    ak_module: AkModule | None = None,
+) -> dict[date, Decimal]:
+    """两市成交额 (沪+深) per trade date, derived from index daily 成交额 (yuan).
+
+    Uses stock_zh_index_daily_em (eastmoney), which returns 成交额 — UNLIKE the
+    sine-based stock_zh_index_daily used by 8.1 (which has only volume, no 成交额).
+    We sum sh000001 (上证综指, all SH) + sz399107 (深证综指, all SZ) 成交额 per date =
+    沪深两市全市场成交额, available HISTORICALLY (unlike spot which is latest-day only).
+
+    Fetched ONCE per ingest run over the [start,end] window (caller passes the ingest
+    window); returns a date→yuan map. A date present in only ONE index is OMITTED (两市
+    口径下缺一不可 — never half-sum, NFR-5). An empty frame / missing 成交额 column for
+    an index ⇒ that index contributes nothing (no exception). A network EXCEPTION from
+    either ak call propagates — the caller (ingest_breadth) wraps this in try/except so
+    a failure ⇒ empty dict ⇒ every day's total_turnover=None (NFR-5, never fabricated).
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    s, e = _yyyymmdd(start), _yyyymmdd(end)
+    # Fetch each market-turnover index ONCE over the window, then sum 成交额 per date where
+    # EVERY turnover index has data (两市口径下缺一不可 — no half-sum, NFR-5). A network EXCEPTION
+    # propagates; the caller (ingest_breadth) wraps this in try/except ⇒ empty dict ⇒ all None.
+    per_index: dict[str, dict[date, Decimal]] = {}
+    for symbol in MARKET_TURNOVER_INDICES:
+        per_index[symbol] = _index_amount_map(
+            ak.stock_zh_index_daily_em(symbol=symbol, start_date=s, end_date=e)
+        )
+    common: set[date] = set(per_index[MARKET_TURNOVER_INDICES[0]])
+    for symbol in MARKET_TURNOVER_INDICES[1:]:
+        common &= set(per_index[symbol])
+    return {d: sum(idx[d] for idx in per_index.values()) for d in common}
+
+
 def fetch_dragon_tiger(
     trade_date: date,
     *,
@@ -502,6 +550,28 @@ def _first_present_column(df: Any, candidates: tuple[str, ...]) -> str | None:
         if c in cols:
             return c
     return None
+
+
+def _index_amount_map(df: Any) -> dict[date, Decimal]:
+    """date → 成交额 (yuan) from a stock_zh_index_daily_em frame.
+
+    Empty on a None/empty frame or a missing 成交额 column (column-name drift → honest
+    empty, never raises). Dates come from the 日期 (or 'date') column. NaN 成交额 cells
+    are skipped (NFR-5).
+    """
+    if df is None or len(df) == 0:
+        return {}
+    amt_col = _first_present_column(df, ("成交额",))
+    date_col = _first_present_column(df, ("日期", "date"))
+    if amt_col is None or date_col is None:
+        return {}  # column-name drift on either column → honest empty (never raises), NFR-5
+    out: dict[date, Decimal] = {}
+    for _, row in df.iterrows():
+        d = _coerce_date(row[date_col])
+        amt = _to_decimal_or_none(row[amt_col])
+        if amt is not None:
+            out[d] = amt
+    return out
 
 
 def _yyyymmdd(d: date) -> str:
