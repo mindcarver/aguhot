@@ -327,6 +327,69 @@ def test_fetch_index_amounts_empty_or_missing_column_returns_empty():
     ) == {}
 
 
+def test_fetch_index_amounts_retries_through_transient_failures(monkeypatch):
+    """AC1: a transient ConnectionError on stock_zh_index_daily_em recovers via _with_retry.
+
+    Per symbol, the first 2 calls raise and the 3rd succeeds. fetch_index_amounts must return the
+    full summed dict (same as the no-failure path). We assert the recovered VALUES, the per-symbol
+    CALL COUNT (proves retry actually happened — not a no-op pass-through), and the backoff DELAYS
+    (pins the exponential formula). time.sleep is captured (not waited on).
+    """
+    delays: list[float] = []
+    monkeypatch.setattr(akc.time, "sleep", lambda d, *_a, **_k: delays.append(d))
+
+    calls: dict[str, int] = {}
+
+    class _Flaky(FakeAk):
+        def stock_zh_index_daily_em(self, symbol, start_date, end_date):  # noqa: ANN001
+            n = calls.get(symbol, 0) + 1
+            calls[symbol] = n
+            # per symbol: raise on attempts 1 & 2, succeed on attempt 3
+            if n < akc.FETCH_RETRY_ATTEMPTS:
+                raise ConnectionError("RemoteDisconnected (transient)")
+            return super().stock_zh_index_daily_em(symbol, start_date, end_date)
+
+    m = akc.fetch_index_amounts(
+        start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=_Flaky()
+    )
+    # recovered ⇒ full dict, same values as the clean path
+    assert m[date(2026, 7, 14)] == Decimal(EXPECTED_BREADTH["market_turnover_20260714"])
+    assert m[date(2026, 7, 13)] == Decimal(EXPECTED_BREADTH["market_turnover_20260713"])
+    # each symbol retried exactly FETCH_RETRY_ATTEMPTS times (proves retry happened per symbol)
+    assert calls == {sym: akc.FETCH_RETRY_ATTEMPTS for sym in akc.MARKET_TURNOVER_INDICES}
+    # 2 backoff sleeps per symbol (between 3 attempts), series [2.0, 4.0] — pins exponential formula
+    assert delays == [2.0, 4.0, 2.0, 4.0]
+
+
+def test_fetch_index_amounts_persistent_failure_raises_after_retries(monkeypatch):
+    """AC2: persistent failure (eastmoney sustained outage) ⇒ _with_retry exhausts ⇒ raises.
+
+    The raise propagates out of fetch_index_amounts; ingest's per-source try/except turns it into
+    total_turnover=None (NFR-5). Retries are bounded — we assert the per-symbol call count equals
+    FETCH_RETRY_ATTEMPTS (pins the load-bearing termination bound; a `while True` regression fails here).
+    """
+    delays: list[float] = []
+    monkeypatch.setattr(akc.time, "sleep", lambda d, *_a, **_k: delays.append(d))
+
+    calls: dict[str, int] = {}
+
+    class _Dead(FakeAk):
+        def stock_zh_index_daily_em(self, symbol, start_date, end_date):  # noqa: ANN001
+            calls[symbol] = calls.get(symbol, 0) + 1
+            raise ConnectionError("push2his down (sustained)")
+
+    import pytest  # noqa: PLC0415 — local import
+
+    with pytest.raises(ConnectionError):
+        akc.fetch_index_amounts(
+            start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=_Dead()
+        )
+    # first symbol exhausted all FETCH_RETRY_ATTEMPTS before raising (bounded — no while-True regression)
+    assert calls[akc.MARKET_TURNOVER_INDICES[0]] == akc.FETCH_RETRY_ATTEMPTS
+    # backoff series [2.0, 4.0] before the final (un-slept) attempt
+    assert delays == [2.0, 4.0]
+
+
 def test_fetch_dragon_tiger_aggregates_listings():
     """龙虎榜: stock count + net buy sum + topStocks (AC5)."""
     dt = akc.fetch_dragon_tiger(BREADTH_TRADE_DATE, ak_module=FakeAk())

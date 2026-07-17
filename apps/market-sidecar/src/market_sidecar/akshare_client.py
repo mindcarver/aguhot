@@ -75,10 +75,14 @@ mirroring spec-1-4's "RSS adapter verified via fixture" precedent).
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol, TypeVar
+
+log = logging.getLogger(__name__)
 
 # 三大宽基 (AkShare symbol form, with exchange prefix).
 BROAD_INDICES: tuple[str, ...] = ("sh000001", "sz399001", "sz399006")
@@ -92,6 +96,15 @@ MARKET_TURNOVER_INDICES: tuple[str, ...] = ("sh000001", "sz399107")
 # The aggregates (stockCount, institutionalNetBuy, hotMoneyNetBuy) stay UNCAPPED — only the
 # per-stock `topStocks` list is trimmed.
 DRAGON_TIGER_TOP_N = 20
+
+# Network retry for flaky external (akshare/eastmoney) GETs. Exponential backoff: base × 2**attempt,
+# slept ONLY between attempts (N attempts ⇒ N-1 sleeps). Default 3 attempts ⇒ 2 sleeps of 2s, 4s
+# (≈6s worst-case per call). Bounded ⇒ the runner always terminates. Absorbs transient ProxyError /
+# RemoteDisconnected (the dominant observed failure mode); a sustained eastmoney outage/IP-block is
+# NOT breakable in-code — retries just maximize recovery odds, and the projected data upserts
+# persistently so the next successful run fills it.
+FETCH_RETRY_ATTEMPTS = 3
+FETCH_RETRY_BACKOFF_BASE = 2.0  # seconds
 
 
 class AkModule(Protocol):
@@ -373,15 +386,53 @@ def fetch_index_amounts(
     # Fetch each market-turnover index ONCE over the window, then sum 成交额 per date where
     # EVERY turnover index has data (两市口径下缺一不可 — no half-sum, NFR-5). A network EXCEPTION
     # propagates; the caller (ingest_breadth) wraps this in try/except ⇒ empty dict ⇒ all None.
+    # Each ak call is wrapped in _with_retry — transient ProxyError/RemoteDisconnected (the dominant
+    # observed failure mode) recovers with exponential backoff; a sustained outage still raises.
     per_index: dict[str, dict[date, Decimal]] = {}
     for symbol in MARKET_TURNOVER_INDICES:
-        per_index[symbol] = _index_amount_map(
-            ak.stock_zh_index_daily_em(symbol=symbol, start_date=s, end_date=e)
+        df = _with_retry(
+            f"index_em {symbol}",
+            lambda sym=symbol, sd=s, ed=e: ak.stock_zh_index_daily_em(
+                symbol=sym, start_date=sd, end_date=ed
+            ),
         )
+        per_index[symbol] = _index_amount_map(df)
     common: set[date] = set(per_index[MARKET_TURNOVER_INDICES[0]])
     for symbol in MARKET_TURNOVER_INDICES[1:]:
         common &= set(per_index[symbol])
     return {d: sum(idx[d] for idx in per_index.values()) for d in common}
+
+
+_T = TypeVar("_T")
+
+
+def _with_retry(label: str, fn: Callable[[], _T]) -> _T:
+    """Call `fn` with bounded exponential-backoff retry (network-flakiness absorber).
+
+    eastmoney/akshare connections intermittently reset (ProxyError / RemoteDisconnected) — akshare's
+    internal request_with_retry gives up too fast. This retries up to FETCH_RETRY_ATTEMPTS times with
+    exponential backoff (FETCH_RETRY_BACKOFF_BASE × 2**attempt), logging + sleeping ONLY between attempts
+    (N attempts ⇒ N-1 sleeps). Safe because the wrapped calls are idempotent GETs. If all attempts fail,
+    the last exception propagates (the caller's per-source try/except turns it into an honest-empty
+    field — never fabricated, NFR-5). Bounded ⇒ the runner always terminates; a sustained outage is NOT
+    broken, just given several chances to clear.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(FETCH_RETRY_ATTEMPTS):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — network calls raise a wide variety; retry is safe for idempotent GETs
+            last_exc = exc
+            if attempt < FETCH_RETRY_ATTEMPTS - 1:
+                delay = FETCH_RETRY_BACKOFF_BASE * (2**attempt)
+                log.warning(
+                    "retry %s: attempt %d/%d failed (%s: %s); backoff %.1fs",
+                    label, attempt + 1, FETCH_RETRY_ATTEMPTS, type(exc).__name__, str(exc)[:120], delay,
+                )
+                time.sleep(delay)
+    if last_exc is None:  # FETCH_RETRY_ATTEMPTS < 1 (misconfig) → fail loudly, don't silently no-op
+        raise RuntimeError(f"_with_retry({label}): FETCH_RETRY_ATTEMPTS={FETCH_RETRY_ATTEMPTS} < 1")
+    raise last_exc
 
 
 def fetch_dragon_tiger(
