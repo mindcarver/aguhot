@@ -15,8 +15,8 @@ Scopes:
 Exit code: 0 on success or below-threshold failures; 1 if the failure ratio
 exceeded FAILURE_THRESHOLD (scheduler retry signal, AD-4).
 
-This is a manually-runnable CLI only — scheduling wiring (BullMQ/cron) is out of
-scope for story 8.1 (deferred to a later 8.x story).
+The CLI remains manually runnable. The Node worker invokes the incremental index
+scope every 30 minutes to refresh the public crash calendar (GitHub #22).
 """
 
 from __future__ import annotations

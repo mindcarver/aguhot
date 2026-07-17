@@ -85,6 +85,10 @@ The CLI reads `DATABASE_URL` from the repo-root `.env` (same string Node uses).
 Exit code is non-zero if the per-item failure ratio exceeds the threshold
 (`ingest.FAILURE_THRESHOLD`, default 0.5) — a scheduler retry signal (AD-4).
 
+`apps/worker` schedules `--incremental --scope index` every 30 minutes, then
+runs crash-day detection and refreshes `published_crash_days`. The CLI commands
+above remain available for backfills and operator-triggered recovery.
+
 ## Test
 
 ```bash
@@ -105,7 +109,8 @@ The live smoke (`--smoke`) is **not** part of the test suite — it hits
 
 ## Out of scope (deferred)
 
-- Scheduling wiring (BullMQ/cron/systemd timer) — later 8.x story.
+- Scheduled sector and breadth collection — index collection for the crash-calendar
+  highlight path is wired through `apps/worker`; the other scopes remain manual.
 - `CrashDay` / `published_crash_days` read model — stories 8.2/8.3.
 - `published_crash_days.breadth` projection + `run-market-breadth.ts` runner — story 8.7.
 - `/crash-calendar/[date]` deep detail page — story 8.8.

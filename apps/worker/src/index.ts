@@ -35,7 +35,14 @@ import { registerDeepReadWorker } from "./queues/deep-read-queue.js";
 import { registerEventClusterWorker } from "./queues/event-cluster-queue.js";
 import { registerExplainWorker } from "./queues/explain-queue.js";
 import { registerMarketReactionWorker } from "./queues/market-reaction-queue.js";
-import { registerPublishTimelineWorker, schedulePublishTimelineSelfHeal } from "./queues/publish-timeline-queue.js";
+import {
+  registerMarketDataRefreshWorker,
+  scheduleMarketDataRefresh,
+} from "./queues/market-data-refresh-queue.js";
+import {
+  registerPublishTimelineWorker,
+  schedulePublishTimelineSelfHeal,
+} from "./queues/publish-timeline-queue.js";
 import { registerRecommendationReasonWorker } from "./queues/recommendation-reason-queue.js";
 import { registerSourceIngestWorker } from "./queues/source-ingest-queue.js";
 import { registerThemeBackfillWorker } from "./queues/theme-backfill-queue.js";
@@ -61,6 +68,7 @@ async function main(): Promise<void> {
   const eventClusterWorker = registerEventClusterWorker();
   const explainWorker = registerExplainWorker();
   const marketReactionWorker = registerMarketReactionWorker();
+  const marketDataRefreshWorker = registerMarketDataRefreshWorker();
   const themeBackfillWorker = registerThemeBackfillWorker();
   const dailyDigestWorker = registerDailyDigestWorker();
   const publishTimelineWorker = registerPublishTimelineWorker();
@@ -81,8 +89,13 @@ async function main(): Promise<void> {
   // auto-approve→digest→publish-timeline pass every 10 min). Default-on. Dev
   // auto-approve bypass — prod uses the operator review gate.
   await schedulePipelineRefreshSelfHeal();
+  // Keep index_daily_bars → crash_days → published_crash_days current without
+  // requiring an operator to run the Epic 8 dev runners by hand.
+  await scheduleMarketDataRefresh();
 
-  console.log("[worker] source-ingest + event-cluster + explain + market-reaction + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh workers registered and running");
+  console.log(
+    "[worker] source-ingest + event-cluster + explain + market-reaction + market-data-refresh + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh workers registered and running",
+  );
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[worker] received ${signal}, shutting down`);
@@ -91,6 +104,7 @@ async function main(): Promise<void> {
       eventClusterWorker.close(),
       explainWorker.close(),
       marketReactionWorker.close(),
+      marketDataRefreshWorker.close(),
       themeBackfillWorker.close(),
       dailyDigestWorker.close(),
       publishTimelineWorker.close(),
