@@ -88,6 +88,23 @@ class FakeAk:
         return self._breadth.get("margin_sse", margin_sse_20260714())
 
 
+import pytest  # noqa: E402 — needed for the autouse fixture below
+
+
+@pytest.fixture(autouse=True)
+def _no_request_throttle(monkeypatch):
+    """Disable _call_ak's throttling + real sleeping by default (test speed + deterministic asserts).
+
+    - MIN_REQUEST_INTERVAL=0 ⇒ _throttle is a no-op (no throttle sleeps; retry tests' `[2.0, 4.0]`
+      backoff asserts stay unpolluted).
+    - time.sleep ⇒ no-op so failure-isolation tests (which make a source raise) don't pay _call_ak's
+      REAL retry backoff (was ~6s per failing source ⇒ 120s suite). The retry/throttle tests override
+      this with their own sleep-capturing stub.
+    """
+    monkeypatch.setattr(akc, "MIN_REQUEST_INTERVAL", 0.0)
+    monkeypatch.setattr(akc.time, "sleep", lambda *_a, **_k: None)
+
+
 # --- index parsing + pct_change ---
 
 
@@ -378,8 +395,6 @@ def test_fetch_index_amounts_persistent_failure_raises_after_retries(monkeypatch
             calls[symbol] = calls.get(symbol, 0) + 1
             raise ConnectionError("push2his down (sustained)")
 
-    import pytest  # noqa: PLC0415 — local import
-
     with pytest.raises(ConnectionError):
         akc.fetch_index_amounts(
             start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=_Dead()
@@ -388,6 +403,71 @@ def test_fetch_index_amounts_persistent_failure_raises_after_retries(monkeypatch
     assert calls[akc.MARKET_TURNOVER_INDICES[0]] == akc.FETCH_RETRY_ATTEMPTS
     # backoff series [2.0, 4.0] before the final (un-slept) attempt
     assert delays == [2.0, 4.0]
+
+
+def test_throttle_paces_consecutive_calls(monkeypatch):
+    """AC1: _throttle enforces MIN_REQUEST_INTERVAL between calls (caps aggregate request rate).
+
+    The whole point of the rate-limit: prevent the back-to-back burst that triggers eastmoney's IP
+    ban. With interval>0, a second call immediately after the first MUST sleep ~interval. We override
+    the autouse-disabled interval with a tiny value for speed.
+    """
+    monkeypatch.setattr(akc, "MIN_REQUEST_INTERVAL", 0.05)
+    sleeps: list[float] = []
+    monkeypatch.setattr(akc.time, "sleep", lambda d, *_a, **_k: sleeps.append(d))
+    monkeypatch.setattr(akc, "_last_call_at", 0.0)  # first call: elapsed huge ⇒ no sleep
+
+    akc._throttle()
+    assert sleeps == []  # first call after a long gap ⇒ no wait
+    akc._throttle()
+    # second call immediately after ⇒ waited ≈ interval (0 < wait ≤ interval)
+    assert sleeps and 0 < sleeps[0] <= 0.05
+
+
+def test_throttle_noop_when_interval_zero(monkeypatch):
+    """AC2: MIN_REQUEST_INTERVAL=0 ⇒ _throttle never sleeps (opt-out / test default)."""
+    monkeypatch.setattr(akc, "MIN_REQUEST_INTERVAL", 0.0)
+    sleeps: list[float] = []
+    monkeypatch.setattr(akc.time, "sleep", lambda *_a, **_k: sleeps.append(0))
+    monkeypatch.setattr(akc, "_last_call_at", 0.0)
+
+    akc._throttle()
+    akc._throttle()
+    assert sleeps == []
+
+
+def test_call_ak_throttles_before_each_retry_attempt(monkeypatch):
+    """Composition: _call_ak engages _throttle() before EACH attempt (the central claim of the change).
+
+    Without this, a refactor that drops `_throttle()` from the retry loop ships green (the direct
+    _throttle tests still pass; the retry tests run with throttle disabled). Here we drive _call_ak
+    through a fail-then-succeed fn with throttle ON and assert a throttle sleep fires before EACH
+    attempt (distinguished from the 2.0s backoff sleep by magnitude).
+    """
+    monkeypatch.setattr(akc, "MIN_REQUEST_INTERVAL", 0.05)  # re-enable throttle (autouse disables)
+    sleeps: list[float] = []
+    monkeypatch.setattr(akc.time, "sleep", lambda d, *_a, **_k: sleeps.append(d))
+    # seed _last_call_at to "just now" so the FIRST attempt's throttle engages (the 0.0 module
+    # sentinel means cold-start first-call never waits — correct, but here we want to observe both
+    # attempts pacing).
+    monkeypatch.setattr(akc, "_last_call_at", akc.time.monotonic())
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("transient")
+        return "ok"
+
+    result = akc._call_ak("flaky_source", flaky)
+    assert result == "ok"
+    assert calls["n"] == 2  # failed once, succeeded on retry
+    # throttle sleeps (≤ interval 0.05) fire before EACH of the 2 attempts; one 2.0s backoff between.
+    throttle_sleeps = [s for s in sleeps if s <= 0.05]
+    backoff_sleeps = [s for s in sleeps if s > 0.05]
+    assert len(throttle_sleeps) == 2  # one per attempt — pins the composition
+    assert backoff_sleeps == [2.0]
 
 
 def test_fetch_dragon_tiger_aggregates_listings():

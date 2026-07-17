@@ -106,6 +106,16 @@ DRAGON_TIGER_TOP_N = 20
 FETCH_RETRY_ATTEMPTS = 3
 FETCH_RETRY_BACKOFF_BASE = 2.0  # seconds
 
+# Global request rate-limit (prevents eastmoney IP ban). The breadth ingest fires many akshare
+# calls back-to-back (5 sources × N days + spot + index) — eastmoney's anti-scraping IP-bans after
+# such bursts (observed: push2his/push2 hosts go RemoteDisconnected for an extended period after a
+# run). akshare's OWN pagination already sleeps 0.5–1.5s/page (≈1–2 req/s, tolerated); our CALL
+# boundary had no pacing. MIN_REQUEST_INTERVAL enforces a floor between any two akshare calls so the
+# aggregate rate stays ≤ 1/interval req/s (default 0.5s ⇒ ≤2 req/s, matching akshare's tolerated
+# pagination rate). 0 ⇒ throttling disabled (tests / opt-out).
+MIN_REQUEST_INTERVAL = 0.5  # seconds
+_last_call_at: float = 0.0  # time.monotonic() of the last akshare call (module-global rate-limit state)
+
 
 class AkModule(Protocol):
     """Structural type for the akshare module + fakes."""
@@ -286,7 +296,7 @@ def fetch_limit_pool(
     consecutive_max=0 (NOT None: the 涨停 pool always has the 连板数 column).
     """
     ak = ak_module if ak_module is not None else _real_ak()
-    df = ak.stock_zt_pool_em(date=_yyyymmdd(trade_date))
+    df = _call_ak("zt_pool", lambda: ak.stock_zt_pool_em(date=_yyyymmdd(trade_date)))
     row_count, consecutive_max = _pool_counts(df, with_consecutive=True)
     return LimitPoolStats(
         trade_date=trade_date,
@@ -305,7 +315,7 @@ def fetch_limit_down_pool(
     consecutive_max is None (the 跌停 pool has no 连板数 column).
     """
     ak = ak_module if ak_module is not None else _real_ak()
-    df = ak.stock_zt_pool_dtgc_em(date=_yyyymmdd(trade_date))
+    df = _call_ak("dt_pool", lambda: ak.stock_zt_pool_dtgc_em(date=_yyyymmdd(trade_date)))
     row_count, _ = _pool_counts(df, with_consecutive=False)
     return LimitPoolStats(trade_date=trade_date, row_count=row_count, consecutive_max=None)
 
@@ -320,7 +330,7 @@ def fetch_broken_board(
     consecutive_max is None (the 炸板 pool has no 连板数 column).
     """
     ak = ak_module if ak_module is not None else _real_ak()
-    df = ak.stock_zt_pool_zbgc_em(date=_yyyymmdd(trade_date))
+    df = _call_ak("zb_pool", lambda: ak.stock_zt_pool_zbgc_em(date=_yyyymmdd(trade_date)))
     row_count, _ = _pool_counts(df, with_consecutive=False)
     return LimitPoolStats(trade_date=trade_date, row_count=row_count, consecutive_max=None)
 
@@ -338,7 +348,7 @@ def fetch_spot_breadth(
     NFR-5). turnover is Decimal (sum of yuan, not float).
     """
     ak = ak_module if ak_module is not None else _real_ak()
-    df = ak.stock_zh_a_spot_em()
+    df = _call_ak("spot", lambda: ak.stock_zh_a_spot_em())
     advancing = declining = flat = 0
     turnover = Decimal("0")
     for _, row in df.iterrows():
@@ -390,7 +400,7 @@ def fetch_index_amounts(
     # observed failure mode) recovers with exponential backoff; a sustained outage still raises.
     per_index: dict[str, dict[date, Decimal]] = {}
     for symbol in MARKET_TURNOVER_INDICES:
-        df = _with_retry(
+        df = _call_ak(
             f"index_em {symbol}",
             lambda sym=symbol, sd=s, ed=e: ak.stock_zh_index_daily_em(
                 symbol=sym, start_date=sd, end_date=ed
@@ -406,19 +416,40 @@ def fetch_index_amounts(
 _T = TypeVar("_T")
 
 
-def _with_retry(label: str, fn: Callable[[], _T]) -> _T:
-    """Call `fn` with bounded exponential-backoff retry (network-flakiness absorber).
+def _throttle() -> None:
+    """Block until at least MIN_REQUEST_INTERVAL has elapsed since the last akshare call.
 
-    eastmoney/akshare connections intermittently reset (ProxyError / RemoteDisconnected) — akshare's
-    internal request_with_retry gives up too fast. This retries up to FETCH_RETRY_ATTEMPTS times with
-    exponential backoff (FETCH_RETRY_BACKOFF_BASE × 2**attempt), logging + sleeping ONLY between attempts
-    (N attempts ⇒ N-1 sleeps). Safe because the wrapped calls are idempotent GETs. If all attempts fail,
-    the last exception propagates (the caller's per-source try/except turns it into an honest-empty
-    field — never fabricated, NFR-5). Bounded ⇒ the runner always terminates; a sustained outage is NOT
-    broken, just given several chances to clear.
+    Module-global rate-limit (single-threaded sidecar ingest). Prevents the back-to-back request
+    burst that triggers eastmoney's anti-scraping IP ban. No-op when MIN_REQUEST_INTERVAL <= 0
+    (opt-out / tests). Uses time.monotonic() so wall-clock adjustments don't affect pacing.
+    """
+    global _last_call_at
+    if MIN_REQUEST_INTERVAL <= 0:
+        _last_call_at = time.monotonic()
+        return
+    wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _last_call_at)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call_at = time.monotonic()
+
+
+def _call_ak(label: str, fn: Callable[[], _T]) -> _T:
+    """Call an akshare function with global rate-limiting + bounded exponential-backoff retry.
+
+    Two concerns folded into one helper, applied at every breadth akshare call site:
+      1. `_throttle()` before EACH attempt — caps the aggregate request rate so eastmoney's
+         anti-scraping does NOT IP-ban this host in the first place (prevention). Retried attempts
+         are also network calls, so they pace too.
+      2. retry on failure — absorbs transient ProxyError/RemoteDisconnected (akshare's internal
+         request_with_retry gives up too fast); exponential backoff, slept only between attempts
+         (N attempts ⇒ N-1 sleeps). Safe because the wrapped calls are idempotent GETs.
+
+    All-retries-failed ⇒ the last exception propagates (the caller's per-source try/except turns it
+    into an honest-empty field — never fabricated, NFR-5). Bounded ⇒ the runner always terminates.
     """
     last_exc: Exception | None = None
     for attempt in range(FETCH_RETRY_ATTEMPTS):
+        _throttle()
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 — network calls raise a wide variety; retry is safe for idempotent GETs
@@ -431,7 +462,7 @@ def _with_retry(label: str, fn: Callable[[], _T]) -> _T:
                 )
                 time.sleep(delay)
     if last_exc is None:  # FETCH_RETRY_ATTEMPTS < 1 (misconfig) → fail loudly, don't silently no-op
-        raise RuntimeError(f"_with_retry({label}): FETCH_RETRY_ATTEMPTS={FETCH_RETRY_ATTEMPTS} < 1")
+        raise RuntimeError(f"_call_ak({label}): FETCH_RETRY_ATTEMPTS={FETCH_RETRY_ATTEMPTS} < 1")
     raise last_exc
 
 
@@ -454,7 +485,7 @@ def fetch_dragon_tiger(
     # stock_lhb_detail_em takes a start_date/end_date RANGE; for one day pass both as the
     # same date (probed akshare 1.18.64 signature).
     d = _yyyymmdd(trade_date)
-    df = ak.stock_lhb_detail_em(start_date=d, end_date=d)
+    df = _call_ak("lhb", lambda: ak.stock_lhb_detail_em(start_date=d, end_date=d))
     if df is None or len(df) == 0:
         return DragonTiger(
             stock_count=0,
@@ -563,7 +594,7 @@ def _sum_margin_balance(ak: AkModule, trade_date: date) -> Decimal | None:
     fn_sse = getattr(ak, "stock_margin_sse", None)
     if fn_sse is not None:
         try:
-            df = fn_sse(start_date=d, end_date=d)
+            df = _call_ak("margin_sse", lambda: fn_sse(start_date=d, end_date=d))
         except Exception:  # noqa: BLE001 — one exchange missing is not fatal
             df = None
         if df is not None and len(df) > 0:
@@ -579,7 +610,7 @@ def _sum_margin_balance(ak: AkModule, trade_date: date) -> Decimal | None:
     fn_szse = getattr(ak, "stock_margin_szse", None)
     if fn_szse is not None:
         try:
-            df = fn_szse(date=d)
+            df = _call_ak("margin_szse", lambda: fn_szse(date=d))
         except Exception:  # noqa: BLE001 — one exchange missing is not fatal
             df = None
         if df is not None and len(df) > 0:

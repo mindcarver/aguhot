@@ -1107,3 +1107,6 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-breadth-turnover-from-index-amount.md`
   summary: `fetch_index_amounts` 静默全 None 的可观测性 + `stock_zh_index_daily_em` 未进 sidecar probe 验证纪律
   evidence: spec turnover step-04 review：单指数「成交额/日期」列名漂移或 akshare 改名 `stock_zh_index_daily_em` 时，`_index_amount_map` 返回空 dict（正确，NFR-5），但 `fetch_index_amounts` 仅在「抛异常」路径有 ingest failure log，「列漂移致空」路径无任何告警——与「真无数据」不可区分，所有日 total_turnover 静默 None。且本变更新依赖的 `_em` 函数未进 sidecar 的 verify-probe 纪律（8.6 既有列名漂移风险记录在案）。改进：index amount map 为空时 warn-log 区分漂移 vs 真空；补 `verify_index_em` 探针钉版本+列名。NFR-5 结果正确，仅观测性欠缺。
+- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-breadth-fetch-throttle-rate-limit.md`
+  summary: breadth runner 对非交易日（周末/节假日）仍发起全部 6 个源请求——靠空池判定非交易日，无 A 股交易日历来 skip
+  evidence: spec throttle step-04 review #14：`ingest_breadth` 的 `_iter_dates` 逐**自然日**遍历窗口（8.6 既有设计，注释明示「we don't have an A-share calendar here, so we walk calendar days and let the pool fetches naturally return empty frames on non-trading days」）。每个非交易日仍调涨停/跌停/炸板/龙虎榜/融资融券×2 = 6 次（throttle 后 ~3s/非交易日的纯睡），既浪费又计入请求量（不利防封禁）。引入 A 股交易日历（或 cache 首个有效交易日推导）让 `_iter_dates` 只枚举交易日，可同时降请求量（额外防 eastmoney 封禁）+ 提速。与 throttle（限速）互补，但属独立的 calendar 关注点。
