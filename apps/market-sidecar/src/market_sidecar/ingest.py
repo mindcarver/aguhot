@@ -210,8 +210,9 @@ def ingest_breadth(
 
     # 两市成交额 per date from index daily 成交额 (sh000001 上证综指 + sz399107 深证综指 = 两市
     # 全市场). Fetched ONCE over the window — HISTORICAL (unlike spot's latest-day-only turnover).
-    # Failure → empty dict → every day's total_turnover=None (NFR-5), never blocks the breadth row
-    # (per-source isolation, mirrors spot). advancing/declining/flat still come from spot (latest day).
+    # Any missing index amount is filled below from the dated Shanghai + Shenzhen exchange
+    # summaries. It preserves an honest null when either exchange fails, and never uses the
+    # latest-only spot snapshot for history.
     turnover_by_day: dict[date, Decimal] = {}
     try:
         turnover_by_day = akc.fetch_index_amounts(start=start, end=end, ak_module=ak_module)
@@ -241,6 +242,25 @@ def ingest_breadth(
         rows.append(breadth)
         report.ok_items += 1
         prev_margin_total = day_margin_total
+
+    if rows:
+        # Fill every gap left by the primary source, whether it failed for the entire window or
+        # omitted only one date. Every row is a confirmed trading day (the dated pools succeeded),
+        # so the exchange summaries can supply a same-day 两市成交额 without leaking a latest
+        # snapshot into historical records.
+        for idx, row in enumerate(rows):
+            if row.total_turnover is not None:
+                continue
+            try:
+                rows[idx] = replace(
+                    row,
+                    total_turnover=akc.fetch_exchange_amount(row.trade_date, ak_module=ak_module),
+                )
+            except Exception as exc:
+                report.failures.append(
+                    f"exchange_amount {row.trade_date}: {type(exc).__name__}: {exc}"
+                )
+                log.exception("failed exchange_amount %s", row.trade_date)
 
     if latest_spot is not None and rows:
         # Spot has no trade-date parameter. The latest row confirmed by the three dated pool
