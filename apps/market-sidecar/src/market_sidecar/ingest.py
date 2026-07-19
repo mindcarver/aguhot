@@ -18,7 +18,7 @@ test_upsert (transaction-rollback isolation against the dev PG).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -172,9 +172,9 @@ def ingest_breadth(
     龙虎榜 (stock_lhb_detail_em), 融资融券 (stock_margin_*). The SPOT source
     (Eastmoney with Sina fallback) takes NO date and returns ONLY the latest trading day's snapshot,
     so it is fetched ONCE per ingest run and its THREE derived fields (advancing/declining/
-    flat) are populated ONLY on the row whose trade_date equals the window end (the latest
-    day); every other day carries NULL for those three fields (NFR-5 honest empty — never
-    fabricate the latest-day snapshot onto historical trade_dates). total_turnover prefers
+    flat) are populated ONLY on the latest trading-day row confirmed by the date-specific
+    pool sources; every other day carries NULL for those three fields (NFR-5 honest empty —
+    never fabricate the latest-day snapshot onto historical trade_dates). total_turnover prefers
     index daily 成交额 (sh000001 + sz399107, fetched ONCE per run) for every date; when that
     source fails, only the latest day may fall back to the spot snapshot's measured turnover.
 
@@ -197,9 +197,10 @@ def ingest_breadth(
     rows: list[MarketBreadthRow] = []
 
     # P1: fetch spot ONCE — the spot adapters return the LATEST trading day only (no date
-    # param). We stamp its four derived fields onto ONLY the latest-day row (trade_date == end);
-    # every other day gets NULL for these fields (honest empty, never fabricated). A spot fetch
-    # failure leaves latest_spot = None → the latest-day row also gets NULL spot fields (NFR-5).
+    # param). We attach it after the date-specific pools reveal the latest trading day, rather
+    # than to the calendar-window end (which may be a weekend or holiday). Every other day gets
+    # NULL spot fields (honest empty, never fabricated). A spot fetch failure leaves
+    # latest_spot = None → all rows keep NULL spot fields (NFR-5).
     latest_spot: akc.SpotBreadth | None = None
     try:
         latest_spot = akc.fetch_spot_breadth(end, ak_module=ak_module)
@@ -229,10 +230,8 @@ def ingest_breadth(
     # spot now NULL on historical days, the guard keys off the date-specific pools only).
     for day in _iter_dates(start, end):
         report.total_items += 1
-        is_latest = day == end
-        day_spot = latest_spot if is_latest else None
         breadth, day_margin_total = _aggregate_breadth_day(
-            day, day_spot, turnover_by_day, prev_margin_total, ak_module, report
+            day, turnover_by_day, prev_margin_total, ak_module, report
         )
         if breadth is None:
             # Core pool sources failed → no row for this day (NFR-5). Already counted as failed.
@@ -241,10 +240,29 @@ def ingest_breadth(
             continue
         rows.append(breadth)
         report.ok_items += 1
-        log.info("ok breadth %s: lu=%d ld=%d adv=%s dec=%s turnover=%s",
-                 day, breadth.limit_up_count, breadth.limit_down_count,
-                 breadth.advancing_count, breadth.declining_count, breadth.total_turnover)
         prev_margin_total = day_margin_total
+
+    if latest_spot is not None and rows:
+        # Spot has no trade-date parameter. The latest row confirmed by the three dated pool
+        # sources is the only row it may represent; this also preserves weekend/holiday runs.
+        latest_idx = max(range(len(rows)), key=lambda idx: rows[idx].trade_date)
+        latest_row = rows[latest_idx]
+        rows[latest_idx] = replace(
+            latest_row,
+            advancing_count=latest_spot.advancing_count,
+            declining_count=latest_spot.declining_count,
+            flat_count=latest_spot.flat_count,
+            total_turnover=(
+                latest_row.total_turnover
+                if latest_row.total_turnover is not None
+                else latest_spot.total_turnover
+            ),
+        )
+
+    for breadth in rows:
+        log.info("ok breadth %s: lu=%d ld=%d adv=%s dec=%s turnover=%s",
+                 breadth.trade_date, breadth.limit_up_count, breadth.limit_down_count,
+                 breadth.advancing_count, breadth.declining_count, breadth.total_turnover)
 
     if rows:
         with connect(db_url) as conn:
@@ -254,7 +272,6 @@ def ingest_breadth(
 
 def _aggregate_breadth_day(
     day: date,
-    spot: akc.SpotBreadth | None,
     turnover_by_day: dict[date, Decimal],
     prev_margin_total: Decimal | None,
     ak_module: akc.AkModule | None,
@@ -262,8 +279,9 @@ def _aggregate_breadth_day(
 ) -> tuple[MarketBreadthRow | None, Decimal | None]:
     """Aggregate the breadth sources for one day into a single row (per-source isolation).
 
-    `spot` is the pre-fetched latest-day SpotBreadth, or None for non-latest days (spot fields
-    stay NULL on the row). `prev_margin_total` is the prior day's 融资余额 total for the P2 diff.
+    Spot fields are attached only after the latest date-specific pool row is known. Until then,
+    every row keeps those fields NULL. `prev_margin_total` is the prior day's 融资余额 total for
+    the P2 diff.
 
     Returns (row_or_None, margin_total_for_this_day). row is None if a CORE pool source failed
     (NFR-5). margin_total is this day's balance total (passed back so the caller can thread it
@@ -350,16 +368,12 @@ def _aggregate_breadth_day(
             limit_down_count=limit_down.row_count,
             consecutive_board_max=limit_up.consecutive_max or 0,
             broken_board_count=broken_board.row_count,
-            advancing_count=spot.advancing_count if spot is not None else None,
-            declining_count=spot.declining_count if spot is not None else None,
-            flat_count=spot.flat_count if spot is not None else None,
-            # Historical turnover comes from the two index series. For the latest day only,
-            # the spot snapshot is an honest fallback when the index endpoint is unavailable.
-            total_turnover=(
-                turnover_by_day[day]
-                if day in turnover_by_day
-                else (spot.total_turnover if spot is not None else None)
-            ),
+            advancing_count=None,
+            declining_count=None,
+            flat_count=None,
+            # Historical turnover comes from the two index series. The latest confirmed trading
+            # day may receive the spot fallback after all date-specific pool rows are collected.
+            total_turnover=turnover_by_day.get(day),
             margin_balance_change=margin_change,
             dragon_tiger=dragon_tiger_json,
             source=SOURCE,

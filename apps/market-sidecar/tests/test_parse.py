@@ -956,6 +956,49 @@ def test_ingest_breadth_historical_non_trading_day_still_skipped_with_null_spot(
     assert r14.advancing_count == EXPECTED_BREADTH["advancing_count"]
 
 
+def test_ingest_breadth_attaches_spot_to_latest_trading_day_when_window_ends_weekend(monkeypatch):
+    """P1: a spot snapshot belongs to the latest dated-pool row, not a weekend window end.
+
+    The spot API has no date parameter. On a weekend run, its latest snapshot represents Friday,
+    while the calendar window ends on Sunday. Attach it only to Friday, whose dated pool data
+    proves it is the latest trading day; use the snapshot turnover only when index-em has no
+    turnover for that row.
+    """
+    from market_sidecar import ingest as ing_mod
+
+    latest_trade_day = "20260717"
+    weekend_run_day = date(2026, 7, 19)
+    captured: list = []
+
+    class _WeekendCalendarFake(FakeAk):
+        def stock_zt_pool_em(self, date: str):  # noqa: ANN001
+            return zt_pool_20260714() if date == latest_trade_day else empty_frame()
+
+        def stock_zt_pool_dtgc_em(self, date: str):  # noqa: ANN001
+            return dt_pool_20260714() if date == latest_trade_day else empty_frame()
+
+        def stock_zt_pool_zbgc_em(self, date: str):  # noqa: ANN001
+            return zb_pool_20260714() if date == latest_trade_day else empty_frame()
+
+    monkeypatch.setattr(
+        ing_mod, "upsert_market_breadth", lambda conn, rows: captured.extend(rows) or len(rows)
+    )
+    monkeypatch.setattr(ing_mod, "connect", lambda *_a, **_k: _FakeConn())
+
+    ing_mod.ingest_breadth(
+        mode="smoke", ak_module=_WeekendCalendarFake(), today=weekend_run_day
+    )
+
+    assert [row.trade_date for row in captured] == [date(2026, 7, 17)]
+    latest = captured[0]
+    assert latest.advancing_count == EXPECTED_BREADTH["advancing_count"]
+    assert latest.declining_count == EXPECTED_BREADTH["declining_count"]
+    assert latest.flat_count == EXPECTED_BREADTH["flat_count"]
+    # The fake index-em history ends before 07-17, so the latest snapshot is the legitimate
+    # fallback for this one row.
+    assert str(latest.total_turnover) == EXPECTED_BREADTH["total_turnover"]
+
+
 # ===========================================================================
 # P8 — breadth SQL contract test. ALWAYS RUNS (no PG, no network). Guards the
 # self-healing conflict clause + null/JSON adaptation even when test_upsert.py auto-skips

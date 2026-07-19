@@ -345,7 +345,8 @@ def fetch_spot_breadth(
 
     Eastmoney is primary. If its paginated endpoint fails after bounded retries, fall back to
     AkShare's Sina snapshot, which exposes the same normalized 涨跌幅/成交额 columns. Both return
-    only the latest trading day, so the caller must use this result only for the window end.
+    only the latest trading day, so the caller must attach this result only to the latest
+    trading day confirmed by date-specific market sources.
     """
     ak = ak_module if ak_module is not None else _real_ak()
     try:
