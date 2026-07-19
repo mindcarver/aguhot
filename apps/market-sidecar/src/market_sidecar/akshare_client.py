@@ -66,6 +66,10 @@ AKSHARE PROBE RECORD (verify before trusting — AkShare function names churn):
                     carries 成交额 — used to derive 两市成交额 = sh000001 + sz399107 amount sum
                     (HISTORICAL; spot's total_turnover is latest-day only). sz399107 = 深证综指
                     (all SZ), sh000001 = 上证综指 (all SH) → 两市全市场.
+  exchange turnover: ak.stock_sse_deal_daily(date="20260716") +
+                    ak.stock_szse_summary(date="20260716") provide dated stock-market
+                    transaction amounts from the Shanghai and Shenzhen exchanges. They are a
+                    fallback only when the Eastmoney index history is unavailable.
 ----
 
 Fixture injection: the fetch functions accept an optional `ak_module` param so
@@ -133,6 +137,8 @@ class AkModule(Protocol):
     def stock_lhb_detail_em(self, start_date: str, end_date: str) -> Any: ...
     def stock_margin_szse(self, date: str) -> Any: ...
     def stock_margin_sse(self, start_date: str, end_date: str) -> Any: ...
+    def stock_sse_deal_daily(self, date: str) -> Any: ...
+    def stock_szse_summary(self, date: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -421,6 +427,61 @@ def fetch_index_amounts(
     for symbol in MARKET_TURNOVER_INDICES[1:]:
         common &= set(per_index[symbol])
     return {d: sum(idx[d] for idx in per_index.values()) for d in common}
+
+
+def fetch_exchange_amount(trade_date: date, *, ak_module: AkModule | None = None) -> Decimal:
+    """两市成交额 fallback from dated Shanghai + Shenzhen exchange summaries.
+
+    The primary source remains the two Eastmoney index histories in
+    :func:`fetch_index_amounts`, because they retrieve a whole date window in two calls. When
+    that endpoint is unavailable, the exchange endpoints provide an independently dated and
+    auditable replacement for one completed trading day:
+
+    - ``stock_sse_deal_daily`` reports the ``股票`` ``成交金额`` in 亿元;
+    - ``stock_szse_summary`` reports the ``股票`` ``成交金额`` in yuan.
+
+    Both exchange amounts are required. A missing row or column raises so the caller can retain
+    an honest null rather than publish a one-sided "两市" total.
+    """
+    ak = ak_module if ak_module is not None else _real_ak()
+    day = _yyyymmdd(trade_date)
+    sse = _call_ak("sse_deal_daily", lambda: ak.stock_sse_deal_daily(date=day))
+    szse = _call_ak("szse_summary", lambda: ak.stock_szse_summary(date=day))
+
+    sse_amount_yi = _summary_amount(
+        sse,
+        label_column="单日情况",
+        label="成交金额",
+        value_column="股票",
+    )
+    szse_amount_yuan = _summary_amount(
+        szse,
+        label_column="证券类别",
+        label="股票",
+        value_column="成交金额",
+    )
+    return sse_amount_yi * Decimal("100000000") + szse_amount_yuan
+
+
+def _summary_amount(
+    df: Any,
+    *,
+    label_column: str,
+    label: str,
+    value_column: str,
+) -> Decimal:
+    """Extract one numeric total from an exchange summary frame or raise clearly."""
+    if df.empty or label_column not in df.columns or value_column not in df.columns:
+        raise ValueError(
+            f"exchange summary missing {label_column!r} or {value_column!r} column"
+        )
+    matches = df[df[label_column].astype(str).str.strip() == label]
+    if matches.empty:
+        raise ValueError(f"exchange summary missing {label_column}={label}")
+    amount = _to_decimal_or_none(matches.iloc[0][value_column])
+    if amount is None:
+        raise ValueError(f"exchange summary has non-numeric {value_column} for {label}")
+    return amount
 
 
 _T = TypeVar("_T")

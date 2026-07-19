@@ -90,6 +90,12 @@ class FakeAk:
     def stock_margin_sse(self, start_date: str, end_date: str):  # noqa: ANN001
         return self._breadth.get("margin_sse", margin_sse_20260714())
 
+    def stock_sse_deal_daily(self, date: str):  # noqa: ANN001
+        return self._breadth.get("sse_deal_daily", empty_frame())
+
+    def stock_szse_summary(self, date: str):  # noqa: ANN001
+        return self._breadth.get("szse_summary", empty_frame())
+
 
 import pytest  # noqa: E402 — needed for the autouse fixture below
 
@@ -359,6 +365,35 @@ def test_fetch_index_amounts_empty_or_missing_column_returns_empty():
     assert akc.fetch_index_amounts(
         start=date(2026, 7, 10), end=date(2026, 7, 14), ak_module=ak_no_date
     ) == {}
+
+
+def test_fetch_exchange_amount_sums_dated_shanghai_and_shenzhen_summaries():
+    """Fallback uses the two exchange stock totals with their documented units."""
+    import pandas as pd  # noqa: PLC0415 — local to the test
+
+    sse = pd.DataFrame({"单日情况": ["成交金额"], "股票": ["123.45"]})
+    szse = pd.DataFrame({"证券类别": ["股票"], "成交金额": [Decimal("6789000000")]})
+    amount = akc.fetch_exchange_amount(
+        BREADTH_TRADE_DATE,
+        ak_module=FakeAk(breadth_frames={"sse_deal_daily": sse, "szse_summary": szse}),
+    )
+    # SSE is reported in 亿, SZSE in yuan: 123.45e8 + 6.789e9 = 19.134e9 yuan.
+    assert amount == Decimal("19134000000")
+
+
+def test_fetch_exchange_amount_requires_both_exchange_stock_totals():
+    """Never publish a one-sided value as a 两市成交额."""
+    import pandas as pd  # noqa: PLC0415 — local to the test
+
+    sse = pd.DataFrame({"单日情况": ["成交金额"], "股票": ["123.45"]})
+    missing_stock_row = pd.DataFrame({"证券类别": ["基金"], "成交金额": [100]})
+    with pytest.raises(ValueError, match="证券类别=股票"):
+        akc.fetch_exchange_amount(
+            BREADTH_TRADE_DATE,
+            ak_module=FakeAk(
+                breadth_frames={"sse_deal_daily": sse, "szse_summary": missing_stock_row}
+            ),
+        )
 
 
 def test_fetch_index_amounts_retries_through_transient_failures(monkeypatch):
@@ -648,16 +683,20 @@ def test_ingest_breadth_per_source_isolation_optional_source_failure_keeps_row(m
     assert rep.exit_code == 0
 
 
-def test_ingest_breadth_index_amounts_failure_uses_latest_spot_turnover(monkeypatch):
-    """Index turnover failure uses the latest spot snapshot without fabricating history.
-
-    Spot is latest-day-only, so it may fill only the window end. Historical rows remain NULL.
-    """
+def test_ingest_breadth_index_amounts_failure_uses_exchange_fallback(monkeypatch):
+    """Index turnover failure falls back to dated exchange totals for every trading-day row."""
     from market_sidecar import ingest as ing_mod
+    import pandas as pd
 
     class _BoomIndexEm(FakeAk):
         def stock_zh_index_daily_em(self, symbol: str, start_date: str, end_date: str):  # noqa: ANN001
             raise RuntimeError("index em backend down")
+
+        def stock_sse_deal_daily(self, date: str):  # noqa: ANN001
+            return pd.DataFrame({"单日情况": ["成交金额"], "股票": ["123.45"]})
+
+        def stock_szse_summary(self, date: str):  # noqa: ANN001
+            return pd.DataFrame({"证券类别": ["股票"], "成交金额": [6789000000]})
 
     captured: list = []
     monkeypatch.setattr(
@@ -669,16 +708,18 @@ def test_ingest_breadth_index_amounts_failure_uses_latest_spot_turnover(monkeypa
         mode="smoke", ak_module=_BoomIndexEm(), today=BREADTH_TRADE_DATE
     )
     row = next(r for r in captured if r.trade_date == BREADTH_TRADE_DATE)
-    # Latest-day turnover is measured from the spot snapshot.
+    # Exchange fallback wins over the latest-only spot snapshot, so the same dated value can
+    # safely populate historical trading-day rows too.
     assert row is not None
-    assert str(row.total_turnover) == EXPECTED_BREADTH["total_turnover"]
+    assert row.total_turnover == Decimal("19134000000")
     historical = next(r for r in captured if r.trade_date < BREADTH_TRADE_DATE)
-    assert historical.total_turnover is None
+    assert historical.total_turnover == Decimal("19134000000")
     # other fields intact
     assert row.limit_up_count == EXPECTED_BREADTH["limit_up_count"]
     assert row.advancing_count == EXPECTED_BREADTH["advancing_count"]
     assert row.dragon_tiger is not None
     assert any("index_amounts" in f for f in rep.failures)
+    assert not any("exchange_amount" in f for f in rep.failures)
     assert rep.exit_code == 0
 
 
