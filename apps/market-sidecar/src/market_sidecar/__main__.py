@@ -15,8 +15,8 @@ Scopes:
 Exit code: 0 on success or below-threshold failures; 1 if the failure ratio
 exceeded FAILURE_THRESHOLD (scheduler retry signal, AD-4).
 
-The CLI remains manually runnable. The Node worker invokes the incremental index
-and breadth scopes every 30 minutes to refresh the public crash calendar.
+The CLI remains manually runnable. The Node worker invokes the incremental index,
+sector, and breadth scopes every 30 minutes to refresh the public crash calendar.
 """
 
 from __future__ import annotations

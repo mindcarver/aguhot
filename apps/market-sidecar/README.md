@@ -110,8 +110,6 @@ The live smoke (`--smoke`) is **not** part of the test suite — it hits
 
 ## Out of scope (deferred)
 
-- Scheduled sector collection — index and breadth collection for the crash calendar
-  are wired through `apps/worker`; sector backfills remain manual.
 - `CrashDay` / `published_crash_days` read model — stories 8.2/8.3.
 - `published_crash_days.breadth` projection + `run-market-breadth.ts` runner — story 8.7.
 - `/crash-calendar/[date]` deep detail page — story 8.8.
