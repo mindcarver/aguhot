@@ -6,7 +6,6 @@ import { getPrisma, listPublishedSurgeDays, newTraceId } from "@aguhot/core";
 import type { PublishedSurgeDay } from "@aguhot/core";
 
 import { formatDay } from "./_components";
-import { isSurgeCalendarPublicationEnabled } from "./publication-gate";
 
 export const metadata: Metadata = {
   title: "大涨日历",
@@ -26,10 +25,7 @@ interface MonthGroup {
 }
 
 export default async function SurgeCalendarPage() {
-  const publicationEnabled = isSurgeCalendarPublicationEnabled();
-  const surgeDays = publicationEnabled
-    ? await listPublishedSurgeDays({ prisma: getPrisma(), traceId: newTraceId() })
-    : [];
+  const surgeDays = await listPublishedSurgeDays({ prisma: getPrisma(), traceId: newTraceId() });
   const months: MonthGroup[] = [];
   const seen = new Set<string>();
   for (const surgeDay of surgeDays) {
@@ -66,7 +62,7 @@ export default async function SurgeCalendarPage() {
       {surgeDays.length === 0 ? (
         <section className="mt-12 space-y-2">
           <p className="text-base text-ink-tertiary">暂无已记录的大涨日。</p>
-          <p className="font-mono text-xs text-ink-tertiary">开启合规发布开关并完成行情投影后将在此展示。</p>
+          <p className="font-mono text-xs text-ink-tertiary">行情历史回顾上线后将在此展示。</p>
         </section>
       ) : (
         <section className="mt-12 space-y-8">

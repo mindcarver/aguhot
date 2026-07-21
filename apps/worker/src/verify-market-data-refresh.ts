@@ -1,4 +1,4 @@
-/** Deterministic orchestration checks for crash and gated surge calendars. */
+/** Deterministic orchestration checks for crash and surge calendars. */
 import { runMarketDataRefresh } from "./market-data-refresh.js";
 import { MARKET_DATA_REFRESH_INTERVAL_MS } from "./queues/market-data-refresh-queue.js";
 
@@ -14,7 +14,6 @@ const result = await runMarketDataRefresh({
   publishCrashDays: async () => { order.push("crash-publish"); return { projected: 2, pruned: 0 }; },
   detectSurgeDays: async () => { order.push("surge-detect"); return { upserted: 1, surgeDays: [{}] }; },
   publishSurgeDays: async () => { order.push("surge-publish"); return { projected: 1, pruned: 0 }; },
-  isSurgeCalendarPublicationEnabled: () => true,
 });
 assertions.push({
   name: "crash base, sector, surge, and breadth stages preserve their order",
@@ -27,24 +26,6 @@ assertions.push({
   detail: JSON.stringify(result),
 });
 
-const disabled: string[] = [];
-const disabledResult = await runMarketDataRefresh({
-  ingestIndices: () => { disabled.push("index"); },
-  ingestSectors: () => { disabled.push("sector"); },
-  ingestBreadth: () => { disabled.push("breadth"); },
-  detectCrashDays: async () => { disabled.push("crash-detect"); return { upserted: 0, crashDays: [] }; },
-  publishCrashDays: async () => { disabled.push("crash-publish"); return { projected: 0, pruned: 0 }; },
-  detectSurgeDays: async () => { disabled.push("surge-detect"); return { upserted: 1, surgeDays: [{}] }; },
-  publishSurgeDays: async () => { disabled.push("surge-publish"); return { projected: 1, pruned: 0 }; },
-  isSurgeCalendarPublicationEnabled: () => false,
-});
-assertions.push({
-  name: "disabled surge publication keeps detection but writes no public surge row",
-  ok: disabled.join(",") === "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,breadth,crash-publish"
-    && disabledResult.surgeProjected === 0,
-  detail: disabled.join(" → "),
-});
-
 const surgeFailure: string[] = [];
 const isolatedFailureResult = await runMarketDataRefresh({
   ingestIndices: () => { surgeFailure.push("index"); },
@@ -54,7 +35,6 @@ const isolatedFailureResult = await runMarketDataRefresh({
   publishCrashDays: async () => { surgeFailure.push("crash-publish"); return { projected: 1, pruned: 0 }; },
   detectSurgeDays: async () => { surgeFailure.push("surge-detect"); throw new Error("surge unavailable"); },
   publishSurgeDays: async () => { surgeFailure.push("surge-publish"); return { projected: 1, pruned: 0 }; },
-  isSurgeCalendarPublicationEnabled: () => true,
 });
 assertions.push({
   name: "surge failure does not block existing breadth and crash reprojection",
@@ -74,7 +54,6 @@ try {
     publishCrashDays: async () => { sectorFailure.push("crash-publish"); return { projected: 1, pruned: 0 }; },
     detectSurgeDays: async () => ({ upserted: 0, surgeDays: [] }),
     publishSurgeDays: async () => ({ projected: 0, pruned: 0 }),
-    isSurgeCalendarPublicationEnabled: () => false,
   });
 } catch (error) {
   sectorFailedLoudly = error instanceof Error && error.message === "sector unavailable";
@@ -96,7 +75,6 @@ try {
     publishCrashDays: async () => ({ projected: 0, pruned: 0 }),
     detectSurgeDays: async () => ({ upserted: 0, surgeDays: [] }),
     publishSurgeDays: async () => ({ projected: 0, pruned: 0 }),
-    isSurgeCalendarPublicationEnabled: () => false,
   });
 } catch (error) {
   indexFailedLoudly = error instanceof Error && error.message === "source unavailable";

@@ -139,11 +139,9 @@ console.log(
   `published_crash_days: projected ${projection.projected}, pruned ${projection.pruned} (trace ${traceId}).`,
 );
 
-if (process.env.SURGE_CALENDAR_PUBLICATION_ENABLED === "true") {
-  const surgeProjection = await refreshPublishedSurgeDays({ prisma, traceId, fromDay, toDay });
-  console.log(
-    `published_surge_days: projected ${surgeProjection.projected}, pruned ${surgeProjection.pruned} (trace ${traceId}).`,
-  );
-}
+const surgeProjection = await refreshPublishedSurgeDays({ prisma, traceId, fromDay, toDay });
+console.log(
+  `published_surge_days: projected ${surgeProjection.projected}, pruned ${surgeProjection.pruned} (trace ${traceId}).`,
+);
 
 await prisma.$disconnect();
