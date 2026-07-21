@@ -80,14 +80,17 @@ import type {
   GetPublishedHotEventDetailOptions,
   GetPublishedTrendBriefingOptions,
   LeadingSector,
+  LeadingSurgeSector,
   ListPublishedAssociationsOptions,
   ListPublishedCrashDaysOptions,
+  ListPublishedSurgeDaysOptions,
   ListPublishedDailyDigestCoverageDatesOptions,
   ListPublishedHotEventExplanationsOptions,
   ListPublishedHotEventsOptions,
   ListPublishedThemeMembershipsOptions,
   PublishedAssociationRow,
   PublishedCrashDay,
+  PublishedSurgeDay,
   PublishedDailyDigest,
   PublishedEvidenceRow,
   PublishedHotEventDetail,
@@ -97,6 +100,7 @@ import type {
   PublishedThemeMembershipRow,
   PublishedTrendBriefing,
   RefreshPublishedCrashDaysOptions,
+  RefreshPublishedSurgeDaysOptions,
   RefreshPublishedDailyDigestOptions,
   RefreshPublishedTrendBriefingOptions,
   ThemeRef,
@@ -1737,5 +1741,133 @@ export async function listPublishedCrashDays(
     breadth: r.breadth as unknown as PublishedCrashDay["breadth"],
     source: r.source,
     publishedAt: r.publishedAt,
+  }));
+}
+
+/**
+ * Project independent surge_days into the only public source for /surge-calendar.
+ * A missing or unreadable breadth row is intentionally SQL NULL and never blocks the date.
+ */
+export async function refreshPublishedSurgeDays(
+  options: RefreshPublishedSurgeDaysOptions,
+): Promise<{ projected: number; pruned: number; traceId: string }> {
+  const { prisma, traceId } = options;
+  const where: { tradeDate?: { gte?: Date; lte?: Date } } = {};
+  if (options.fromDay !== undefined) where.tradeDate = { gte: crashDayToDate(options.fromDay) };
+  if (options.toDay !== undefined) where.tradeDate = { ...where.tradeDate, lte: crashDayToDate(options.toDay) };
+
+  const surgeRows = await prisma.surgeDay.findMany({
+    where,
+    select: { tradeDate: true, threshold: true, surgeCount: true, indices: true, source: true },
+    orderBy: { tradeDate: "asc" },
+  });
+  const sourceTradeDates = new Set(surgeRows.map((row) => row.tradeDate.getTime()));
+  let projected = 0;
+
+  for (const row of surgeRows) {
+    try {
+      const sectors = await prisma.sectorDailyBar.findMany({
+        where: { tradeDate: row.tradeDate, pctChange: { gt: 0 } },
+        orderBy: { pctChange: "desc" },
+        take: LEADING_SECTOR_LIMIT,
+        select: { sectorCode: true, sectorName: true, pctChange: true },
+      });
+      const leadingSectors: LeadingSurgeSector[] = sectors.map((sector) => ({
+        sectorCode: sector.sectorCode,
+        sectorName: sector.sectorName,
+        pctChange: sector.pctChange.toNumber(),
+      }));
+      let breadth: CrashDayBreadth | null = null;
+      try {
+        const breadthRow = await prisma.marketBreadthDaily.findUnique({
+          where: { tradeDate: row.tradeDate },
+          select: {
+            limitUpCount: true,
+            limitDownCount: true,
+            consecutiveBoardMax: true,
+            brokenBoardCount: true,
+            advancingCount: true,
+            decliningCount: true,
+            flatCount: true,
+            totalTurnover: true,
+            marginBalanceChange: true,
+            dragonTiger: true,
+          },
+        });
+        breadth = breadthRow === null ? null : toCrashDayBreadth(breadthRow);
+      } catch (error) {
+        console.warn(`[publish-orchestrator] surge breadth read failed for ${row.tradeDate.toISOString()}: ${(error as Error).message}`);
+      }
+      const breadthJson: Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue =
+        breadth === null ? Prisma.DbNull : (breadth as unknown as Prisma.InputJsonValue);
+      await prisma.publishedSurgeDay.upsert({
+        where: { tradeDate: row.tradeDate },
+        create: {
+          tradeDate: row.tradeDate,
+          threshold: row.threshold,
+          surgeCount: row.surgeCount,
+          indices: row.indices as Prisma.InputJsonValue,
+          leadingSectors: leadingSectors as unknown as Prisma.InputJsonValue,
+          breadth: breadthJson,
+          source: row.source,
+          traceId,
+        },
+        update: {
+          threshold: row.threshold,
+          surgeCount: row.surgeCount,
+          indices: row.indices as Prisma.InputJsonValue,
+          leadingSectors: leadingSectors as unknown as Prisma.InputJsonValue,
+          breadth: breadthJson,
+          source: row.source,
+          traceId,
+        },
+      });
+      projected++;
+    } catch (error) {
+      console.warn(`[publish-orchestrator] skip published_surge_days for ${row.tradeDate.toISOString()}: ${(error as Error).message}`);
+    }
+  }
+
+  let pruned = 0;
+  const existing = await prisma.publishedSurgeDay.findMany({ where, select: { tradeDate: true } });
+  for (const row of existing) {
+    if (sourceTradeDates.has(row.tradeDate.getTime())) continue;
+    try {
+      await prisma.publishedSurgeDay.delete({ where: { tradeDate: row.tradeDate } });
+      pruned++;
+    } catch (error) {
+      console.warn(`[publish-orchestrator] skip surge prune ${row.tradeDate.toISOString()}: ${(error as Error).message}`);
+    }
+  }
+  return { projected, pruned, traceId };
+}
+
+/** Public read query for /surge-calendar. */
+export async function listPublishedSurgeDays(
+  options: ListPublishedSurgeDaysOptions,
+): Promise<PublishedSurgeDay[]> {
+  const rows = await options.prisma.publishedSurgeDay.findMany({
+    orderBy: { tradeDate: "desc" },
+    take: options.limit ?? 200,
+    select: {
+      tradeDate: true,
+      threshold: true,
+      surgeCount: true,
+      indices: true,
+      leadingSectors: true,
+      breadth: true,
+      source: true,
+      publishedAt: true,
+    },
+  });
+  return rows.map((row) => ({
+    tradeDate: row.tradeDate,
+    threshold: row.threshold.toNumber(),
+    surgeCount: row.surgeCount,
+    indices: row.indices as unknown as PublishedSurgeDay["indices"],
+    leadingSectors: row.leadingSectors as unknown as LeadingSurgeSector[],
+    breadth: row.breadth as unknown as PublishedSurgeDay["breadth"],
+    source: row.source,
+    publishedAt: row.publishedAt,
   }));
 }

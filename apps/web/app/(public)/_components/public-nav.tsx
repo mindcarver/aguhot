@@ -50,6 +50,7 @@ const PRIMARY_NAV_ITEMS: readonly NavItem[] = [
   { href: "/", label: "首页" },
   { href: "/daily", label: "日报" },
   { href: "/crash-calendar", label: "大跌日历" },
+  { href: "/surge-calendar", label: "大涨日历" },
   { href: "/topics", label: "主题" },
   { href: "/favorites", label: "收藏" },
 ] as const;

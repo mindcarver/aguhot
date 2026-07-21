@@ -12,6 +12,7 @@
     "verify:explain": "tsx src/verify-explain.ts",
     "verify:market-reaction": "tsx src/verify-market-reaction.ts",
     "verify:market-data-refresh": "tsx src/verify-market-data-refresh.ts",
+    "run:surge-review": "tsx src/run-surge-review.ts",
     "verify:associations": "tsx src/verify-associations.ts",
     "verify:themes": "tsx src/verify-themes.ts",
     "verify:digest": "tsx src/verify-digest.ts",

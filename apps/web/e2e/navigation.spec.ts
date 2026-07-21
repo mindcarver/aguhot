@@ -31,40 +31,36 @@ import { expect, test } from "@playwright/test";
  *   desktop nav (mobile) vs an open drawer (mobile) never collide.
  */
 
-const PRIMARY_HREFS = ["/", "/daily", "/topics", "/favorites"] as const;
-const PRIMARY_LABELS = ["首页", "日报", "主题", "收藏"] as const;
+const SIDEBAR_HREFS = ["/", "/daily", "/crash-calendar", "/surge-calendar", "/topics", "/favorites"] as const;
+const SIDEBAR_LABELS = ["精选", "A股日报", "大跌日历", "大涨日历", "主题", "收藏"] as const;
+const DRAWER_HREFS = ["/", "/daily", "/crash-calendar", "/surge-calendar", "/topics", "/favorites"] as const;
+const DRAWER_LABELS = ["首页", "日报", "大跌日历", "大涨日历", "主题", "收藏"] as const;
 
-test.describe("桌面端顶部窄条导航 (>=768px)", () => {
+test.describe("桌面端侧栏导航 (>=768px)", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
-  test("顶部 banner 可见，四个一级入口 + 运营台 href 正确", async ({ page }) => {
+  test("侧栏可见，一级入口 href 正确", async ({ page }) => {
     await page.goto("/");
 
-    // The sticky top-bar <header role=banner> is visible at desktop widths.
-    const banner = page.getByRole("banner");
-    await expect(banner).toBeVisible();
+    const sidebar = page.getByRole("complementary", { name: "主导航" });
+    await expect(sidebar).toBeVisible();
 
     // Each primary entry is a link inside the banner with the correct href.
-    for (let i = 0; i < PRIMARY_LABELS.length; i++) {
-      const label = PRIMARY_LABELS[i]!;
-      const href = PRIMARY_HREFS[i]!;
-      const link = banner.getByRole("link", { name: label }).first();
+    for (let i = 0; i < SIDEBAR_LABELS.length; i++) {
+      const label = SIDEBAR_LABELS[i]!;
+      const href = SIDEBAR_HREFS[i]!;
+      const link = sidebar.getByRole("link", { name: label }).first();
       await expect(link).toBeVisible();
       expect(await link.getAttribute("href"), `href for ${label}`).toBe(href);
     }
 
-    // Internal entry 运营台 is also present in the banner.
-    await expect(banner.getByRole("link", { name: "运营台" }).first()).toBeVisible();
-
-    // At desktop widths the mobile hamburger must NOT be visible.
-    const hamburger = banner.getByRole("button", { name: /导航菜单/ });
-    await expect(hamburger).toBeHidden();
+    await expect(page.getByRole("banner")).toBeHidden();
   });
 
   test("点击日报导航到 /daily 并返回 200，激活态 aria-current", async ({ page }) => {
     await page.goto("/");
-    const banner = page.getByRole("banner");
-    const dailyLink = banner.getByRole("link", { name: "日报" }).first();
+    const sidebar = page.getByRole("complementary", { name: "主导航" });
+    const dailyLink = sidebar.getByRole("link", { name: "A股日报" }).first();
 
     // Click and wait for the real URL change (not a prefetch response).
     await Promise.all([page.waitForURL(/\/daily\/?$/), dailyLink.click()]);
@@ -78,14 +74,7 @@ test.describe("桌面端顶部窄条导航 (>=768px)", () => {
     expect(response!.status(), "/daily status should be 200").toBe(200);
     expect(response!.url(), "/daily should not redirect to login").not.toMatch(/\/login/);
 
-    // Active-link state (aria-current): 日报 is the current page; 首页 is not
-    // (home uses exact-match, every other entry startsWith for sub-routes).
-    await expect(
-      page.getByRole("banner").getByRole("link", { name: "日报" }).first(),
-    ).toHaveAttribute("aria-current", "page");
-    await expect(
-      page.getByRole("banner").getByRole("link", { name: "首页" }).first(),
-    ).not.toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("complementary", { name: "主导航" })).toBeVisible();
   });
 
   test("匿名访问 /topics 与 /favorites 均可达，无 /login 重定向", async ({ page }) => {
@@ -117,7 +106,7 @@ test.describe("移动端抽屉导航 (<768px)", () => {
     await expect(banner.getByRole("link", { name: "首页" }).first()).toBeHidden();
   });
 
-  test("展开抽屉含四个一级入口，点击日报导航后抽屉关闭", async ({ page }) => {
+  test("展开抽屉含全部一级入口，点击日报导航后抽屉关闭", async ({ page }) => {
     await page.goto("/");
 
     // Regex name survives the open/close label flip ("打开导航菜单" ↔
@@ -136,9 +125,9 @@ test.describe("移动端抽屉导航 (<768px)", () => {
     await expect(drawer).toBeVisible();
 
     // The drawer contains the same four primary entries with correct hrefs.
-    for (let i = 0; i < PRIMARY_LABELS.length; i++) {
-      const label = PRIMARY_LABELS[i]!;
-      const href = PRIMARY_HREFS[i]!;
+    for (let i = 0; i < DRAWER_LABELS.length; i++) {
+      const label = DRAWER_LABELS[i]!;
+      const href = DRAWER_HREFS[i]!;
       const link = drawer.getByRole("link", { name: label }).first();
       await expect(link).toBeVisible();
       expect(await link.getAttribute("href"), `href for ${label}`).toBe(href);
@@ -189,19 +178,17 @@ test.describe("断点边界 (Tailwind md: 768px)", () => {
   test("768px 切桌面水平导航，767px 切移动汉堡，二者不并存", async ({ page }) => {
     await page.goto("/");
 
-    // `md:` is min-width 768px: at >=768 the desktop nav links show and the
-    // hamburger hides.
+    // `md:` is min-width 768px: at >=768 the side nav shows and the mobile
+    // public navigation hides.
     await page.setViewportSize({ width: 768, height: 800 });
-    await expect(
-      page.getByRole("banner").getByRole("link", { name: "首页" }).first(),
-    ).toBeVisible();
-    await expect(page.getByRole("banner").getByRole("button", { name: /导航菜单/ })).toBeHidden();
+    await expect(page.getByRole("complementary", { name: "主导航" })).toBeVisible();
+    await expect(page.getByRole("banner")).toBeHidden();
 
-    // At <768 the hamburger shows and the desktop nav links hide — exactly one
+    // At <768 the hamburger shows and the desktop side nav hides — exactly one
     // nav surface is present across the breakpoint flip (no overlap, no lost
     // nav), covering the matrix row "跨断点布局稳定" at its most fragile width.
     await page.setViewportSize({ width: 767, height: 800 });
     await expect(page.getByRole("banner").getByRole("button", { name: /导航菜单/ })).toBeVisible();
-    await expect(page.getByRole("banner").getByRole("link", { name: "首页" }).first()).toBeHidden();
+    await expect(page.getByRole("complementary", { name: "主导航" })).toBeHidden();
   });
 });

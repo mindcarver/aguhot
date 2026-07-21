@@ -15,6 +15,9 @@ export interface MarketDataRefreshDependencies {
   ingestBreadth: () => void | Promise<void>;
   detectCrashDays: () => Promise<{ upserted: number; crashDays: readonly unknown[] }>;
   publishCrashDays: () => Promise<{ projected: number; pruned: number }>;
+  detectSurgeDays: () => Promise<{ upserted: number; surgeDays: readonly unknown[] }>;
+  publishSurgeDays: () => Promise<{ projected: number; pruned: number }>;
+  isSurgeCalendarPublicationEnabled: () => boolean;
 }
 
 export interface MarketDataRefreshResult {
@@ -22,6 +25,10 @@ export interface MarketDataRefreshResult {
   upserted: number;
   projected: number;
   pruned: number;
+  detectedSurges: number;
+  surgeUpserted: number;
+  surgeProjected: number;
+  surgePruned: number;
 }
 
 /** Execute the refresh stages in strict order. A failed stage stops later writes. */
@@ -35,20 +42,50 @@ export async function runMarketDataRefresh(
   await dependencies.publishCrashDays();
   await dependencies.ingestSectors();
   await dependencies.publishCrashDays();
+  const surgePublishingEnabled = dependencies.isSurgeCalendarPublicationEnabled();
+  let surgeDetection = { upserted: 0, surgeDays: [] as readonly unknown[] };
+  let surgeDetectionSucceeded = false;
+  let surgeProjection = { projected: 0, pruned: 0 };
+  try {
+    surgeDetection = await dependencies.detectSurgeDays();
+    surgeDetectionSucceeded = true;
+    if (surgePublishingEnabled) {
+      surgeProjection = await dependencies.publishSurgeDays();
+    }
+  } catch (error) {
+    console.error(`[market-data-refresh] surge refresh failed: ${(error as Error).message}`);
+  }
   await dependencies.ingestBreadth();
   const projection = await dependencies.publishCrashDays();
+  if (surgePublishingEnabled && surgeDetectionSucceeded) {
+    try {
+      surgeProjection = await dependencies.publishSurgeDays();
+    } catch (error) {
+      console.error(`[market-data-refresh] surge reprojection failed: ${(error as Error).message}`);
+    }
+  }
 
   return {
     detected: detection.crashDays.length,
     upserted: detection.upserted,
     projected: projection.projected,
     pruned: projection.pruned,
+    detectedSurges: surgeDetection.surgeDays.length,
+    surgeUpserted: surgeDetection.upserted,
+    surgeProjected: surgeProjection.projected,
+    surgePruned: surgeProjection.pruned,
   };
 }
 
 /** Production entry used by BullMQ and available to manual operators. */
 export async function refreshLatestMarketData(traceId: string): Promise<MarketDataRefreshResult> {
-  const { getPrisma, refreshPublishedCrashDays, upsertCrashDays } = await import("@aguhot/core");
+  const {
+    getPrisma,
+    refreshPublishedCrashDays,
+    refreshPublishedSurgeDays,
+    upsertCrashDays,
+    upsertSurgeDays,
+  } = await import("@aguhot/core");
   const prisma = getPrisma();
 
   return runMarketDataRefresh({
@@ -57,6 +94,9 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     ingestBreadth: () => runIncrementalSidecar("breadth", 30 * 60 * 1000),
     detectCrashDays: () => upsertCrashDays({ prisma, traceId }),
     publishCrashDays: () => refreshPublishedCrashDays({ prisma, traceId }),
+    detectSurgeDays: () => upsertSurgeDays({ prisma, traceId }),
+    publishSurgeDays: () => refreshPublishedSurgeDays({ prisma, traceId }),
+    isSurgeCalendarPublicationEnabled: () => process.env.SURGE_CALENDAR_PUBLICATION_ENABLED === "true",
   });
 }
 

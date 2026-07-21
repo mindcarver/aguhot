@@ -196,6 +196,8 @@ export {
   getPublishedTrendBriefing,
   refreshPublishedCrashDays,
   listPublishedCrashDays,
+  refreshPublishedSurgeDays,
+  listPublishedSurgeDays,
   toCrashDayBreadth,
 } from "./modules/publish-orchestrator/publish-service.js";
 export {
@@ -247,11 +249,32 @@ export type {
   GetPublishedTrendBriefingOptions,
   LeadingSector,
   PublishedCrashDay,
+  PublishedSurgeDay,
   CrashDayBreadth,
+  SurgeDayBreadth,
+  LeadingSurgeSector,
   RefreshPublishedCrashDaysOptions,
   ListPublishedCrashDaysOptions,
+  RefreshPublishedSurgeDaysOptions,
+  ListPublishedSurgeDaysOptions,
 } from "./modules/publish-orchestrator/types.js";
 export type { MarketBreadthProjectionInput } from "./modules/publish-orchestrator/publish-service.js";
+
+// GitHub #30 — independent surge-review source model and pure detection surface.
+export {
+  detectSurgeDays,
+  getSurgeDay,
+  upsertSurgeDays,
+  SURGE_INDEX_CODES,
+  SURGE_SOURCE,
+  SURGE_THRESHOLD,
+} from "./modules/surge-review/index.js";
+export type {
+  DetectedSurgeDay,
+  IndexSurgeDetail,
+  UpsertSurgeDaysOptions,
+  UpsertSurgeDaysResult,
+} from "./modules/surge-review/index.js";
 
 // explanation module (Story 1.8 — deterministic three-partition generation +
 // append-only ExplanationVersion, AD-5; Story 1.9 — saveExplanation operator

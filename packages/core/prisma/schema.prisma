@@ -1304,3 +1304,38 @@ model PublishedCrashDay {
 
   @@map("published_crash_days")
 }
+
+// GitHub #30 — independently auditable A-share surge days. This is deliberately
+// separate from CrashDay: direction, threshold, reconciliation, and public wording
+// are distinct facts and must not share a nullable direction discriminator.
+model SurgeDay {
+  id         String   @id
+  tradeDate  DateTime @map("trade_date") @db.Date
+  threshold  Decimal  @db.Decimal(8, 4)
+  surgeCount Int      @map("surge_count")
+  indices    Json
+  source     String
+  computedAt DateTime @default(now()) @map("computed_at")
+  traceId    String?  @map("trace_id")
+
+  @@unique([tradeDate])
+  @@index([tradeDate])
+  @@map("surge_days")
+}
+
+// GitHub #30 — sole public read model for /surge-calendar. The web app reads
+// this table only; projection is owned by publish-orchestrator.
+model PublishedSurgeDay {
+  tradeDate      DateTime @id @map("trade_date") @db.Date
+  threshold      Decimal  @db.Decimal(8, 4)
+  surgeCount     Int      @map("surge_count")
+  indices        Json
+  leadingSectors Json     @map("leading_sectors")
+  breadth        Json?    @map("breadth")
+  source         String
+  publishedAt    DateTime @default(now()) @map("published_at")
+  traceId        String?  @map("trace_id")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("published_surge_days")
+}
