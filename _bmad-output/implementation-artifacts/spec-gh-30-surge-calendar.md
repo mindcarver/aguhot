@@ -2,8 +2,9 @@
 title: 'GitHub #30: 新增 A 股大涨日历'
 type: 'feature'
 created: '2026-07-21'
-status: 'in-review'
+status: 'done'
 baseline_revision: '844c66d59ebdd72b4eaf407118269f065e0de947'
+final_revision: '26b560b'
 review_loop_iteration: 0
 followup_review_recommended: true
 context:
