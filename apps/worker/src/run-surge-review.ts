@@ -29,10 +29,6 @@ const traceId = newTraceId();
 const detected = await upsertSurgeDays({ prisma, traceId, fromDay, toDay });
 console.log(`surge-review: ${detected.upserted} upserted, ${detected.pruned} pruned`);
 
-if (process.env.SURGE_CALENDAR_PUBLICATION_ENABLED === "true") {
-  const published = await refreshPublishedSurgeDays({ prisma, traceId, fromDay, toDay });
-  console.log(`surge-calendar: ${published.projected} projected, ${published.pruned} pruned`);
-} else {
-  console.log("surge-calendar publication skipped (set SURGE_CALENDAR_PUBLICATION_ENABLED=true to enable)");
-}
+const published = await refreshPublishedSurgeDays({ prisma, traceId, fromDay, toDay });
+console.log(`surge-calendar: ${published.projected} projected, ${published.pruned} pruned`);
 await prisma.$disconnect();

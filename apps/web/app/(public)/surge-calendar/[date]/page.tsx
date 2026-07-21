@@ -15,7 +15,6 @@ import {
   formatDay,
   signTone,
 } from "../_components";
-import { isSurgeCalendarPublicationEnabled } from "../publication-gate";
 
 export const dynamic = "force-dynamic";
 interface PageProps { params: Promise<{ date: string }> }
@@ -28,7 +27,6 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 export default async function SurgeDayPage({ params }: PageProps) {
   const { date } = await params;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) notFound();
-  if (!isSurgeCalendarPublicationEnabled()) notFound();
   const prisma = getPrisma();
   const traceId = newTraceId();
   const [surgeDays, hotEvents] = await Promise.all([

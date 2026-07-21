@@ -17,7 +17,6 @@ export interface MarketDataRefreshDependencies {
   publishCrashDays: () => Promise<{ projected: number; pruned: number }>;
   detectSurgeDays: () => Promise<{ upserted: number; surgeDays: readonly unknown[] }>;
   publishSurgeDays: () => Promise<{ projected: number; pruned: number }>;
-  isSurgeCalendarPublicationEnabled: () => boolean;
 }
 
 export interface MarketDataRefreshResult {
@@ -42,22 +41,19 @@ export async function runMarketDataRefresh(
   await dependencies.publishCrashDays();
   await dependencies.ingestSectors();
   await dependencies.publishCrashDays();
-  const surgePublishingEnabled = dependencies.isSurgeCalendarPublicationEnabled();
   let surgeDetection = { upserted: 0, surgeDays: [] as readonly unknown[] };
   let surgeDetectionSucceeded = false;
   let surgeProjection = { projected: 0, pruned: 0 };
   try {
     surgeDetection = await dependencies.detectSurgeDays();
     surgeDetectionSucceeded = true;
-    if (surgePublishingEnabled) {
-      surgeProjection = await dependencies.publishSurgeDays();
-    }
+    surgeProjection = await dependencies.publishSurgeDays();
   } catch (error) {
     console.error(`[market-data-refresh] surge refresh failed: ${(error as Error).message}`);
   }
   await dependencies.ingestBreadth();
   const projection = await dependencies.publishCrashDays();
-  if (surgePublishingEnabled && surgeDetectionSucceeded) {
+  if (surgeDetectionSucceeded) {
     try {
       surgeProjection = await dependencies.publishSurgeDays();
     } catch (error) {
@@ -96,7 +92,6 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     publishCrashDays: () => refreshPublishedCrashDays({ prisma, traceId }),
     detectSurgeDays: () => upsertSurgeDays({ prisma, traceId }),
     publishSurgeDays: () => refreshPublishedSurgeDays({ prisma, traceId }),
-    isSurgeCalendarPublicationEnabled: () => process.env.SURGE_CALENDAR_PUBLICATION_ENABLED === "true",
   });
 }
 
