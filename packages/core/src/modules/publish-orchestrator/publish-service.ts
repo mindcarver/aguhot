@@ -87,6 +87,7 @@ import type {
   ListPublishedDailyDigestCoverageDatesOptions,
   ListPublishedHotEventExplanationsOptions,
   ListPublishedHotEventsOptions,
+  ListPublishedMarketBreadthHistoryOptions,
   ListPublishedThemeMembershipsOptions,
   PublishedAssociationRow,
   PublishedCrashDay,
@@ -97,11 +98,13 @@ import type {
   PublishedHotEventExplanationSummaryRow,
   PublishedHotEventSummary,
   PublishedHotEventInvestmentTargets,
+  PublishedMarketBreadthDay,
   PublishedThemeMembershipRow,
   PublishedTrendBriefing,
   RefreshPublishedCrashDaysOptions,
   RefreshPublishedSurgeDaysOptions,
   RefreshPublishedDailyDigestOptions,
+  RefreshPublishedMarketBreadthHistoryOptions,
   RefreshPublishedTrendBriefingOptions,
   ThemeRef,
 } from "./types.js";
@@ -1869,5 +1872,100 @@ export async function listPublishedSurgeDays(
     breadth: row.breadth as unknown as PublishedSurgeDay["breadth"],
     source: row.source,
     publishedAt: row.publishedAt,
+  }));
+}
+
+// --- Issue #33: daily 涨停 / 跌停 history projection + public read --------------
+
+/** Default public window: the latest 90 successfully collected trading days. */
+export const MARKET_BREADTH_HISTORY_DEFAULT_LIMIT = 90;
+const MARKET_BREADTH_HISTORY_MAX_LIMIT = 365;
+
+function normalizeMarketBreadthHistoryLimit(limit: number | undefined): number {
+  const requested = Number.isFinite(limit)
+    ? Math.trunc(limit as number)
+    : MARKET_BREADTH_HISTORY_DEFAULT_LIMIT;
+  return Math.min(Math.max(requested, 1), MARKET_BREADTH_HISTORY_MAX_LIMIT);
+}
+
+/**
+ * Reconcile the public daily limit-pool projection from market_breadth_daily.
+ *
+ * The raw table is owned by the Python sidecar and is read-only here. Counts are non-null at the
+ * source, so they are copied exactly. Rows that no longer exist in the raw table are pruned; if
+ * a collection failed and no raw row exists, no public zero row is created. This makes a completed
+ * historical sidecar backfill visible without a separate date-range projection command.
+ */
+export async function refreshPublishedMarketBreadthHistory(
+  options: RefreshPublishedMarketBreadthHistoryOptions,
+): Promise<{ projected: number; pruned: number; traceId: string }> {
+  const { prisma, traceId } = options;
+  const sourceRows = await prisma.marketBreadthDaily.findMany({
+    orderBy: { tradeDate: "asc" },
+    select: {
+      tradeDate: true,
+      limitUpCount: true,
+      limitDownCount: true,
+      source: true,
+    },
+  });
+
+  for (const row of sourceRows) {
+    await prisma.publishedMarketBreadthDaily.upsert({
+      where: { tradeDate: row.tradeDate },
+      create: {
+        tradeDate: row.tradeDate,
+        limitUpCount: row.limitUpCount,
+        limitDownCount: row.limitDownCount,
+        source: row.source,
+        traceId,
+      },
+      update: {
+        limitUpCount: row.limitUpCount,
+        limitDownCount: row.limitDownCount,
+        source: row.source,
+        traceId,
+      },
+    });
+  }
+
+  const sourceTradeDates = new Set(sourceRows.map((row) => row.tradeDate.getTime()));
+  const publishedRows = await prisma.publishedMarketBreadthDaily.findMany({
+    select: { tradeDate: true },
+  });
+  let pruned = 0;
+  for (const row of publishedRows) {
+    if (!sourceTradeDates.has(row.tradeDate.getTime())) {
+      await prisma.publishedMarketBreadthDaily.delete({ where: { tradeDate: row.tradeDate } });
+      pruned++;
+    }
+  }
+
+  return { projected: sourceRows.length, pruned, traceId };
+}
+
+/**
+ * Read the latest bounded history window from the public projection. Query newest-first to apply
+ * the cap efficiently, then reverse it so the page renders oldest-to-newest trading dates.
+ */
+export async function listPublishedMarketBreadthHistory(
+  options: ListPublishedMarketBreadthHistoryOptions,
+): Promise<PublishedMarketBreadthDay[]> {
+  const rows = await options.prisma.publishedMarketBreadthDaily.findMany({
+    orderBy: { tradeDate: "desc" },
+    take: normalizeMarketBreadthHistoryLimit(options.limit),
+    select: {
+      tradeDate: true,
+      limitUpCount: true,
+      limitDownCount: true,
+      source: true,
+    },
+  });
+
+  return rows.reverse().map((row) => ({
+    tradeDate: row.tradeDate,
+    limitUpCount: row.limitUpCount,
+    limitDownCount: row.limitDownCount,
+    source: row.source,
   }));
 }

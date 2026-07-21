@@ -34,6 +34,9 @@ export {
   listPublishedCrashDays,
   refreshPublishedSurgeDays,
   listPublishedSurgeDays,
+  refreshPublishedMarketBreadthHistory,
+  listPublishedMarketBreadthHistory,
+  MARKET_BREADTH_HISTORY_DEFAULT_LIMIT,
 } from "./publish-service.js";
 // Story 4.1 (AD-3b): the published_timeline read model. The per-event refresh
 // (refreshPublishedTimelineForEvent) runs inside decideReview's $transaction;
@@ -98,4 +101,7 @@ export type {
   ListPublishedCrashDaysOptions,
   RefreshPublishedSurgeDaysOptions,
   ListPublishedSurgeDaysOptions,
+  PublishedMarketBreadthDay,
+  RefreshPublishedMarketBreadthHistoryOptions,
+  ListPublishedMarketBreadthHistoryOptions,
 } from "./types.js";

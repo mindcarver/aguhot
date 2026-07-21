@@ -198,6 +198,9 @@ export {
   listPublishedCrashDays,
   refreshPublishedSurgeDays,
   listPublishedSurgeDays,
+  refreshPublishedMarketBreadthHistory,
+  listPublishedMarketBreadthHistory,
+  MARKET_BREADTH_HISTORY_DEFAULT_LIMIT,
   toCrashDayBreadth,
 } from "./modules/publish-orchestrator/publish-service.js";
 export {
@@ -257,6 +260,9 @@ export type {
   ListPublishedCrashDaysOptions,
   RefreshPublishedSurgeDaysOptions,
   ListPublishedSurgeDaysOptions,
+  PublishedMarketBreadthDay,
+  RefreshPublishedMarketBreadthHistoryOptions,
+  ListPublishedMarketBreadthHistoryOptions,
 } from "./modules/publish-orchestrator/types.js";
 export type { MarketBreadthProjectionInput } from "./modules/publish-orchestrator/publish-service.js";
 

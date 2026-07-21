@@ -29,6 +29,7 @@ const CONTENT: NavItem[] = [
   { href: "/daily", label: "A股日报", icon: "▤" },
   { href: "/crash-calendar", label: "大跌日历", icon: "▿" },
   { href: "/surge-calendar", label: "大涨日历", icon: "▵" },
+  { href: "/market-breadth", label: "涨跌停历史", icon: "↕" },
   { href: "/topics", label: "主题", icon: "⊞" },
   { href: "/search", label: "搜索", icon: "⌕" },
   { href: "/favorites", label: "收藏", icon: "🔖" },

@@ -1218,6 +1218,25 @@ model MarketBreadthDaily {
   @@map("market_breadth_daily")
 }
 
+// Issue #33 — public, display-only history of the two daily limit-pool counts.
+//
+// `market_breadth_daily` remains the Python sidecar-owned source of truth. This table is a
+// deliberately narrow projection owned solely by publish-orchestrator, so the public web route
+// never reads a raw ingest table or calls AkShare. A source row only exists when its core pool
+// collection succeeded; absent source dates stay absent here (never synthesized as zero).
+model PublishedMarketBreadthDaily {
+  tradeDate      DateTime @id @map("trade_date") @db.Date // A-share trading day (UTC midnight)
+  limitUpCount   Int      @map("limit_up_count") // 涨停家数, copied verbatim from source row
+  limitDownCount Int      @map("limit_down_count") // 跌停家数, copied verbatim from source row
+  source         String // market-data lineage, copied from market_breadth_daily
+  publishedAt    DateTime @default(now()) @map("published_at")
+  traceId        String?  @map("trace_id")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // No FK: this is a replaceable read model, not a child aggregate of the raw ingest table.
+  @@map("published_market_breadth_daily")
+}
+
 // Story 8.2 — one row per A-share crash trading day. Owned SOLELY by the `crash-review`
 // module (AD-2 single-writer), which READS `index_daily_bars` (8.1) and writes here.
 // A crash day = any of the three broad indices (sh000001 / sz399001 / sz399006) whose
