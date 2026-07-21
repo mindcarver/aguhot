@@ -715,6 +715,40 @@ export interface ListPublishedSurgeDaysOptions {
   limit?: number;
 }
 
+// --- Issue #33: published_market_breadth_daily (daily limit-pool history) ----
+
+/**
+ * One confirmed historical A-share trading-day breadth row for the public history page.
+ * The values are copied verbatim from the non-null core pool counts in market_breadth_daily.
+ * A date absent from this projection is unavailable, not a zero-count trading day.
+ */
+export interface PublishedMarketBreadthDay {
+  tradeDate: Date;
+  limitUpCount: number;
+  limitDownCount: number;
+  source: string;
+}
+
+/**
+ * Refresh the full, replaceable daily market-breadth public projection. The source query is
+ * intentionally unbounded so a historical backfill becomes visible on the next refresh; the web
+ * read itself is separately bounded by ListPublishedMarketBreadthHistoryOptions.
+ */
+export interface RefreshPublishedMarketBreadthHistoryOptions {
+  prisma: PrismaClient;
+  traceId: string;
+}
+
+/**
+ * Read a bounded latest window of daily market breadth. Results are returned in chronological
+ * order for table/chart display, even though the query first selects newest rows for the cap.
+ */
+export interface ListPublishedMarketBreadthHistoryOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  limit?: number;
+}
+
 // --- Story 4.1: published_timeline read model (AD-3b) ------------------------
 
 /**

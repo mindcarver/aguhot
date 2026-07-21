@@ -2,8 +2,8 @@
  * Incremental index, sector, and breadth ingest followed by crash detection and public projection.
  *
  * This is the single orchestration path used by the scheduled worker. The Python
- * sidecar remains the only writer of index_daily_bars and sector_daily_bars;
- * Node owns crash_days and published_crash_days through their existing domain services.
+ * sidecar remains the only writer of index_daily_bars, sector_daily_bars, and
+ * market_breadth_daily; Node owns crash_days, surge_days, and the published read models.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -17,6 +17,7 @@ export interface MarketDataRefreshDependencies {
   publishCrashDays: () => Promise<{ projected: number; pruned: number }>;
   detectSurgeDays: () => Promise<{ upserted: number; surgeDays: readonly unknown[] }>;
   publishSurgeDays: () => Promise<{ projected: number; pruned: number }>;
+  publishMarketBreadthHistory: () => Promise<{ projected: number; pruned: number }>;
 }
 
 export interface MarketDataRefreshResult {
@@ -28,6 +29,8 @@ export interface MarketDataRefreshResult {
   surgeUpserted: number;
   surgeProjected: number;
   surgePruned: number;
+  breadthProjected: number;
+  breadthPruned: number;
 }
 
 /** Execute the refresh stages in strict order. A failed stage stops later writes. */
@@ -52,7 +55,13 @@ export async function runMarketDataRefresh(
     console.error(`[market-data-refresh] surge refresh failed: ${(error as Error).message}`);
   }
   await dependencies.ingestBreadth();
-  const projection = await dependencies.publishCrashDays();
+  let breadthProjection = { projected: 0, pruned: 0 };
+  try {
+    breadthProjection = await dependencies.publishMarketBreadthHistory();
+  } catch (error) {
+    console.error(`[market-data-refresh] breadth history refresh failed: ${(error as Error).message}`);
+  }
+  const crashProjection = await dependencies.publishCrashDays();
   if (surgeDetectionSucceeded) {
     try {
       surgeProjection = await dependencies.publishSurgeDays();
@@ -64,12 +73,14 @@ export async function runMarketDataRefresh(
   return {
     detected: detection.crashDays.length,
     upserted: detection.upserted,
-    projected: projection.projected,
-    pruned: projection.pruned,
+    projected: crashProjection.projected,
+    pruned: crashProjection.pruned,
     detectedSurges: surgeDetection.surgeDays.length,
     surgeUpserted: surgeDetection.upserted,
     surgeProjected: surgeProjection.projected,
     surgePruned: surgeProjection.pruned,
+    breadthProjected: breadthProjection.projected,
+    breadthPruned: breadthProjection.pruned,
   };
 }
 
@@ -79,6 +90,7 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     getPrisma,
     refreshPublishedCrashDays,
     refreshPublishedSurgeDays,
+    refreshPublishedMarketBreadthHistory,
     upsertCrashDays,
     upsertSurgeDays,
   } = await import("@aguhot/core");
@@ -92,6 +104,7 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     publishCrashDays: () => refreshPublishedCrashDays({ prisma, traceId }),
     detectSurgeDays: () => upsertSurgeDays({ prisma, traceId }),
     publishSurgeDays: () => refreshPublishedSurgeDays({ prisma, traceId }),
+    publishMarketBreadthHistory: () => refreshPublishedMarketBreadthHistory({ prisma, traceId }),
   });
 }
 

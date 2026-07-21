@@ -1,15 +1,15 @@
 /**
  * DEV runner — ingest market-breadth daily rows (8.6 sidecar `--scope breadth`) then re-project
- * published_crash_days.breadth (8.7).
+ * published_market_breadth_daily (Issue #33) and published_crash_days.breadth (8.7).
  *
  * Why this exists: Story 8.6 shipped the Python sidecar that fetches limit-up/down/broken-board
  * pools, A-share spot advancing/declining/turnover, dragon-tiger 龙虎榜, and margin 融资融券 into
  * market_breadth_daily — but the sidecar could only be run by hand, and the public read model
  * published_crash_days did not yet know about breadth (8.3 projected indices + leadingSectors
  * only). This runner is the "采集 → 投影" wiring that closes that gap, mirroring run-crash-review.ts's
- * role for crash_days → published_crash_days. It does NOT write published_crash_days directly: it
- * spawns the sidecar to refresh market_breadth_daily, then calls refreshPublishedCrashDays (the
- * AD-3 single write-owner) which reads market_breadth_daily read-only and materializes breadth.
+ * role for crash_days → published_crash_days. It does NOT write read-model tables directly: it
+ * spawns the sidecar to refresh market_breadth_daily, then calls publish-orchestrator projection
+ * functions, which read market_breadth_daily read-only and materialize public display rows.
  *
  * Run: cd apps/worker && set -a && . ../../.env && set +a \
  *      && node --import tsx/esm src/run-market-breadth.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD]
@@ -34,6 +34,7 @@ import {
   newTraceId,
   refreshPublishedCrashDays,
   refreshPublishedSurgeDays,
+  refreshPublishedMarketBreadthHistory,
 } from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
@@ -124,19 +125,24 @@ if (sidecarResult.status !== 0) {
   process.exit(1);
 }
 
-// 2. Sidecar succeeded (near-window breadth ingested) → re-project published_crash_days.breadth.
-//    refreshPublishedCrashDays reads market_breadth_daily read-only (AD-7) and materializes breadth
-//    per crash day; a missing breadth row ⇒ breadth null (NFR-5, never fabricated), the published
-//    row is still upserted. --from/--to bound the projection range; unbounded = all crash days.
-//    Idempotent (tradeDate PK upsert); re-running a range refreshes breadth without duplicates.
-const projection = await refreshPublishedCrashDays({
+// 2. Sidecar succeeded (near-window breadth ingested) → reconcile the full public daily history.
+//    A historical `--backfill --scope breadth` becomes visible the next time this projection runs;
+//    source-absent dates remain absent (never fabricated as zero).
+const historyProjection = await refreshPublishedMarketBreadthHistory({ prisma, traceId });
+console.log(
+  `published_market_breadth_daily: projected ${historyProjection.projected}, pruned ${historyProjection.pruned} (trace ${traceId}).`,
+);
+
+// 3. Re-project crash-day breadth. --from/--to only bound this crash-day projection; the daily
+//    history reconciliation intentionally reads all known raw breadth rows so backfills are visible.
+const crashProjection = await refreshPublishedCrashDays({
   prisma,
   traceId,
   fromDay,
   toDay,
 });
 console.log(
-  `published_crash_days: projected ${projection.projected}, pruned ${projection.pruned} (trace ${traceId}).`,
+  `published_crash_days: projected ${crashProjection.projected}, pruned ${crashProjection.pruned} (trace ${traceId}).`,
 );
 
 const surgeProjection = await refreshPublishedSurgeDays({ prisma, traceId, fromDay, toDay });
