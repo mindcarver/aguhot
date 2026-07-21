@@ -25,6 +25,7 @@
 import type { PrismaClient } from "../../../generated/client.js";
 import type { TargetCandidate } from "../investment-targets/types.js";
 import type { IndexCrashDetail } from "../crash-review/types.js";
+import type { IndexSurgeDetail } from "../surge-review/types.js";
 
 /**
  * Options for listPublishedHotEvents. `{ prisma, traceId }` mirrors the
@@ -678,6 +679,42 @@ export interface ListPublishedCrashDaysOptions {
   limit?: number;
 }
 
+// --- GitHub #30: published_surge_days (大涨日历) read types -------------------
+
+/** Top positive 申万一级 sectors materialized for one independent surge day. */
+export interface LeadingSurgeSector {
+  sectorCode: string;
+  sectorName: string;
+  pctChange: number;
+}
+
+/** Same-date breadth facts use the existing source mapping without sharing rows. */
+export type SurgeDayBreadth = CrashDayBreadth;
+
+export interface PublishedSurgeDay {
+  tradeDate: Date;
+  threshold: number;
+  surgeCount: number;
+  indices: IndexSurgeDetail[];
+  leadingSectors: LeadingSurgeSector[];
+  breadth: SurgeDayBreadth | null;
+  source: string;
+  publishedAt: Date;
+}
+
+export interface RefreshPublishedSurgeDaysOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
+export interface ListPublishedSurgeDaysOptions {
+  prisma: PrismaClient;
+  traceId: string;
+  limit?: number;
+}
+
 // --- Story 4.1: published_timeline read model (AD-3b) ------------------------
 
 /**
@@ -793,4 +830,3 @@ export interface PublishedTimelineEntry {
   foldedEvidenceRecordIds: string[];
   recommendationReason: string | null;
 }
-

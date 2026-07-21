@@ -29,7 +29,12 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { getPrisma, newTraceId, refreshPublishedCrashDays } from "@aguhot/core";
+import {
+  getPrisma,
+  newTraceId,
+  refreshPublishedCrashDays,
+  refreshPublishedSurgeDays,
+} from "@aguhot/core";
 import { resetEnvCache, requireEnv } from "@aguhot/config";
 
 resetEnvCache();
@@ -43,10 +48,14 @@ function arg(name: string): string | undefined {
 
 const fromDay = arg("--from");
 const toDay = arg("--to");
+const isValidCalendarDay = (day: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  return new Date(`${day}T00:00:00.000Z`).toISOString().slice(0, 10) === day;
+};
 
 if (
-  (fromDay !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(fromDay)) ||
-  (toDay !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(toDay))
+  (fromDay !== undefined && !isValidCalendarDay(fromDay)) ||
+  (toDay !== undefined && !isValidCalendarDay(toDay))
 ) {
   console.error("--from/--to must be YYYY-MM-DD");
   process.exit(2);
@@ -129,5 +138,12 @@ const projection = await refreshPublishedCrashDays({
 console.log(
   `published_crash_days: projected ${projection.projected}, pruned ${projection.pruned} (trace ${traceId}).`,
 );
+
+if (process.env.SURGE_CALENDAR_PUBLICATION_ENABLED === "true") {
+  const surgeProjection = await refreshPublishedSurgeDays({ prisma, traceId, fromDay, toDay });
+  console.log(
+    `published_surge_days: projected ${surgeProjection.projected}, pruned ${surgeProjection.pruned} (trace ${traceId}).`,
+  );
+}
 
 await prisma.$disconnect();
