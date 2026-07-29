@@ -32,7 +32,7 @@ import { safeEqual } from "@/lib/session-cookie-signer";
  * NOTE: loginOperator is deliberately NOT gated by isOperatorAuthenticated —
  * the login action MUST be reachable by an unauthenticated operator (otherwise
  * no one can ever log in). The /console/login ROUTE is also exempted from the
- * middleware gate (see middleware.ts).
+ * proxy gate (see proxy.ts).
  */
 
 /** Generic error returned for every login failure (no enumeration oracle). */
