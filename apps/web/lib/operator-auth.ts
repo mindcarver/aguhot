@@ -20,11 +20,11 @@
  *     returns true (dev/test + e2e seed reach `/console/*` without a token —
  *     the same bypass the old flag had, preserving seed reachability). In
  *     production it requires a valid signed cookie.
- *   - isRequestAuthenticated(request): edge/middleware entry point. Middleware
+ *   - isRequestAuthenticated(request): proxy entry point. Proxy
  *     runs on the Node.js runtime and reads the cookie off the incoming
  *     NextRequest directly (it CANNOT call `cookies()` from `next/headers` —
  *     that API is for RSC / server actions only). Centralized here so
- *     middleware.ts and the RSC/action gates share one verify path.
+ *     proxy.ts and the RSC/action gates share one verify path.
  *
  * HMAC = base64url(SHA256("operator", SESSION_SECRET)). The signer is the
  * SINGLE source of truth from `./session-cookie-signer` — this module does NOT
@@ -137,13 +137,13 @@ export async function isOperatorAuthenticated(): Promise<boolean> {
  * `cookies()` from `next/headers` (that API is for RSC / server actions).
  *
  * Mirrors `isOperatorAuthenticated`'s env-bypass + verify logic, but against
- * `request.cookies` and `process.env.SESSION_SECRET` (middleware on the
- * nodejs runtime reads the live runtime env directly; no requireEnv so a
- * missing secret degrades silently to unauthenticated rather than throwing
- * inside the middleware response cycle).
+ * `request.cookies` and `process.env.SESSION_SECRET` (proxy on the nodejs
+ * runtime reads the live runtime env directly; no requireEnv so a missing
+ * secret degrades silently to unauthenticated rather than throwing inside the
+ * proxy response cycle).
  *
- * Centralized here so middleware.ts and the RSC/action gates share ONE verify
- * path — avoiding drift between the edge gate and the request-time gate.
+ * Centralized here so proxy.ts and the RSC/action gates share ONE verify
+ * path — avoiding drift between the request-time gate and the action gate.
  */
 export function isRequestAuthenticated(request: NextRequest): boolean {
   if (process.env.NODE_ENV !== "production") return true;
