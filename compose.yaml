@@ -1,0 +1,15 @@
+services:
+  rsshub:
+    image: diygod/rsshub@sha256:6d5f0ad0b9b31a507bf4f71ef24fae2c54cac4657084b11713b34ea16569602e
+    ports:
+      - "127.0.0.1:1200:1200"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:1200/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 12

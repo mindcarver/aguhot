@@ -4,7 +4,7 @@
  * Drives the FULL publish pipeline on a schedule so the public feed stays fresh
  * without a manual run-ingest + run-pipeline:
  *   ingestSources → clusterEvents → generateExplanation(each candidate) →
- *   generateRecommendationReason(each, LLM) → decideReview(approve each) →
+ *   decideReview(approve each) → generateRecommendationReason(each, LLM) →
  *   refreshPublishedTimelineAll
  *
  * This is the pipeline chaining the repo previously deferred ("auto orchestration
@@ -31,7 +31,7 @@
  * a separate, lower-priority surface).
  */
 
-import { Queue, Worker, type Job } from "bullmq";
+import { Queue, Worker, type Job, type JobsOptions } from "bullmq";
 
 import { getRedis } from "./connection.js";
 import { resolveLlmAdapter } from "../llm-adapter-resolver.js";
@@ -47,6 +47,8 @@ export interface PipelineRefreshJobData {
   traceId: string;
 }
 
+export type EnqueuePipelineRefreshOptions = Pick<JobsOptions, "deduplication">;
+
 let queue: Queue | null = null;
 
 export function getPipelineRefreshQueue(): Queue {
@@ -56,11 +58,14 @@ export function getPipelineRefreshQueue(): Queue {
 }
 
 /** Enqueue one pipeline-refresh pass on demand (verify/manual). */
-export async function enqueuePipelineRefresh(traceId: string): Promise<Job> {
+export async function enqueuePipelineRefresh(
+  traceId: string,
+  options: EnqueuePipelineRefreshOptions = {},
+): Promise<Job> {
   return getPipelineRefreshQueue().add(
     PIPELINE_REFRESH_JOB_NAME,
     { traceId },
-    { removeOnComplete: 100, removeOnFail: 500 },
+    { removeOnComplete: 100, removeOnFail: 500, ...options },
   );
 }
 
@@ -112,7 +117,8 @@ export function registerPipelineRefreshWorker(): Worker {
       const rootTrace = data.traceId === "scheduled" ? newTraceId() : data.traceId;
 
       const tid = () => newTraceId();
-      const log = (stage: string, msg: string) => console.log(`[pipeline-refresh ${rootTrace.slice(0, 8)}] ${stage}: ${msg}`);
+      const log = (stage: string, msg: string) =>
+        console.log(`[pipeline-refresh ${rootTrace.slice(0, 8)}] ${stage}: ${msg}`);
 
       // 1. Ingest (idempotent dedup).
       try {
@@ -146,31 +152,8 @@ export function registerPipelineRefreshWorker(): Worker {
       }
       log("explain", `processed ${explained}/${candidates.length}`);
 
-      // 4. recommendation-reason (LLM, only events lacking one). No-ops if no LLM env.
-      const llmAdapter = resolveLlmAdapter();
-      if (llmAdapter !== undefined) {
-        const lacking = await prisma.hotEvent.findMany({
-          where: {
-            publicationStatus: { in: ["candidate", "published"] },
-            recommendationReasons: { none: {} },
-          },
-          select: { id: true },
-        });
-        let reasoned = 0;
-        for (const ev of lacking) {
-          try {
-            const r = await generateRecommendationReason({ prisma, traceId: tid(), hotEventId: ev.id, adapter: llmAdapter });
-            if (r !== null) reasoned += 1;
-          } catch (e) {
-            log("reason", `ERROR ${ev.id} ${e instanceof Error ? e.message : e}`);
-          }
-        }
-        log("reason", `generated ${reasoned}/${lacking.length}`);
-      } else {
-        log("reason", "skipped (no LLM adapter)");
-      }
-
-      // 5. Auto-approve every candidate (dev bypass).
+      // 4. Auto-approve every candidate (dev bypass). Keep this before optional
+      // LLM enrichment so a slow or unavailable model cannot stale the feed.
       const toApprove = await prisma.hotEvent.findMany({
         where: { publicationStatus: "candidate" },
         select: { id: true, title: true },
@@ -192,6 +175,35 @@ export function registerPipelineRefreshWorker(): Worker {
       }
       log("approve", `published ${published}/${toApprove.length}`);
 
+      // 5. recommendation-reason (LLM, only events lacking one). No-ops if no LLM env.
+      const llmAdapter = resolveLlmAdapter();
+      if (llmAdapter !== undefined) {
+        const lacking = await prisma.hotEvent.findMany({
+          where: {
+            publicationStatus: { in: ["candidate", "published"] },
+            recommendationReasons: { none: {} },
+          },
+          select: { id: true },
+        });
+        let reasoned = 0;
+        for (const ev of lacking) {
+          try {
+            const r = await generateRecommendationReason({
+              prisma,
+              traceId: tid(),
+              hotEventId: ev.id,
+              adapter: llmAdapter,
+            });
+            if (r !== null) reasoned += 1;
+          } catch (e) {
+            log("reason", `ERROR ${ev.id} ${e instanceof Error ? e.message : e}`);
+          }
+        }
+        log("reason", `generated ${reasoned}/${lacking.length}`);
+      } else {
+        log("reason", "skipped (no LLM adapter)");
+      }
+
       // 6. daily-digest + trend-briefing for the latest evidence day (the /daily
       // page). digest needs the digest adapter (LLM_* env); trend-briefing needs
       // the LLM adapter. Either undefined → that part degrades honestly. Both are
@@ -205,7 +217,12 @@ export function registerPipelineRefreshWorker(): Worker {
         const digestAdapter = resolveDigestAdapter(prisma);
         if (digestAdapter !== undefined) {
           try {
-            const r = await generateDailyDigest({ prisma, traceId: tid(), coverageDate, adapter: digestAdapter });
+            const r = await generateDailyDigest({
+              prisma,
+              traceId: tid(),
+              coverageDate,
+              adapter: digestAdapter,
+            });
             if (r !== null) {
               await refreshPublishedDailyDigest({ prisma, traceId: tid(), coverageDate });
               log("daily-digest", `entries=${r.entries.length}`);
@@ -220,7 +237,12 @@ export function registerPipelineRefreshWorker(): Worker {
         }
         if (llmAdapter !== undefined) {
           try {
-            const tr = await generateTrendBriefing({ prisma, traceId: tid(), coverageDate, adapter: llmAdapter });
+            const tr = await generateTrendBriefing({
+              prisma,
+              traceId: tid(),
+              coverageDate,
+              adapter: llmAdapter,
+            });
             if (tr !== null) {
               await refreshPublishedTrendBriefing({ prisma, traceId: tid(), coverageDate });
               log("trend-briefing", "done");

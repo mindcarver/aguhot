@@ -1,5 +1,5 @@
 /** BullMQ worker and schedule for keeping the public crash calendar current. */
-import { Queue, Worker, type Job } from "bullmq";
+import { Queue, Worker, type Job, type JobsOptions } from "bullmq";
 
 import { refreshLatestMarketData } from "../market-data-refresh.js";
 import { getRedis } from "./connection.js";
@@ -12,6 +12,8 @@ export interface MarketDataRefreshJobData {
   traceId: string;
 }
 
+export type EnqueueMarketDataRefreshOptions = Pick<JobsOptions, "deduplication">;
+
 let queue: Queue | null = null;
 
 export function getMarketDataRefreshQueue(): Queue {
@@ -20,11 +22,14 @@ export function getMarketDataRefreshQueue(): Queue {
   return queue;
 }
 
-export async function enqueueMarketDataRefresh(traceId: string): Promise<Job> {
+export async function enqueueMarketDataRefresh(
+  traceId: string,
+  options: EnqueueMarketDataRefreshOptions = {},
+): Promise<Job> {
   return getMarketDataRefreshQueue().add(
     MARKET_DATA_REFRESH_JOB_NAME,
     { traceId },
-    { removeOnComplete: 100, removeOnFail: 500 },
+    { removeOnComplete: 100, removeOnFail: 500, ...options },
   );
 }
 
