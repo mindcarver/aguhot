@@ -650,6 +650,33 @@ def test_ingest_breadth_aggregates_sources_into_single_row(monkeypatch):
     assert row.dragon_tiger["stockCount"] == EXPECTED_BREADTH["lhb_stock_count"]
 
 
+def test_ingest_breadth_override_range_narrows_backfill_window(monkeypatch):
+    """override_start/override_end collapse a backfill run from the 3-year default to [from,to].
+
+    FakeAk returns the 07-14 fixture for EVERY date arg, so the default backfill window
+    (~3 years of calendar days) would produce hundreds of captured rows. The override must
+    bound the iteration to the single requested day. This is the regression test for the
+    --from/--to narrowing (without it the override is ignored and the full window runs).
+    """
+    from market_sidecar import ingest as ing_mod
+
+    captured: list = []
+    monkeypatch.setattr(
+        ing_mod, "upsert_market_breadth", lambda conn, rows: captured.extend(rows) or len(rows)
+    )
+    monkeypatch.setattr(ing_mod, "connect", lambda *_a, **_k: _FakeConn())
+
+    rep = ing_mod.ingest_breadth(
+        mode="backfill",
+        ak_module=FakeAk(),
+        override_start=BREADTH_TRADE_DATE,
+        override_end=BREADTH_TRADE_DATE,
+    )
+    assert rep.exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].trade_date == BREADTH_TRADE_DATE
+
+
 def test_ingest_breadth_per_source_isolation_optional_source_failure_keeps_row(monkeypatch):
     """AC4: an OPTIONAL source (dragon_tiger) failing → row still written, field NULL.
 

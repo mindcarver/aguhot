@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import date
 
 from .ingest import ingest_breadth, ingest_indices, ingest_sectors
 
@@ -56,6 +57,21 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument(
         "-v", "--verbose", action="count", default=0, help="-v info, -vv debug."
     )
+    ing.add_argument(
+        "--from",
+        dest="from_day",
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="Breadth --backfill only: inclusive start date. Requires --to. "
+        "Narrows the run from the default 3-year window to [from, to].",
+    )
+    ing.add_argument(
+        "--to",
+        dest="to_day",
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="Breadth --backfill only: inclusive end date. Requires --from.",
+    )
     return p
 
 
@@ -76,7 +92,13 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     if scope == "breadth":
-        rep = ingest_breadth(mode=mode)
+        override_start, override_end = _resolve_range(args)
+        # --from/--to narrow a --backfill run; incremental/smoke windows are fixed and short.
+        if (override_start is not None) and mode != "backfill":
+            raise SystemExit("--from/--to are only valid with --backfill")
+        rep = ingest_breadth(
+            mode=mode, override_start=override_start, override_end=override_end
+        )
         exit_code |= rep.exit_code
         _log_report(rep)
         return exit_code
@@ -89,6 +111,29 @@ def main(argv: list[str] | None = None) -> int:
         exit_code |= rep.exit_code
         _log_report(rep)
     return exit_code
+
+
+def _parse_day(value: str | None, flag: str) -> date | None:
+    """Parse a YYYY-MM-DD CLI arg; reject malformed values loudly."""
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise SystemExit(f"{flag} must be YYYY-MM-DD, got {value!r}")
+
+
+def _resolve_range(args: argparse.Namespace) -> tuple[date | None, date | None]:
+    """Validate --from/--to: both-or-neither.
+
+    Returns (start, end) for ingest_breadth, both None when no override was requested.
+    The backfill-only guard lives in main(), where the resolved mode is in scope.
+    """
+    start = _parse_day(args.from_day, "--from")
+    end = _parse_day(args.to_day, "--to")
+    if (start is None) != (end is None):
+        raise SystemExit("--from and --to must be given together")
+    return start, end
 
 
 def _configure_logging(verbose: int) -> None:

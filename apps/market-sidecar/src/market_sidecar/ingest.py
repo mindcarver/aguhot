@@ -39,6 +39,14 @@ log = logging.getLogger("market_sidecar.ingest")
 SOURCE = "akshare"
 # Backfill window: ~3 years (per spec AC1/AC2). We over-fetch slightly; the
 # date window in akshare_client trims to exactly this range.
+#
+# CAVEAT (empirically confirmed 2026-07): AkShare's 跌停/炸板 pools
+# (stock_zt_pool_dtgc_em / stock_zt_pool_zbgc_em) hard-error beyond the most recent
+# ~30 trading days ("只能获取最近30个交易日的数据"), and 涨停池 returns empty for older
+# dates. So breadth --backfill only yields rows for the recent ~30-day window regardless
+# of BACKFILL_DAYS; older calendar days are skipped as non-trading/empty. Use the CLI
+# --from/--to override to target the fetchable window and avoid wasting time retrying
+# out-of-range dates across the full 3-year default. Deeper history needs a paid source.
 BACKFILL_DAYS = 365 * 3 + 5
 # Incremental: last 5 trading days (covers weekends/holidays with margin).
 INCREMENTAL_DAYS = 7
@@ -163,6 +171,8 @@ def ingest_breadth(
     db_url: str | None = None,
     ak_module: akc.AkModule | None = None,
     today: date | None = None,
+    override_start: date | None = None,
+    override_end: date | None = None,
 ) -> IngestReport:
     """Ingest market breadth (story 8.6) — one aggregate row per trading day.
 
@@ -192,7 +202,13 @@ def ingest_breadth(
     the change is None. A margin fetch failure resets the prev total to None so the next day's
     diff is NOT computed against stale state.
     """
+    # An explicit override_start/override_end (CLI --from/--to) narrows a --backfill run to a
+    # chosen range instead of the hardcoded BACKFILL_DAYS 3-year window. Both bounds are required
+    # together; only honored for breadth (index/sector keep their fixed windows). When absent,
+    # the mode's default window applies. Bounds are inclusive and clamped to calendar order.
     start, end = _window(mode, today)
+    if override_start is not None and override_end is not None:
+        start, end = (min(override_start, override_end), max(override_start, override_end))
     report = IngestReport(scope="breadth", mode=mode)
     rows: list[MarketBreadthRow] = []
 
