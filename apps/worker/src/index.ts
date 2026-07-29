@@ -54,6 +54,7 @@ import {
   registerInvestmentTargetsWorker,
   scheduleInvestmentTargetsSelfHeal,
 } from "./queues/investment-targets-queue.js";
+import { enqueueStartupRefreshes } from "./startup-refresh.js";
 
 async function main(): Promise<void> {
   // Fail loud and early if infra is missing (Block-If): a worker without DB or
@@ -85,16 +86,23 @@ async function main(): Promise<void> {
   // Wire the investment-targets self-heal (full-auto sweep for events lacking a
   // candidate pool). Idempotent on restart.
   await scheduleInvestmentTargetsSelfHeal();
-  // Wire the pipeline-refresh self-heal (full ingest→cluster→explain→reason→
-  // auto-approve→digest→publish-timeline pass every 10 min). Default-on. Dev
+  // Wire the pipeline-refresh self-heal (full ingest→cluster→explain→
+  // auto-approve→reason→digest→publish-timeline pass every 10 min). Default-on. Dev
   // auto-approve bypass — prod uses the operator review gate.
   await schedulePipelineRefreshSelfHeal();
   // Keep index_daily_bars → crash_days → published_crash_days current without
   // requiring an operator to run the Epic 8 dev runners by hand.
   await scheduleMarketDataRefresh();
+  // Do not leave a freshly started local app showing stale data until the next
+  // 10/30-minute scheduler tick. Simple-mode deduplication prevents concurrent
+  // startup jobs while allowing a completed or failed refresh to be retried.
+  const startupRefresh = await enqueueStartupRefreshes();
 
   console.log(
     "[worker] source-ingest + event-cluster + explain + market-reaction + market-data-refresh + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh workers registered and running",
+  );
+  console.log(
+    `[worker] startup refresh queued pipeline=${startupRefresh.pipelineJobId} market=${startupRefresh.marketDataJobId}`,
   );
 
   const shutdown = async (signal: string): Promise<void> => {

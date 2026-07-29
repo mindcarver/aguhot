@@ -9,6 +9,8 @@
     "pnpm": ">=10.2.0"
   },
   "scripts": {
+    "dev": "pnpm dev:deps || exit $?; test -f .env || { echo 'Missing .env; copy .env.example first.' >&2; exit 1; }; set -a; . ./.env; set +a; pnpm --stream --parallel --filter @aguhot/web --filter @aguhot/worker run dev",
+    "dev:deps": "curl --noproxy '*' -fsS http://127.0.0.1:1200/ >/dev/null 2>&1 || docker compose up -d --wait --wait-timeout 60 rsshub",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
