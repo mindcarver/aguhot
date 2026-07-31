@@ -838,7 +838,9 @@ export function mapCapitalMetricObservationToRecord(
     value: canCarryNumericValue ? input.value : null,
     unit: canCarryNumericValue ? entry.unit : null,
     observedAt: input.observedAt,
-    publishedAt: input.publishedAt,
+    // An observation-only source must never let a source-side date masquerade
+    // as provider publication time; the point-in-time fallback is `asOf`.
+    publishedAt: mapping.publishedAtField === null ? null : input.publishedAt,
     asOf: input.asOf,
     source: {
       id: mapping.sourceId,

@@ -7,6 +7,7 @@ import { getRedis } from "./connection.js";
 export const MARKET_DATA_REFRESH_QUEUE_NAME = "market-data-refresh";
 export const MARKET_DATA_REFRESH_JOB_NAME = "market-data-refresh";
 export const MARKET_DATA_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+export const MARKET_DATA_REFRESH_ATTEMPTS = 3;
 
 export interface MarketDataRefreshJobData {
   traceId: string;
@@ -29,7 +30,12 @@ export async function enqueueMarketDataRefresh(
   return getMarketDataRefreshQueue().add(
     MARKET_DATA_REFRESH_JOB_NAME,
     { traceId },
-    { removeOnComplete: 100, removeOnFail: 500, ...options },
+    {
+      removeOnComplete: 100,
+      removeOnFail: 500,
+      attempts: MARKET_DATA_REFRESH_ATTEMPTS,
+      ...options,
+    },
   );
 }
 
@@ -40,7 +46,11 @@ export async function scheduleMarketDataRefresh(): Promise<void> {
     {
       name: MARKET_DATA_REFRESH_JOB_NAME,
       data: { traceId: "scheduled" },
-      opts: { removeOnComplete: 100, removeOnFail: 500 },
+      opts: {
+        removeOnComplete: 100,
+        removeOnFail: 500,
+        attempts: MARKET_DATA_REFRESH_ATTEMPTS,
+      },
     },
   );
 }
