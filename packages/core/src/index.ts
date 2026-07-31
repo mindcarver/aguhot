@@ -82,6 +82,7 @@ export {
   validateCapitalMetricCatalogEntry,
   validateCapitalDataRecord,
   appendCapitalProviderObservations,
+  replayCapitalEnvironmentAt,
 } from "./modules/capital-environment/index.js";
 export type {
   CapitalDataRecord,
@@ -102,6 +103,10 @@ export type {
   ProviderObservationBatch,
   AppendCapitalProviderObservationsOptions,
   AppendCapitalProviderObservationsResult,
+  CapitalReplayDimension,
+  CapitalReplayMarket,
+  CapitalReplayResult,
+  ReplayCapitalEnvironmentOptions,
   CapitalAvailability as CapitalAvailabilityType,
   CapitalCatalogStatus as CapitalCatalogStatusType,
   CapitalDimension as CapitalDimensionType,
