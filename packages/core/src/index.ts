@@ -49,31 +49,51 @@ export type {
   SourceKind as SourceKindType,
 } from "./modules/source-ingest/types.js";
 
-// Capital-environment point-in-time data contract (Issue #41).
+// Capital-environment point-in-time data contract (Issue #41) and source-field
+// catalog (Issue #43).
 export {
   assertCapitalDataRecord,
+  assertCapitalMetricCatalogEntry,
   CAPITAL_SOURCE_BASELINE,
+  CAPITAL_METRIC_CATALOG,
   CapitalAvailability,
+  CapitalCatalogStatus,
   CapitalDimension,
   CapitalFrequency,
   CapitalMarket,
   capitalRecordIdentity,
   capitalRecordKey,
+  capitalMetricRecordMetadata,
+  catalogStatusToAvailability,
+  evaluateCapitalMetricMapping,
+  getCapitalMetricCatalogEntry,
+  listCapitalMetricCatalog,
+  mapCapitalMetricObservationToRecord,
   listCapitalSourceBaseline,
   PublicationDateCapability,
+  CapitalRevisionCapability,
   selectCapitalRecordsAt,
   SourceReadiness,
+  validateCapitalMetricCatalogEntry,
   validateCapitalDataRecord,
 } from "./modules/capital-environment/index.js";
 export type {
   CapitalDataRecord,
+  CapitalMetricCatalogEntry,
+  CapitalMetricHistoricalCoverage,
+  CapitalMetricMappingObservation,
+  CapitalMetricObservationInput,
+  CapitalMetricRecordMetadata,
+  CapitalMetricSourceFieldMapping,
   CapitalSourceBaseline,
   CapitalSourceReference,
   CapitalAvailability as CapitalAvailabilityType,
+  CapitalCatalogStatus as CapitalCatalogStatusType,
   CapitalDimension as CapitalDimensionType,
   CapitalFrequency as CapitalFrequencyType,
   CapitalMarket as CapitalMarketType,
   PublicationDateCapability as PublicationDateCapabilityType,
+  CapitalRevisionCapability as CapitalRevisionCapabilityType,
   SourceReadiness as SourceReadinessType,
 } from "./modules/capital-environment/index.js";
 
