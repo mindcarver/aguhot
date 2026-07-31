@@ -1,6 +1,9 @@
 /** Deterministic orchestration checks for crash, surge, and breadth history refreshes. */
 import { runMarketDataRefresh } from "./market-data-refresh.js";
-import { MARKET_DATA_REFRESH_INTERVAL_MS } from "./queues/market-data-refresh-queue.js";
+import {
+  MARKET_DATA_REFRESH_ATTEMPTS,
+  MARKET_DATA_REFRESH_INTERVAL_MS,
+} from "./queues/market-data-refresh-queue.js";
 
 interface Assertion {
   name: string;
@@ -20,6 +23,10 @@ const result = await runMarketDataRefresh({
   },
   ingestBreadth: () => {
     order.push("breadth");
+  },
+  syncCapitalEnvironmentRecords: async () => {
+    order.push("capital-environment-sync");
+    return { inserted: 3, unchanged: 2, failed: 0 };
   },
   detectCrashDays: async () => {
     order.push("crash-detect");
@@ -46,17 +53,20 @@ assertions.push({
   name: "crash, sector, surge, breadth history, and enriched projections preserve their order",
   ok:
     order.join(",") ===
-    "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,surge-publish,breadth,breadth-history-publish,crash-publish,surge-publish",
+    "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,surge-publish,breadth,capital-environment-sync,breadth-history-publish,crash-publish,surge-publish",
   detail: order.join(" → "),
 });
 assertions.push({
-  name: "result exposes independent surge and breadth history counts",
+  name: "result exposes capital-record, surge, and breadth history counts",
   ok:
     result.detected === 2 &&
     result.detectedSurges === 1 &&
     result.surgeProjected === 1 &&
     result.breadthProjected === 3 &&
-    result.breadthPruned === 1,
+    result.breadthPruned === 1 &&
+    result.capitalRecordsInserted === 3 &&
+    result.capitalRecordsUnchanged === 2 &&
+    result.capitalRecordsFailed === 0,
   detail: JSON.stringify(result),
 });
 
@@ -70,6 +80,10 @@ const isolatedFailureResult = await runMarketDataRefresh({
   },
   ingestBreadth: () => {
     surgeFailure.push("breadth");
+  },
+  syncCapitalEnvironmentRecords: async () => {
+    surgeFailure.push("capital-environment-sync");
+    return { inserted: 0, unchanged: 0, failed: 0 };
   },
   detectCrashDays: async () => {
     surgeFailure.push("crash-detect");
@@ -96,7 +110,7 @@ assertions.push({
   name: "surge failure does not block breadth history and crash reprojection",
   ok:
     surgeFailure.join(",") ===
-      "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,breadth,breadth-history-publish,crash-publish" &&
+      "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,breadth,capital-environment-sync,breadth-history-publish,crash-publish" &&
     isolatedFailureResult.detectedSurges === 0,
   detail: surgeFailure.join(" → "),
 });
@@ -111,6 +125,10 @@ const historyFailureResult = await runMarketDataRefresh({
   },
   ingestBreadth: () => {
     historyFailure.push("breadth");
+  },
+  syncCapitalEnvironmentRecords: async () => {
+    historyFailure.push("capital-environment-sync");
+    return { inserted: 0, unchanged: 0, failed: 0 };
   },
   detectCrashDays: async () => {
     historyFailure.push("crash-detect");
@@ -137,7 +155,7 @@ assertions.push({
   name: "breadth history projection failure leaves existing calendar projections running",
   ok:
     historyFailure.join(",") ===
-      "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,surge-publish,breadth,breadth-history-publish,crash-publish,surge-publish" &&
+      "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,surge-publish,breadth,capital-environment-sync,breadth-history-publish,crash-publish,surge-publish" &&
     historyFailureResult.breadthProjected === 0,
   detail: historyFailure.join(" → "),
 });
@@ -156,6 +174,7 @@ try {
     ingestBreadth: () => {
       sectorFailure.push("breadth");
     },
+    syncCapitalEnvironmentRecords: async () => ({ inserted: 0, unchanged: 0, failed: 0 }),
     detectCrashDays: async () => {
       sectorFailure.push("crash-detect");
       return { upserted: 1, crashDays: [{}] };
@@ -193,6 +212,7 @@ try {
     ingestBreadth: () => {
       indexFailure.push("breadth");
     },
+    syncCapitalEnvironmentRecords: async () => ({ inserted: 0, unchanged: 0, failed: 0 }),
     detectCrashDays: async () => ({ upserted: 0, crashDays: [] }),
     publishCrashDays: async () => ({ projected: 0, pruned: 0 }),
     detectSurgeDays: async () => ({ upserted: 0, surgeDays: [] }),
@@ -206,10 +226,65 @@ assertions.push({
   name: "index failure stops all calendar projections",
   ok: indexFailedLoudly && indexFailure.join(",") === "index",
 });
+
+const capitalSyncFailure: string[] = [];
+let capitalSyncFailedLoudly = false;
+try {
+  await runMarketDataRefresh({
+    ingestIndices: () => {
+      capitalSyncFailure.push("index");
+    },
+    ingestSectors: () => {
+      capitalSyncFailure.push("sector");
+    },
+    ingestBreadth: () => {
+      capitalSyncFailure.push("breadth");
+    },
+    syncCapitalEnvironmentRecords: async () => {
+      capitalSyncFailure.push("capital-environment-sync");
+      throw new Error("capital store unavailable");
+    },
+    detectCrashDays: async () => {
+      capitalSyncFailure.push("crash-detect");
+      return { upserted: 0, crashDays: [] };
+    },
+    publishCrashDays: async () => {
+      capitalSyncFailure.push("crash-publish");
+      return { projected: 0, pruned: 0 };
+    },
+    detectSurgeDays: async () => {
+      capitalSyncFailure.push("surge-detect");
+      return { upserted: 0, surgeDays: [] };
+    },
+    publishSurgeDays: async () => {
+      capitalSyncFailure.push("surge-publish");
+      return { projected: 0, pruned: 0 };
+    },
+    publishMarketBreadthHistory: async () => {
+      capitalSyncFailure.push("breadth-history-publish");
+      return { projected: 0, pruned: 0 };
+    },
+  });
+} catch (error) {
+  capitalSyncFailedLoudly = error instanceof Error && error.message === "capital store unavailable";
+}
+assertions.push({
+  name: "unexpected capital sync failure remains loud for queue retry",
+  ok:
+    capitalSyncFailedLoudly &&
+    capitalSyncFailure.join(",") ===
+      "index,crash-detect,crash-publish,sector,crash-publish,surge-detect,surge-publish,breadth,capital-environment-sync",
+  detail: capitalSyncFailure.join(" → "),
+});
 assertions.push({
   name: "scheduled refresh interval is 30 minutes",
   ok: MARKET_DATA_REFRESH_INTERVAL_MS === 30 * 60 * 1000,
   detail: `${MARKET_DATA_REFRESH_INTERVAL_MS}ms`,
+});
+assertions.push({
+  name: "unexpected market refresh failures receive bounded queue retries",
+  ok: MARKET_DATA_REFRESH_ATTEMPTS === 3,
+  detail: `${MARKET_DATA_REFRESH_ATTEMPTS} attempts`,
 });
 
 let failed = 0;

@@ -67,3 +67,11 @@ export type {
   AshareObservationKind,
   AshareObservationMappingResult,
 } from "./ashare-observation-adapter.js";
+export {
+  ASHARE_CAPITAL_PROCESSING_VERSION,
+  syncAshareCapitalEnvironmentRecords,
+} from "./ashare-observation-service.js";
+export type {
+  SyncAshareCapitalEnvironmentRecordsOptions,
+  SyncAshareCapitalEnvironmentRecordsResult,
+} from "./ashare-observation-service.js";

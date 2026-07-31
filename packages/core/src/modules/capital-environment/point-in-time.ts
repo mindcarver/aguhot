@@ -9,6 +9,17 @@ function timestamp(value: string): number {
   if (!Number.isFinite(parsed)) throw new Error(`Invalid ISO timestamp: ${value}`);
   return parsed;
 }
+
+function canonicalTimestamp(value: string): string {
+  return new Date(timestamp(value)).toISOString();
+}
+
+function preservesFirstObservedAsOf(record: CapitalDataRecord): boolean {
+  return (
+    record.availability === CapitalAvailability.Unknown ||
+    record.availability === CapitalAvailability.Failed
+  );
+}
 /**
  * Stable identity for one metric vintage before processing revisions.
  * Different providers are intentionally kept separate: switching a provider
@@ -21,7 +32,7 @@ export function capitalRecordIdentity(record: CapitalDataRecord): string {
     record.market,
     record.dimension,
     record.metricKey,
-    record.observedAt,
+    canonicalTimestamp(record.observedAt),
   ].join("|");
 }
 
@@ -33,8 +44,8 @@ export function capitalRecordIdentity(record: CapitalDataRecord): string {
 export function capitalRecordKey(record: CapitalDataRecord): string {
   return [
     capitalRecordIdentity(record),
-    record.publishedAt ?? "unpublished",
-    record.asOf,
+    record.publishedAt === null ? "unpublished" : canonicalTimestamp(record.publishedAt),
+    preservesFirstObservedAsOf(record) ? "first-observed" : canonicalTimestamp(record.asOf),
     record.processingVersion,
     String(record.revision),
     record.availability,

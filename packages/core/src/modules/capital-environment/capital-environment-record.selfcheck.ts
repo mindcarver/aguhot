@@ -8,6 +8,7 @@ import {
 } from "./record-repository.js";
 import { capitalRecordKey } from "./point-in-time.js";
 import { mapAshareObservation } from "./ashare-observation-adapter.js";
+import { syncAshareCapitalEnvironmentRecords } from "./ashare-observation-service.js";
 import type { AshareObservationInput } from "./ashare-observation-adapter.js";
 import {
   CapitalAvailability,
@@ -119,6 +120,140 @@ function racingFakePrisma() {
   return { client, rows };
 }
 
+function ashareSidecarFakePrisma() {
+  const { client: capitalClient, rows } = fakePrisma();
+  let capturedAt = new Date("2024-02-01T00:00:00.000Z");
+  const client = {
+    ...capitalClient,
+    indexDailyBar: {
+      async findMany() {
+        return [
+          {
+            id: "index-row-1",
+            tradeDate: new Date("2024-01-31T00:00:00.000Z"),
+            close: 3211.42,
+            ingestedAt: capturedAt,
+            traceId: "index-trace",
+          },
+        ];
+      },
+    },
+    sectorDailyBar: {
+      async findMany() {
+        return [
+          {
+            id: "sector-row-1",
+            tradeDate: new Date("2024-01-31T00:00:00.000Z"),
+            close: 1876.35,
+            ingestedAt: capturedAt,
+            traceId: "sector-trace",
+          },
+        ];
+      },
+    },
+    marketBreadthDaily: {
+      async findMany() {
+        return [
+          {
+            id: "breadth-row-1",
+            tradeDate: new Date("2024-01-31T00:00:00.000Z"),
+            advancingCount: 2317,
+            ingestedAt: capturedAt,
+            traceId: "breadth-trace",
+          },
+        ];
+      },
+    },
+  } as unknown as PrismaClient;
+  return {
+    client,
+    rows,
+    advanceIngestedAt() {
+      capturedAt = new Date("2024-02-02T00:00:00.000Z");
+    },
+  };
+}
+
+function indexFailureSidecarFakePrisma() {
+  const { client, rows } = ashareSidecarFakePrisma();
+  return {
+    client: {
+      ...client,
+      indexDailyBar: {
+        async findMany() {
+          throw new Error("index sidecar unavailable");
+        },
+      },
+    } as unknown as PrismaClient,
+    rows,
+  };
+}
+
+function relatedSourceFailuresSidecarFakePrisma() {
+  const { client, rows } = ashareSidecarFakePrisma();
+  return {
+    client: {
+      ...client,
+      indexDailyBar: {
+        async findMany() {
+          throw new Error("index sidecar unavailable");
+        },
+      },
+      sectorDailyBar: {
+        async findMany() {
+          throw new Error("sector sidecar unavailable");
+        },
+      },
+    } as unknown as PrismaClient,
+    rows,
+  };
+}
+
+function emptySourceSidecarFakePrisma() {
+  const { client, rows } = fakePrisma();
+  return {
+    client: {
+      ...client,
+      indexDailyBar: { async findMany() { return []; } },
+      sectorDailyBar: { async findMany() { return []; } },
+      marketBreadthDaily: { async findMany() { return []; } },
+    } as unknown as PrismaClient,
+    rows,
+  };
+}
+
+function statusPersistenceFailureSidecarFakePrisma() {
+  const { client, rows } = indexFailureSidecarFakePrisma();
+  return {
+    client: {
+      ...client,
+      capitalEnvironmentRecord: {
+        ...client.capitalEnvironmentRecord,
+        async create() {
+          throw new Error("capital status store unavailable");
+        },
+      },
+    } as unknown as PrismaClient,
+    rows,
+  };
+}
+
+function mappedPersistenceFailureSidecarFakePrisma() {
+  const { client, rows } = ashareSidecarFakePrisma();
+  return {
+    client: {
+      ...client,
+      capitalEnvironmentRecord: {
+        ...client.capitalEnvironmentRecord,
+        async create() {
+          throw new Error("capital mapped record store unavailable");
+        },
+      },
+    } as unknown as PrismaClient,
+    rows,
+  };
+}
+
 function record(
   id: string,
   revision: number,
@@ -201,6 +336,29 @@ try {
 assertions.push({
   name: "A2 invalid record is rejected before persistence",
   ok: invalidRejected && rows.size === 1,
+});
+
+let precisionRejected = false;
+try {
+  await appendCapitalDataRecord(client, { ...first, value: 4.123456789 });
+} catch {
+  precisionRejected = true;
+}
+assertions.push({
+  name: "A2 values beyond database decimal scale are rejected before persistence",
+  ok: precisionRejected && rows.size === 1,
+});
+
+assertions.push({
+  name: "A2 equivalent ISO timestamp spellings share one record key",
+  ok:
+    capitalRecordKey(first) ===
+    capitalRecordKey({
+      ...first,
+      observedAt: "2024-01-31T08:00:00.000+08:00",
+      publishedAt: "2024-02-02T08:00:00.000+08:00",
+      asOf: "2024-02-02T08:00:00.000+08:00",
+    }),
 });
 
 let invalidCutoffRejected = false;
@@ -383,6 +541,207 @@ assertions.push({
 const unknownSourceResult = mapAshareObservation({
   ...breadthInput,
   mapping: { ...breadthMapping, sourceId: "new-unmapped-source" },
+});
+
+const sidecar = ashareSidecarFakePrisma();
+const firstSidecarSync = await syncAshareCapitalEnvironmentRecords(sidecar.client, {
+  traceId: "capital-sync-trace",
+});
+const sidecarBeforeCapture = await listCapitalDataRecordsAt(
+  sidecar.client,
+  "2024-01-31T23:59:59.999Z",
+  { metricKey: "cn-market-breadth", market: CapitalMarket.China },
+);
+const sidecarAtCapture = await listCapitalDataRecordsAt(
+  sidecar.client,
+  "2024-02-01T00:00:00.000Z",
+  { metricKey: "cn-market-breadth", market: CapitalMarket.China },
+);
+sidecar.advanceIngestedAt();
+const repeatedSidecarSync = await syncAshareCapitalEnvironmentRecords(sidecar.client, {
+  traceId: "capital-sync-trace",
+});
+assertions.push({
+  name: "A3 sidecar index, sector, and breadth rows map without fabricated values",
+  ok:
+    firstSidecarSync.scanned.index === 1 &&
+    firstSidecarSync.scanned.sector === 1 &&
+    firstSidecarSync.scanned.breadth === 1 &&
+    firstSidecarSync.inserted === 1 &&
+    firstSidecarSync.skipped === 2 &&
+    firstSidecarSync.availability[CapitalAvailability.Unknown] === 3 &&
+    sidecarBeforeCapture.length === 0 &&
+    sidecarAtCapture.length === 1 &&
+    sidecar.rows.size === 1,
+  detail: JSON.stringify(firstSidecarSync),
+});
+assertions.push({
+  name: "A2 sidecar refresh is idempotent when mutable ingest time changes",
+  ok:
+    repeatedSidecarSync.inserted === 0 &&
+    repeatedSidecarSync.unchanged === 1 &&
+    sidecar.rows.size === 1,
+  detail: JSON.stringify(repeatedSidecarSync),
+});
+const reprocessedSidecarSync = await syncAshareCapitalEnvironmentRecords(sidecar.client, {
+  processingVersion: "capital-environment-ashare-v2",
+  traceId: "capital-sync-trace",
+});
+assertions.push({
+  name: "A2 processing-version changes append with a distinct primary key",
+  ok:
+    reprocessedSidecarSync.inserted === 1 &&
+    reprocessedSidecarSync.skipped === 2 &&
+    sidecar.rows.size === 2,
+  detail: JSON.stringify(reprocessedSidecarSync),
+});
+const driftedSidecarSync = await syncAshareCapitalEnvironmentRecords(sidecar.client, {
+  traceId: "capital-sync-trace",
+  mappingOverrides: {
+    breadth: { ...breadthMapping, dataset: "changed-sidecar-dataset" },
+  },
+});
+const driftedSidecarRecords = await listCapitalDataRecordsAt(
+  sidecar.client,
+  "2100-01-01T00:00:00.000Z",
+  { metricKey: "cn-market-breadth", market: CapitalMarket.China },
+);
+assertions.push({
+  name: "A4 sidecar mapping drift persists an auditable pending-review record",
+  ok:
+    driftedSidecarSync.inserted === 1 &&
+    driftedSidecarSync.availability[CapitalAvailability.PendingReview] === 1 &&
+    driftedSidecarRecords.some(
+      (entry) =>
+        entry.availability === CapitalAvailability.PendingReview &&
+        entry.value === null &&
+        entry.source.dataset === "changed-sidecar-dataset (breadth sidecar)",
+    ),
+  detail: JSON.stringify(driftedSidecarSync),
+});
+const relatedDriftSidecar = ashareSidecarFakePrisma();
+const relatedDriftSync = await syncAshareCapitalEnvironmentRecords(relatedDriftSidecar.client, {
+  mappingOverrides: {
+    index: { ...observedMapping(related), dataset: "changed-related-dataset" },
+    sector: { ...observedMapping(related), dataset: "changed-related-dataset" },
+  },
+});
+const relatedDriftRecords = await listCapitalDataRecordsAt(
+  relatedDriftSidecar.client,
+  "2100-01-01T00:00:00.000Z",
+  { metricKey: "cn-market-breadth", market: CapitalMarket.China },
+);
+assertions.push({
+  name: "A4 index and sector mapping drifts retain separate pending-review records",
+  ok:
+    relatedDriftSync.inserted === 3 &&
+    relatedDriftSync.availability[CapitalAvailability.PendingReview] === 2 &&
+    relatedDriftRecords.filter(
+      (entry) => entry.availability === CapitalAvailability.PendingReview,
+    ).length === 2 &&
+    relatedDriftRecords.some(
+      (entry) => entry.source.dataset === "changed-related-dataset (index sidecar)",
+    ) &&
+    relatedDriftRecords.some(
+      (entry) => entry.source.dataset === "changed-related-dataset (sector sidecar)",
+    ),
+  detail: JSON.stringify(relatedDriftSync),
+});
+
+const indexFailureSidecar = indexFailureSidecarFakePrisma();
+const partialSourceSync = await syncAshareCapitalEnvironmentRecords(indexFailureSidecar.client);
+assertions.push({
+  name: "A4 one failed sidecar source does not block other mapped records",
+  ok:
+    partialSourceSync.failed === 1 &&
+    partialSourceSync.failedSources.length === 1 &&
+    partialSourceSync.failedSources[0] === "index" &&
+    partialSourceSync.scanned.index === 0 &&
+    partialSourceSync.scanned.sector === 1 &&
+    partialSourceSync.scanned.breadth === 1 &&
+    partialSourceSync.inserted === 2 &&
+    partialSourceSync.availability[CapitalAvailability.Failed] === 1 &&
+    indexFailureSidecar.rows.size === 2,
+  detail: JSON.stringify(partialSourceSync),
+});
+const failedSourceRecords = await listCapitalDataRecordsAt(
+  indexFailureSidecar.client,
+  "2100-01-01T00:00:00.000Z",
+  { metricKey: "cn-market-breadth", market: CapitalMarket.China },
+);
+assertions.push({
+  name: "A4/A5 failed sidecar reads persist auditable non-value records at their actual observation time",
+  ok: failedSourceRecords.some(
+    (entry) =>
+      entry.availability === CapitalAvailability.Failed &&
+      entry.source.id === "cn-akshare-index-sector" &&
+      entry.value === null &&
+      entry.asOf !== entry.observedAt &&
+      entry.statusReason?.includes("index sidecar read failed") === true,
+  ),
+  detail: JSON.stringify(failedSourceRecords),
+});
+const repeatedPartialSourceSync = await syncAshareCapitalEnvironmentRecords(indexFailureSidecar.client);
+assertions.push({
+  name: "A2 persistent source failures preserve their first observed status",
+  ok:
+    repeatedPartialSourceSync.failed === 1 &&
+    repeatedPartialSourceSync.unchanged === 2 &&
+    indexFailureSidecar.rows.size === 2,
+  detail: JSON.stringify(repeatedPartialSourceSync),
+});
+const relatedSourceFailures = relatedSourceFailuresSidecarFakePrisma();
+const relatedFailureSync = await syncAshareCapitalEnvironmentRecords(relatedSourceFailures.client);
+assertions.push({
+  name: "A4 related sidecar failures each persist even with one catalog source",
+  ok:
+    relatedFailureSync.failed === 2 &&
+    relatedFailureSync.failedSources.join(",") === "index,sector" &&
+    relatedFailureSync.availability[CapitalAvailability.Failed] === 2 &&
+    relatedSourceFailures.rows.size === 3,
+  detail: JSON.stringify(relatedFailureSync),
+});
+const emptySources = emptySourceSidecarFakePrisma();
+const emptySourceSync = await syncAshareCapitalEnvironmentRecords(emptySources.client);
+const repeatedEmptySourceSync = await syncAshareCapitalEnvironmentRecords(emptySources.client);
+const emptySourceRows = [...emptySources.rows.values()];
+assertions.push({
+  name: "A4 empty sidecar sources persist auditable current unknown states without duplication",
+  ok:
+    emptySourceSync.inserted === 3 &&
+    emptySourceSync.availability[CapitalAvailability.Unknown] === 3 &&
+    repeatedEmptySourceSync.inserted === 0 &&
+    repeatedEmptySourceSync.unchanged === 3 &&
+    emptySources.rows.size === 3 &&
+    emptySourceRows.every(
+      (entry) =>
+        (entry.asOf as Date).getTime() !== (entry.observedAt as Date).getTime(),
+    ),
+  detail: JSON.stringify({ emptySourceSync, repeatedEmptySourceSync }),
+});
+const failedStatusPersistence = statusPersistenceFailureSidecarFakePrisma();
+let statusPersistenceFailedLoudly = false;
+try {
+  await syncAshareCapitalEnvironmentRecords(failedStatusPersistence.client);
+} catch (error) {
+  statusPersistenceFailedLoudly =
+    error instanceof Error && error.message === "capital status store unavailable";
+}
+assertions.push({
+  name: "A4 failure-status persistence errors remain loud for queue retry",
+  ok: statusPersistenceFailedLoudly && failedStatusPersistence.rows.size === 0,
+});
+const failedMappedPersistence = mappedPersistenceFailureSidecarFakePrisma();
+let mappedPersistenceFailedLoudly = false;
+try {
+  await syncAshareCapitalEnvironmentRecords(failedMappedPersistence.client);
+} catch (error) {
+  mappedPersistenceFailedLoudly =
+    error instanceof Error && error.message === "capital mapped record store unavailable";
+}
+assertions.push({
+  name: "A4 mapped-record persistence errors remain loud for queue retry",
+  ok: mappedPersistenceFailedLoudly && failedMappedPersistence.rows.size === 0,
 });
 assertions.push({
   name: "A4 unknown source mapping degrades without aborting",

@@ -61,6 +61,9 @@ export {
   CapitalDimension,
   CapitalFrequency,
   CapitalMarket,
+  CapitalRecordConflictError,
+  ASHARE_CAPITAL_PROCESSING_VERSION,
+  appendCapitalDataRecord,
   capitalRecordIdentity,
   capitalRecordKey,
   capitalMetricRecordMetadata,
@@ -68,12 +71,14 @@ export {
   evaluateCapitalMetricMapping,
   getCapitalMetricCatalogEntry,
   listCapitalMetricCatalog,
+  listCapitalDataRecordsAt,
   mapCapitalMetricObservationToRecord,
   listCapitalSourceBaseline,
   PublicationDateCapability,
   CapitalRevisionCapability,
   selectCapitalRecordsAt,
   SourceReadiness,
+  syncAshareCapitalEnvironmentRecords,
   validateCapitalMetricCatalogEntry,
   validateCapitalDataRecord,
 } from "./modules/capital-environment/index.js";
@@ -85,6 +90,9 @@ export type {
   CapitalMetricObservationInput,
   CapitalMetricRecordMetadata,
   CapitalMetricSourceFieldMapping,
+  CapitalRecordAppendOptions,
+  CapitalRecordAppendResult,
+  CapitalRecordListOptions,
   CapitalSourceBaseline,
   CapitalSourceReference,
   CapitalAvailability as CapitalAvailabilityType,
@@ -95,6 +103,8 @@ export type {
   PublicationDateCapability as PublicationDateCapabilityType,
   CapitalRevisionCapability as CapitalRevisionCapabilityType,
   SourceReadiness as SourceReadinessType,
+  SyncAshareCapitalEnvironmentRecordsOptions,
+  SyncAshareCapitalEnvironmentRecordsResult,
 } from "./modules/capital-environment/index.js";
 
 // event-assembly module.

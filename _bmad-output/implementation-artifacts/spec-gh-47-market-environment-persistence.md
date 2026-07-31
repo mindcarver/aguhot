@@ -17,7 +17,7 @@ context:
 
 **Problem:** #41/#43 已定义点时数据契约和指标目录，但资本环境没有 append-only 存储，回放没有稳定、可审计的输入。
 
-**Approach:** 在 Prisma/PostgreSQL 持久化 `CapitalDataRecord`，提供纯 core adapter 将规范化 A 股 sidecar 行映射为目录允许的 canonical/degraded 记录。worker 生产编排延后。
+**Approach:** 在 Prisma/PostgreSQL 持久化 `CapitalDataRecord`，提供 core service 将规范化 A 股 sidecar 行映射为目录允许的 canonical/degraded 记录，并复用既有 worker 市场刷新路径同步这些记录。
 
 ## Boundaries & Constraints
 
@@ -25,7 +25,7 @@ context:
 
 **Ask First:** 修改 #41/#43 字段语义、增加 metricKey、把 observation-only/复合字段提升为数值或接入新 provider时暂停确认。
 
-**Never:** 不实现 worker 刷新编排/调度、外部 provider 网络适配、基金集中度、回放/比较、UI、部署、历史修订回填或既有记录覆盖。
+**Never:** 不新增 worker 调度、外部 provider 网络适配、基金集中度、回放/比较、UI、部署、历史修订回填或既有记录覆盖。
 
 ## I/O & Edge-Case Matrix
 
@@ -43,9 +43,9 @@ context:
 - `packages/core/prisma/schema.prisma` -- 资本记录表、唯一键、查询索引。
 - `packages/core/prisma/migrations/20260731000000_add_capital_environment_records/migration.sql` -- 迁移。
 - `packages/core/src/modules/capital-environment/record-repository.ts` -- 校验、幂等追加、冲突检测、点时读取。
-- `packages/core/src/modules/capital-environment/ashare-observation-adapter.ts` -- sidecar 行到 canonical/degraded 记录的映射。
+- `packages/core/src/modules/capital-environment/ashare-observation-adapter.ts`、`ashare-observation-service.ts` -- sidecar 行到 canonical/degraded 记录的映射，以及三张原始表的读取、隔离与同步。
 - `packages/core/src/modules/capital-environment/capital-environment-record.selfcheck.ts` -- 隔离 fixture 自检。
-- `packages/core/src/modules/capital-environment/index.ts`、`packages/core/package.json` -- 导出入口和自检命令。
+- `packages/core/src/modules/capital-environment/index.ts`、`packages/core/package.json`、`apps/worker/src/market-data-refresh.ts` -- 导出入口、自检命令和既有刷新链路集成。
 
 ## Tasks & Acceptance
 
@@ -53,7 +53,8 @@ context:
 - [x] `packages/core/prisma/schema.prisma`、`packages/core/prisma/migrations/20260731000000_add_capital_environment_records/migration.sql` -- 增加 append-only 模型、来源元数据、状态、revision、trace、`recordKey`、唯一键和查询索引。
 - [x] `packages/core/src/modules/capital-environment/record-repository.ts` -- 复用 `validateCapitalDataRecord`、`capitalRecordKey`、`selectCapitalRecordsAt`，实现 append/listAt 和冲突检测。
 - [x] `packages/core/src/modules/capital-environment/ashare-observation-adapter.ts` -- 映射三类规范化 sidecar 行；无发布日期、复合字段和 related mapping 保持降级。
-- [x] `packages/core/src/modules/capital-environment/capital-environment-record.selfcheck.ts`、`index.ts`、`package.json` -- 覆盖契约、幂等、revision、cutoff、映射并注册命令。
+- [x] `packages/core/src/modules/capital-environment/ashare-observation-service.ts`、`apps/worker/src/market-data-refresh.ts` -- 读取三张 sidecar 表、隔离单表失败并同步可持久化的 canonical/degraded 记录。
+- [x] `packages/core/src/modules/capital-environment/capital-environment-record.selfcheck.ts`、`index.ts`、`package.json` -- 覆盖契约、幂等、revision、cutoff、映射、单表失败隔离并注册命令。
 
 **Acceptance Criteria:**
 - Given 合法记录，when append 后按 `as_of` 查询，then 只返回满足发布日期截止的记录并保留来源、版本、状态。
@@ -64,7 +65,7 @@ context:
 
 ## Design Notes
 
-`cn-market-breadth` 的 independent scalar fields 与 `cn-akshare-index-sector` related mapping 不扩展为新指标；worker 读取原表并写入资本记录的生产路径已登记为延后交付。
+`cn-market-breadth` 的 independent scalar fields 与 `cn-akshare-index-sector` related mapping 不扩展为新指标；既有 worker 市场刷新会读取原表并同步记录，仍不新增调度或外部 provider 适配。
 
 ## Verification
 
@@ -108,8 +109,5 @@ context:
 - 运行并阅读 repository、并发冲突、cutoff、revision、round-trip 和映射自检。
   [`capital-environment-record.selfcheck.ts:1`](../../packages/core/src/modules/capital-environment/capital-environment-record.selfcheck.ts#L1)
 
-- 检查命令入口，以及 worker 生产编排明确留在 deferred work。
-  [`package.json:10`](../../packages/core/package.json#L10)
-
-- 检查真实 PostgreSQL round-trip 验证为何需要后续隔离环境补跑。
-  [`deferred-work.md:1`](./deferred-work.md#L1)
+- 检查 worker 刷新在原始 sidecar 入库后调用资本环境同步：单表失败写入 failed 状态并继续，未预期的同步失败抛给队列重试。
+  [`market-data-refresh.ts:1`](../../apps/worker/src/market-data-refresh.ts#L1)

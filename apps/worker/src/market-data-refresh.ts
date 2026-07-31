@@ -13,6 +13,11 @@ export interface MarketDataRefreshDependencies {
   ingestIndices: () => void | Promise<void>;
   ingestSectors: () => void | Promise<void>;
   ingestBreadth: () => void | Promise<void>;
+  syncCapitalEnvironmentRecords: () => Promise<{
+    inserted: number;
+    unchanged: number;
+    failed: number;
+  }>;
   detectCrashDays: () => Promise<{ upserted: number; crashDays: readonly unknown[] }>;
   publishCrashDays: () => Promise<{ projected: number; pruned: number }>;
   detectSurgeDays: () => Promise<{ upserted: number; surgeDays: readonly unknown[] }>;
@@ -31,6 +36,9 @@ export interface MarketDataRefreshResult {
   surgePruned: number;
   breadthProjected: number;
   breadthPruned: number;
+  capitalRecordsInserted: number;
+  capitalRecordsUnchanged: number;
+  capitalRecordsFailed: number;
 }
 
 /** Execute the refresh stages in strict order. A failed stage stops later writes. */
@@ -55,6 +63,9 @@ export async function runMarketDataRefresh(
     console.error(`[market-data-refresh] surge refresh failed: ${(error as Error).message}`);
   }
   await dependencies.ingestBreadth();
+  // Per-source sidecar failures are captured as durable failed records by the
+  // core service. An unexpected sync failure remains loud so BullMQ retries it.
+  const capitalRecordSync = await dependencies.syncCapitalEnvironmentRecords();
   let breadthProjection = { projected: 0, pruned: 0 };
   try {
     breadthProjection = await dependencies.publishMarketBreadthHistory();
@@ -81,6 +92,9 @@ export async function runMarketDataRefresh(
     surgePruned: surgeProjection.pruned,
     breadthProjected: breadthProjection.projected,
     breadthPruned: breadthProjection.pruned,
+    capitalRecordsInserted: capitalRecordSync.inserted,
+    capitalRecordsUnchanged: capitalRecordSync.unchanged,
+    capitalRecordsFailed: capitalRecordSync.failed,
   };
 }
 
@@ -91,6 +105,7 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     refreshPublishedCrashDays,
     refreshPublishedSurgeDays,
     refreshPublishedMarketBreadthHistory,
+    syncAshareCapitalEnvironmentRecords,
     upsertCrashDays,
     upsertSurgeDays,
   } = await import("@aguhot/core");
@@ -100,6 +115,7 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     ingestIndices: () => runIncrementalSidecar("index", 10 * 60 * 1000),
     ingestSectors: () => runIncrementalSidecar("sector", 30 * 60 * 1000),
     ingestBreadth: () => runIncrementalSidecar("breadth", 30 * 60 * 1000),
+    syncCapitalEnvironmentRecords: () => syncAshareCapitalEnvironmentRecords(prisma, { traceId }),
     detectCrashDays: () => upsertCrashDays({ prisma, traceId }),
     publishCrashDays: () => refreshPublishedCrashDays({ prisma, traceId }),
     detectSurgeDays: () => upsertSurgeDays({ prisma, traceId }),

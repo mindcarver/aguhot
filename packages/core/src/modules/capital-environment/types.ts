@@ -261,6 +261,14 @@ export function validateCapitalDataRecord(
     errors.push("value must be finite or null");
   }
   if (
+    record.value !== null &&
+    Number.isFinite(record.value) &&
+    Math.abs(record.value - Number(record.value.toFixed(8))) >
+      Number.EPSILON * Math.max(1, Math.abs(record.value)) * 2
+  ) {
+    errors.push("value supports at most 8 decimal places");
+  }
+  if (
     record.availability === CapitalAvailability.Available ||
     record.availability === CapitalAvailability.Partial
   ) {

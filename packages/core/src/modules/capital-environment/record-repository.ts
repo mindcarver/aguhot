@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "../../../generated/client.js";
-import { assertCapitalDataRecord } from "./types.js";
+import { assertCapitalDataRecord, CapitalAvailability } from "./types.js";
 import { capitalRecordKey, selectCapitalRecordsAt } from "./point-in-time.js";
 import type { CapitalDataRecord } from "./types.js";
 
@@ -71,7 +71,9 @@ function sameRecord(
     row.unit === record.unit &&
     iso(row.observedAt) === date(record.observedAt).toISOString() &&
     iso(row.publishedAt) === iso(optionalDate(record.publishedAt)) &&
-    iso(row.asOf) === date(record.asOf).toISOString() &&
+    (row.availability === CapitalAvailability.Unknown || row.availability === CapitalAvailability.Failed
+      ? true
+      : iso(row.asOf) === date(record.asOf).toISOString()) &&
     row.sourceId === record.source.id &&
     row.sourceName === record.source.name &&
     row.sourceDataset === record.source.dataset &&

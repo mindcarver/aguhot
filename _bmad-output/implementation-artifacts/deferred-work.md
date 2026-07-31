@@ -1110,9 +1110,3 @@ Findings surfaced by review but belonging to future stories (out of Story 1-1's 
 - source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-breadth-fetch-throttle-rate-limit.md`
   summary: breadth runner 对非交易日（周末/节假日）仍发起全部 6 个源请求——靠空池判定非交易日，无 A 股交易日历来 skip
   evidence: spec throttle step-04 review #14：`ingest_breadth` 的 `_iter_dates` 逐**自然日**遍历窗口（8.6 既有设计，注释明示「we don't have an A-share calendar here, so we walk calendar days and let the pool fetches naturally return empty frames on non-trading days」）。每个非交易日仍调涨停/跌停/炸板/龙虎榜/融资融券×2 = 6 次（throttle 后 ~3s/非交易日的纯睡），既浪费又计入请求量（不利防封禁）。引入 A 股交易日历（或 cache 首个有效交易日推导）让 `_iter_dates` 只枚举交易日，可同时降请求量（额外防 eastmoney 封禁）+ 提速。与 throttle（限速）互补，但属独立的 calendar 关注点。
-- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-gh-47-market-environment-persistence.md`
-  summary: 延后 worker 生产刷新编排与调用路径，当前只实现资本环境记录持久化和契约化 A 股映射
-  evidence: 为保持 #47 单一核心交付并降低 Quick Dev 上下文风险，先完成 Prisma append-only 记录、幂等/revision/cutoff 和 adapter 语义；`apps/worker` 读取 sidecar 表并写入资本记录的生产编排另行交付。
-- source_spec: `{project-root}/_bmad-output/implementation-artifacts/spec-gh-47-market-environment-persistence.md`
-  summary: 延后隔离 PostgreSQL 迁移与真实 Prisma round-trip 验证
-  evidence: 本次 self-check 覆盖 repository 过滤、Decimal/Date 投影、唯一键冲突和并发恢复，但当前环境没有 DATABASE_URL 或隔离 PostgreSQL；`prisma generate`、typecheck、build 无法证明迁移 SQL 已在真实数据库应用成功，需在 CI/service-container 或专用本地数据库中补跑。
