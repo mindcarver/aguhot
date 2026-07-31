@@ -63,6 +63,34 @@ export const SourceReadiness = {
 export type SourceReadiness =
   (typeof SourceReadiness)[keyof typeof SourceReadiness];
 
+/**
+ * Readiness of one market/dimension metric in the source-field catalog.
+ *
+ * This is intentionally separate from `CapitalAvailability`: a catalog entry
+ * can be planned before any observation exists, while a data record uses
+ * unknown/failed/pending_review to describe a concrete collection attempt.
+ */
+export const CapitalCatalogStatus = {
+  Confirmed: "confirmed",
+  Partial: "partial",
+  Planned: "planned",
+  Unavailable: "unavailable",
+} as const;
+
+export type CapitalCatalogStatus =
+  (typeof CapitalCatalogStatus)[keyof typeof CapitalCatalogStatus];
+
+export const CapitalRevisionCapability = {
+  AppendOnly: "append_only",
+  ProviderVintage: "provider_vintage",
+  ObservationOnly: "observation_only",
+  Unknown: "unknown",
+  None: "none",
+} as const;
+
+export type CapitalRevisionCapability =
+  (typeof CapitalRevisionCapability)[keyof typeof CapitalRevisionCapability];
+
 export const PublicationDateCapability = {
   Explicit: "explicit",
   RealtimeVintage: "realtime_vintage",
@@ -120,6 +148,59 @@ export interface CapitalSourceBaseline {
   readiness: SourceReadiness;
   documentationUrl: string | null;
   notes: string;
+}
+
+/**
+ * The field-level source contract for a catalog metric. Null fields are
+ * deliberate: an observation-only source cannot satisfy a publication-date
+ * rule, and an unavailable metric has no verified provider field to claim.
+ */
+export interface CapitalMetricSourceFieldMapping {
+  sourceId: string;
+  provider: string;
+  dataset: string;
+  valueField: string | null;
+  valueFields: readonly string[];
+  valueTransform: string;
+  rawUnit: string | null;
+  observedAtField: string | null;
+  publishedAtField: string | null;
+  unitField: string | null;
+  publicationDateCapability: PublicationDateCapability;
+  evidenceUrl: string | null;
+  notes: string;
+}
+
+export interface CapitalMetricHistoricalCoverage {
+  start: string | null;
+  end: string | null;
+  note: string;
+}
+
+/**
+ * Stable, source-aware metadata for one metric used by the capital dashboard.
+ * The `metricKey`, market and dimension are also the corresponding fields on
+ * `CapitalDataRecord`, so adapters can map observations without inventing a
+ * second identity or silently changing source semantics.
+ */
+export interface CapitalMetricCatalogEntry {
+  metricKey: string;
+  market: CapitalMarket;
+  dimension: CapitalDimension;
+  label: string;
+  status: CapitalCatalogStatus;
+  sourceFieldMapping: CapitalMetricSourceFieldMapping | null;
+  relatedSourceFieldMappings: readonly CapitalMetricSourceFieldMapping[];
+  unit: string | null;
+  frequency: CapitalFrequency;
+  timezone: string;
+  observedAtRule: string;
+  publishedAtRule: string;
+  historicalCoverage: CapitalMetricHistoricalCoverage;
+  revisionCapability: CapitalRevisionCapability;
+  snapshotCapability: boolean;
+  evidenceUrl: string | null;
+  degradationReason: string | null;
 }
 
 const NON_VALUE_AVAILABILITIES = new Set<CapitalAvailability>([
