@@ -16,6 +16,7 @@
     "verify:surge-logic": "tsx src/modules/surge-review/surge-logic.selfcheck.ts",
     "verify:capital-data-contract": "tsx src/modules/capital-environment/capital-data-contract.selfcheck.ts",
     "verify:capital-source-field-catalog": "tsx src/modules/capital-environment/source-field-catalog.selfcheck.ts",
+    "verify:capital-environment-record": "tsx src/modules/capital-environment/capital-environment-record.selfcheck.ts",
     "verify:breadth-projection": "tsx src/modules/publish-orchestrator/breadth-projection.selfcheck.ts",
     "verify:market-breadth-history": "tsx src/modules/publish-orchestrator/market-breadth-history.selfcheck.ts",
     "typecheck": "prisma generate && tsc --noEmit",

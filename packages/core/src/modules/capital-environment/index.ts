@@ -51,3 +51,19 @@ export type {
   CapitalMetricRecordMetadata,
   CapitalMetricMappingObservation,
 } from "./metric-catalog.js";
+export {
+  CapitalRecordConflictError,
+  appendCapitalDataRecord,
+  listCapitalDataRecordsAt,
+} from "./record-repository.js";
+export type {
+  CapitalRecordAppendOptions,
+  CapitalRecordAppendResult,
+  CapitalRecordListOptions,
+} from "./record-repository.js";
+export { mapAshareObservation } from "./ashare-observation-adapter.js";
+export type {
+  AshareObservationInput,
+  AshareObservationKind,
+  AshareObservationMappingResult,
+} from "./ashare-observation-adapter.js";

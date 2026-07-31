@@ -214,6 +214,18 @@ function isIsoTimestamp(value: string): boolean {
   return Number.isFinite(Date.parse(value)) && value.includes("T");
 }
 
+function isCapitalMarket(value: string): value is CapitalMarket {
+  return (Object.values(CapitalMarket) as readonly string[]).includes(value);
+}
+
+function isCapitalDimension(value: string): value is CapitalDimension {
+  return (Object.values(CapitalDimension) as readonly string[]).includes(value);
+}
+
+function isCapitalAvailability(value: string): value is CapitalAvailability {
+  return (Object.values(CapitalAvailability) as readonly string[]).includes(value);
+}
+
 /**
  * Return all contract violations without mutating or normalizing the record.
  * Callers can use this before persistence to reject malformed source output.
@@ -224,10 +236,23 @@ export function validateCapitalDataRecord(
   const errors: string[] = [];
   if (!record.id.trim()) errors.push("id is required");
   if (!record.metricKey.trim()) errors.push("metricKey is required");
+  if (!isCapitalMarket(record.market)) errors.push("market is not a supported capital market");
+  if (!isCapitalDimension(record.dimension)) errors.push("dimension is not a supported capital dimension");
+  if (!isCapitalAvailability(record.availability)) {
+    errors.push("availability is not a supported capital availability");
+  }
   if (!isIsoTimestamp(record.observedAt)) errors.push("observedAt must be an ISO timestamp");
   if (!isIsoTimestamp(record.asOf)) errors.push("asOf must be an ISO timestamp");
   if (record.publishedAt !== null && !isIsoTimestamp(record.publishedAt)) {
     errors.push("publishedAt must be an ISO timestamp or null");
+  }
+  if (
+    record.publishedAt !== null &&
+    isIsoTimestamp(record.publishedAt) &&
+    isIsoTimestamp(record.asOf) &&
+    Date.parse(record.publishedAt) > Date.parse(record.asOf)
+  ) {
+    errors.push("publishedAt must not be later than asOf");
   }
   if (!Number.isInteger(record.revision) || record.revision < 1) {
     errors.push("revision must be a positive integer");

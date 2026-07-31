@@ -1218,6 +1218,44 @@ model MarketBreadthDaily {
   @@map("market_breadth_daily")
 }
 
+// Issue #47 — canonical capital-environment records. This is append-only: the
+// record key includes the source identity, processing version, revision and
+// availability so a later source revision never overwrites an earlier row.
+// The worker-side refresh path reads the Python sidecar-owned market tables;
+// this table is owned by Node/Prisma and stores only the shared #41 contract.
+model CapitalEnvironmentRecord {
+  id                     String    @id
+  recordKey              String    @unique @map("record_key")
+  metricKey              String    @map("metric_key")
+  market                 String
+  dimension              String
+  value                  Decimal?  @db.Decimal(24, 8)
+  unit                   String?
+  observedAt             DateTime  @map("observed_at")
+  publishedAt            DateTime? @map("published_at")
+  asOf                   DateTime  @map("as_of")
+  sourceId               String    @map("source_id")
+  sourceName             String    @map("source_name")
+  sourceDataset          String    @map("source_dataset")
+  sourceDocumentationUrl String?   @map("source_documentation_url")
+  processingVersion      String    @map("processing_version")
+  availability            String
+  statusReason            String?   @map("status_reason")
+  revision                Int
+  traceId                 String?   @map("trace_id")
+  ingestedAt              DateTime  @default(now()) @map("ingested_at")
+
+  @@index([metricKey, observedAt])
+  @@index([metricKey, publishedAt])
+  @@index([metricKey, asOf])
+  @@index([market, dimension, observedAt])
+  @@index([market, publishedAt])
+  @@index([market, asOf])
+  @@index([asOf])
+  @@index([publishedAt])
+  @@map("capital_environment_records")
+}
+
 // Issue #33 — public, display-only history of the two daily limit-pool counts.
 //
 // `market_breadth_daily` remains the Python sidecar-owned source of truth. This table is a

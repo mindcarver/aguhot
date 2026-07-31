@@ -17,6 +17,7 @@ function timestamp(value: string): number {
 export function capitalRecordIdentity(record: CapitalDataRecord): string {
   return [
     record.source.id,
+    record.source.dataset,
     record.market,
     record.dimension,
     record.metricKey,
