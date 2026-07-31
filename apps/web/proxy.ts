@@ -54,11 +54,12 @@ export function proxy(request: NextRequest): NextResponse {
 
 export const config = {
   // `/console/:path*` covers `/console/anything/...`; the bare `/console` entry
-  // is matched by the literal. Together they cover the whole console surface
-  // without touching `(public)` or API routes.
-  matcher: ["/console", "/console/:path*"],
-  // No `runtime` key: Proxy defaults to the nodejs runtime in Next 16+, which
-  // is required here so `process.env.SESSION_SECRET` / `process.env.NODE_ENV`
-  // read the RUNTIME value (edge would only see build-time inlined env → gate
+  // is matched by the literal. `/capital-environment/:path*` covers the
+  // internal capital dashboard (Issue #58) — PRD scopes it as internal-only
+  // ("数据和分析结果不对外公开"), so it shares the same operator auth gate.
+  matcher: ["/console", "/console/:path*", "/capital-environment", "/capital-environment/:path*"],
+  // No `runtime` key: Proxy defaults to the nodejs runtime in Next 16+, which is
+  // required here so `process.env.SESSION_SECRET` / `process.env.NODE_ENV` read
+  // the RUNTIME value (edge would only see build-time inlined env → gate
   // stuck). The `runtime` option is no longer permitted in proxy files.
 };
