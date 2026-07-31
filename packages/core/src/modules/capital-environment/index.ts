@@ -88,3 +88,10 @@ export type {
   SyncAshareCapitalEnvironmentRecordsOptions,
   SyncAshareCapitalEnvironmentRecordsResult,
 } from "./ashare-observation-service.js";
+export { replayCapitalEnvironmentAt } from "./replay-service.js";
+export type {
+  CapitalReplayDimension,
+  CapitalReplayMarket,
+  CapitalReplayResult,
+  ReplayCapitalEnvironmentOptions,
+} from "./replay-service.js";
