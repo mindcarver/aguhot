@@ -49,6 +49,34 @@ export type {
   SourceKind as SourceKindType,
 } from "./modules/source-ingest/types.js";
 
+// Capital-environment point-in-time data contract (Issue #41).
+export {
+  assertCapitalDataRecord,
+  CAPITAL_SOURCE_BASELINE,
+  CapitalAvailability,
+  CapitalDimension,
+  CapitalFrequency,
+  CapitalMarket,
+  capitalRecordIdentity,
+  capitalRecordKey,
+  listCapitalSourceBaseline,
+  PublicationDateCapability,
+  selectCapitalRecordsAt,
+  SourceReadiness,
+  validateCapitalDataRecord,
+} from "./modules/capital-environment/index.js";
+export type {
+  CapitalDataRecord,
+  CapitalSourceBaseline,
+  CapitalSourceReference,
+  CapitalAvailability as CapitalAvailabilityType,
+  CapitalDimension as CapitalDimensionType,
+  CapitalFrequency as CapitalFrequencyType,
+  CapitalMarket as CapitalMarketType,
+  PublicationDateCapability as PublicationDateCapabilityType,
+  SourceReadiness as SourceReadinessType,
+} from "./modules/capital-environment/index.js";
+
 // event-assembly module.
 export { clusterEvents } from "./modules/event-assembly/cluster-events.js";
 export type {
