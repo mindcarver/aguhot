@@ -1,0 +1,185 @@
+/**
+ * Shared contract for capital-environment observations.
+ *
+ * This module is deliberately persistence-agnostic. Ingestion adapters can
+ * save these records in their own store, while replay code can apply the same
+ * point-in-time rules to every market and frequency.
+ */
+
+export const CapitalMarket = {
+  Global: "global",
+  UnitedStates: "us",
+  China: "cn",
+  Korea: "kr",
+} as const;
+
+export type CapitalMarket = (typeof CapitalMarket)[keyof typeof CapitalMarket];
+
+export const CapitalDimension = {
+  Growth: "growth",
+  Inflation: "inflation",
+  Liquidity: "liquidity",
+  FundingPrice: "funding_price",
+  RiskCredit: "risk_credit",
+  MarketBreadth: "market_breadth",
+  InstitutionalPositioning: "institutional_positioning",
+} as const;
+
+export type CapitalDimension =
+  (typeof CapitalDimension)[keyof typeof CapitalDimension];
+
+/**
+ * A record with one of these statuses is never rendered as a confirmed value.
+ * In particular, `unknown` and `failed` are not zero-valued observations.
+ */
+export const CapitalAvailability = {
+  Available: "available",
+  Partial: "partial",
+  Unknown: "unknown",
+  Failed: "failed",
+  PendingReview: "pending_review",
+  IncompleteReconstruction: "incomplete_reconstruction",
+} as const;
+
+export type CapitalAvailability =
+  (typeof CapitalAvailability)[keyof typeof CapitalAvailability];
+
+export const CapitalFrequency = {
+  Daily: "daily",
+  ReleaseDefined: "release_defined",
+  Quarterly: "quarterly",
+  Unknown: "unknown",
+} as const;
+
+export type CapitalFrequency =
+  (typeof CapitalFrequency)[keyof typeof CapitalFrequency];
+
+export const SourceReadiness = {
+  Available: "available",
+  Partial: "partial",
+  Planned: "planned",
+} as const;
+
+export type SourceReadiness =
+  (typeof SourceReadiness)[keyof typeof SourceReadiness];
+
+export const PublicationDateCapability = {
+  Explicit: "explicit",
+  RealtimeVintage: "realtime_vintage",
+  ObservationOnly: "observation_only",
+  Unknown: "unknown",
+} as const;
+
+export type PublicationDateCapability =
+  (typeof PublicationDateCapability)[keyof typeof PublicationDateCapability];
+
+export interface CapitalSourceReference {
+  id: string;
+  name: string;
+  dataset: string;
+  documentationUrl: string | null;
+}
+/**
+ * One append-only observation or honest non-value status.
+ *
+ * `asOf` is the source snapshot's effective timestamp. For a failed or
+ * unknown record, it is the time at which that absence was observed and is
+ * used as the visibility fallback when `publishedAt` is unavailable. For a
+ * numeric record, historical visibility is governed by `publishedAt`.
+ */
+export interface CapitalDataRecord {
+  id: string;
+  metricKey: string;
+  market: CapitalMarket;
+  dimension: CapitalDimension;
+  value: number | null;
+  unit: string | null;
+  observedAt: string;
+  publishedAt: string | null;
+  asOf: string;
+  source: CapitalSourceReference;
+  processingVersion: string;
+  availability: CapitalAvailability;
+  statusReason: string | null;
+  revision: number;
+}
+
+export interface CapitalSourceBaseline {
+  id: string;
+  market: CapitalMarket;
+  provider: string;
+  dataset: string;
+  frequency: CapitalFrequency;
+  historicalCoverage: {
+    start: string | null;
+    end: string | null;
+    note: string;
+  };
+  publicationDateCapability: PublicationDateCapability;
+  snapshotCapability: boolean;
+  readiness: SourceReadiness;
+  documentationUrl: string | null;
+  notes: string;
+}
+
+const NON_VALUE_AVAILABILITIES = new Set<CapitalAvailability>([
+  CapitalAvailability.Unknown,
+  CapitalAvailability.Failed,
+  CapitalAvailability.PendingReview,
+  CapitalAvailability.IncompleteReconstruction,
+]);
+
+function isIsoTimestamp(value: string): boolean {
+  return Number.isFinite(Date.parse(value)) && value.includes("T");
+}
+
+/**
+ * Return all contract violations without mutating or normalizing the record.
+ * Callers can use this before persistence to reject malformed source output.
+ */
+export function validateCapitalDataRecord(
+  record: CapitalDataRecord,
+): string[] {
+  const errors: string[] = [];
+  if (!record.id.trim()) errors.push("id is required");
+  if (!record.metricKey.trim()) errors.push("metricKey is required");
+  if (!isIsoTimestamp(record.observedAt)) errors.push("observedAt must be an ISO timestamp");
+  if (!isIsoTimestamp(record.asOf)) errors.push("asOf must be an ISO timestamp");
+  if (record.publishedAt !== null && !isIsoTimestamp(record.publishedAt)) {
+    errors.push("publishedAt must be an ISO timestamp or null");
+  }
+  if (!Number.isInteger(record.revision) || record.revision < 1) {
+    errors.push("revision must be a positive integer");
+  }
+  if (record.value !== null && !Number.isFinite(record.value)) {
+    errors.push("value must be finite or null");
+  }
+  if (
+    record.availability === CapitalAvailability.Available ||
+    record.availability === CapitalAvailability.Partial
+  ) {
+    if (record.value === null) errors.push("available records require a value");
+    if (!record.unit?.trim()) errors.push("available records require a unit");
+    if (record.publishedAt === null) {
+      errors.push("available records require publishedAt");
+    }
+  }
+  if (NON_VALUE_AVAILABILITIES.has(record.availability)) {
+    if (record.value !== null) errors.push("non-value statuses must not carry a value");
+    if (!record.statusReason?.trim()) {
+      errors.push("non-value statuses require statusReason");
+    }
+  }
+  if (!record.source.id.trim()) errors.push("source.id is required");
+  if (!record.source.name.trim()) errors.push("source.name is required");
+  if (!record.source.dataset.trim()) errors.push("source.dataset is required");
+  if (!record.processingVersion.trim()) errors.push("processingVersion is required");
+  return errors;
+}
+
+export function assertCapitalDataRecord(record: CapitalDataRecord): void {
+  const errors = validateCapitalDataRecord(record);
+  if (errors.length > 0) {
+    throw new Error(`Invalid capital data record ${record.id}: ${errors.join("; ")}`);
+  }
+}
