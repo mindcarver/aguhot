@@ -1256,6 +1256,55 @@ model CapitalEnvironmentRecord {
   @@map("capital_environment_records")
 }
 
+// Issue #48 — canonical, append-only concentration snapshots for the A-share
+// active-equity fund sample. Mirrors CapitalEnvironmentRecord's append-only
+// discipline: the snapshot key includes the processing version, calculation
+// version, revision and availability so a later recompute never overwrites an
+// earlier row. The fund-concentration module (Node/Prisma) owns this table;
+// it consumes the standardized FundQuarterlyReport contract from Issue #44 and
+// writes the auditable concentration read model. The worker is the sole writer;
+// the replay/comparison engine (planned) and dashboard (planned) will read it.
+//
+// One row = the concentration metrics computed over ALL point-in-time-visible
+// sample reports at one `as_of` cutoff, for one processing/calculation vintage.
+// It is the sample-level aggregate (aggregated holdings across funds), NOT a
+// per-fund row. `selected_reports` carries the per-report provenance metadata
+// (id, fundKey, observedAt, publishedAt, revision, status, source, snapshot
+// evidence) so A1 traceability holds without a second query. `metrics` is the
+// serialized ConcentrationMetrics (CR5/10/20, industryHhi, effectiveIndustryCount,
+// classified/unclassified weight, classification status/version). `price_quantity`
+// is the PriceQuantityDecompositionAssessment ({status, reason}); it never
+// fabricates a decomposition — see Issue #48 A4.
+//
+// `availability` reuses the FundDisclosureStatus value set with sample-level
+// semantics: available (full sample computed), partial (mixed availability or
+// partial classification), unavailable (no report carried usable holdings),
+// incomplete_reconstruction (a visible report had a retained revision gap).
+model FundConcentrationSnapshot {
+  id                  String   @id
+  snapshotKey         String   @unique @map("snapshot_key")
+  asOf                DateTime @map("as_of")
+  observedAt          DateTime @map("observed_at")
+  samplePolicyVersion String   @map("sample_policy_version")
+  processingVersion   String   @map("processing_version")
+  calculationVersion  String   @map("calculation_version")
+  revision            Int
+  fundCount           Int      @map("fund_count")
+  selectedReports     Json     @map("selected_reports")
+  metrics             Json
+  priceQuantity       Json     @map("price_quantity")
+  availability        String
+  statusReason        String?  @map("status_reason")
+  traceId             String?  @map("trace_id")
+  ingestedAt          DateTime @default(now()) @map("ingested_at")
+
+  @@index([asOf])
+  @@index([observedAt])
+  @@index([processingVersion, asOf])
+  @@index([availability, asOf])
+  @@map("fund_concentration_snapshots")
+}
+
 // Issue #33 — public, display-only history of the two daily limit-pool counts.
 //
 // `market_breadth_daily` remains the Python sidecar-owned source of truth. This table is a

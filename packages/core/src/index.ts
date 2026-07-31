@@ -107,6 +107,75 @@ export type {
   SyncAshareCapitalEnvironmentRecordsResult,
 } from "./modules/capital-environment/index.js";
 
+// fund-concentration module (Issue #44 — auditable baseline for A-share
+// active-equity fund sample + disclosure fields; Issue #48 — append-only
+// concentration snapshot read model: buildFundConcentrationSnapshotAt is the
+// pure, deterministic point-in-time concentration computation over the
+// standardized FundQuarterlyReport; appendFundConcentrationSnapshot /
+// listFundConcentrationSnapshotsAt persist and read the auditable snapshot with
+// idempotent append, revision-gap degradation and no zero-fill).
+export {
+  assertFundConcentrationSnapshot,
+  assertFundQuarterlyReport,
+  FundDisclosureStatus,
+  FundSourceTier,
+  FundType,
+  FundSampleExclusionReason,
+  FUND_CALCULATION_VERSION,
+  IndustryClassificationStatus,
+  PriceQuantityDecompositionStatus,
+  RevisionSelectionStatus,
+  validateFundConcentrationSnapshot,
+  validateFundQuarterlyReport,
+  FUND_SAMPLE_POLICY_VERSION,
+  INCLUDED_FUND_TYPES,
+  buildFundSample,
+  evaluateFundCandidate,
+  fundReportIdentity,
+  fundReportKey,
+  selectFundReportsAt,
+  compareReportClassificationVersions,
+  aggregateReportHoldings,
+  calculateConcentrationMetrics,
+  dedupeFundHoldings,
+  normalizeFundHoldings,
+  assessPriceQuantityDecomposition,
+  FUND_SOURCE_BASELINE,
+  fundSourcePriority,
+  listFundSourceBaseline,
+  sortFundSources,
+  appendFundConcentrationSnapshot,
+  buildFundConcentrationSnapshotAt,
+  fundConcentrationSnapshotKey,
+  FundSnapshotConflictError,
+  listFundConcentrationSnapshotsAt,
+  selectFundSnapshotsAt,
+} from "./modules/fund-concentration/index.js";
+export type {
+  ConcentrationMetrics,
+  FundConcentrationSnapshot,
+  FundDisclosureStatus as FundDisclosureStatusType,
+  FundHolding,
+  FundQuarterlyReport,
+  FundSample,
+  FundSampleCandidate,
+  FundSampleDecision,
+  FundSnapshotEvidence,
+  FundSourceBaseline,
+  FundSourceReference,
+  FundType as FundTypeType,
+  IndustryClassificationStatus as IndustryClassificationStatusType,
+  NormalizedFundHolding,
+  PriceQuantityDecompositionAssessment,
+  PriceQuantityDecompositionStatus as PriceQuantityDecompositionStatusType,
+  RevisionSelectionStatus as RevisionSelectionStatusType,
+  SelectedFundQuarterlyReport,
+  SnapshotProvenanceReport,
+  FundSnapshotAppendOptions,
+  FundSnapshotAppendResult,
+  FundSnapshotListOptions,
+} from "./modules/fund-concentration/index.js";
+
 // event-assembly module.
 export { clusterEvents } from "./modules/event-assembly/cluster-events.js";
 export type {

@@ -1,5 +1,6 @@
 export {
   assertFundQuarterlyReport,
+  assertFundConcentrationSnapshot,
   FundDisclosureStatus,
   FundSourceTier,
   FundType,
@@ -8,9 +9,11 @@ export {
   PriceQuantityDecompositionStatus,
   RevisionSelectionStatus,
   validateFundQuarterlyReport,
+  validateFundConcentrationSnapshot,
 } from "./types.js";
 export type {
   ConcentrationMetrics,
+  FundConcentrationSnapshot,
   FundDisclosureStatus as FundDisclosureStatusType,
   FundHolding,
   FundQuarterlyReport,
@@ -27,6 +30,7 @@ export type {
   PriceQuantityDecompositionStatus as PriceQuantityDecompositionStatusType,
   RevisionSelectionStatus as RevisionSelectionStatusType,
   SelectedFundQuarterlyReport,
+  SnapshotProvenanceReport,
 } from "./types.js";
 export {
   FUND_SAMPLE_POLICY_VERSION,
@@ -53,3 +57,17 @@ export {
   listFundSourceBaseline,
   sortFundSources,
 } from "./source-baseline.js";
+export {
+  FUND_CALCULATION_VERSION,
+  appendFundConcentrationSnapshot,
+  buildFundConcentrationSnapshotAt,
+  fundConcentrationSnapshotKey,
+  FundSnapshotConflictError,
+  listFundConcentrationSnapshotsAt,
+  selectFundSnapshotsAt,
+} from "./snapshot-repository.js";
+export type {
+  FundSnapshotAppendOptions,
+  FundSnapshotAppendResult,
+  FundSnapshotListOptions,
+} from "./snapshot-repository.js";
