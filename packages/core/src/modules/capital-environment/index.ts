@@ -95,3 +95,13 @@ export type {
   CapitalReplayResult,
   ReplayCapitalEnvironmentOptions,
 } from "./replay-service.js";
+export { compareCapitalEnvironment, TrendDirection } from "./comparison-service.js";
+export type {
+  CompareCapitalEnvironmentOptions,
+  TrendComparisonDimension,
+  TrendComparisonMarket,
+  TrendComparisonMetric,
+  TrendComparisonResult,
+  TrendComparisonSide,
+  TrendDirection as TrendDirectionType,
+} from "./comparison-service.js";
