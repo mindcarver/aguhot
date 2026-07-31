@@ -83,6 +83,8 @@ export {
   validateCapitalDataRecord,
   appendCapitalProviderObservations,
   replayCapitalEnvironmentAt,
+  compareCapitalEnvironment,
+  TrendDirection,
 } from "./modules/capital-environment/index.js";
 export type {
   CapitalDataRecord,
@@ -107,6 +109,13 @@ export type {
   CapitalReplayMarket,
   CapitalReplayResult,
   ReplayCapitalEnvironmentOptions,
+  CompareCapitalEnvironmentOptions,
+  TrendComparisonDimension,
+  TrendComparisonMarket,
+  TrendComparisonMetric,
+  TrendComparisonResult,
+  TrendComparisonSide,
+  TrendDirection as TrendDirectionType,
   CapitalAvailability as CapitalAvailabilityType,
   CapitalCatalogStatus as CapitalCatalogStatusType,
   CapitalDimension as CapitalDimensionType,
