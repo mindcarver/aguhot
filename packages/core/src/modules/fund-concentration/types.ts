@@ -311,3 +311,135 @@ export function assertFundQuarterlyReport(report: FundQuarterlyReport): void {
     throw new Error(`Invalid fund quarterly report ${report.id}: ${errors.join("; ")}`);
   }
 }
+
+/**
+ * Per-report provenance carried on a concentration snapshot (A1 traceability).
+ * It is the minimal, auditable metadata of one point-in-time-visible selected
+ * report, NOT a second source of the holdings. The full holdings live in the
+ * metrics aggregate; this record only lets a reader trace which reports fed it.
+ */
+export interface SnapshotProvenanceReport {
+  id: string;
+  fundKey: string;
+  observedAt: string;
+  publishedAt: string;
+  asOf: string;
+  revision: number;
+  revisionSelection: RevisionSelectionStatus;
+  status: FundDisclosureStatus;
+  statusReason: string | null;
+  source: FundSourceReference | null;
+  snapshot: FundSnapshotEvidence | null;
+  processingVersion: string;
+}
+
+/**
+ * The auditable concentration snapshot for the fund sample at one `as_of`.
+ * Append-only: a later processing or calculation vintage gets a new row; the
+ * earlier vintage is preserved. `availability` mirrors the sample-level state
+ * (available / partial / unavailable / incomplete_reconstruction).
+ */
+export interface FundConcentrationSnapshot {
+  id: string;
+  snapshotKey: string;
+  asOf: string;
+  observedAt: string;
+  samplePolicyVersion: string;
+  processingVersion: string;
+  calculationVersion: string;
+  revision: number;
+  fundCount: number;
+  selectedReports: readonly SnapshotProvenanceReport[];
+  metrics: ConcentrationMetrics;
+  priceQuantity: PriceQuantityDecompositionAssessment;
+  availability: FundDisclosureStatus;
+  statusReason: string | null;
+}
+
+function validateSnapshotProvenanceReport(
+  report: SnapshotProvenanceReport,
+  index: number,
+): string[] {
+  const errors: string[] = [];
+  if (!report.id.trim()) errors.push(`selectedReports[${index}].id is required`);
+  if (!report.fundKey.trim()) errors.push(`selectedReports[${index}].fundKey is required`);
+  if (!isIsoTimestamp(report.observedAt)) {
+    errors.push(`selectedReports[${index}].observedAt must be an ISO timestamp`);
+  }
+  if (!isIsoTimestamp(report.publishedAt)) {
+    errors.push(`selectedReports[${index}].publishedAt must be an ISO timestamp`);
+  }
+  if (!isIsoTimestamp(report.asOf)) {
+    errors.push(`selectedReports[${index}].asOf must be an ISO timestamp`);
+  }
+  if (Date.parse(report.asOf) < Date.parse(report.publishedAt)) {
+    errors.push(`selectedReports[${index}].asOf must not precede publishedAt`);
+  }
+  if (!Number.isInteger(report.revision) || report.revision < 1) {
+    errors.push(`selectedReports[${index}].revision must be a positive integer`);
+  }
+  if (!report.processingVersion.trim()) {
+    errors.push(`selectedReports[${index}].processingVersion is required`);
+  }
+  if (!Object.values(FundDisclosureStatus).includes(report.status)) {
+    errors.push(`selectedReports[${index}].status is not a recognized disclosure status`);
+  }
+  if (!Object.values(RevisionSelectionStatus).includes(report.revisionSelection)) {
+    errors.push(`selectedReports[${index}].revisionSelection is not recognized`);
+  }
+  return errors;
+}
+
+/** Return snapshot contract violations without mutating it. */
+export function validateFundConcentrationSnapshot(
+  snapshot: FundConcentrationSnapshot,
+): string[] {
+  const errors: string[] = [];
+  if (!snapshot.id.trim()) errors.push("id is required");
+  if (!snapshot.snapshotKey.trim()) errors.push("snapshotKey is required");
+  if (!isIsoTimestamp(snapshot.asOf)) errors.push("asOf must be an ISO timestamp");
+  if (!isIsoTimestamp(snapshot.observedAt)) {
+    errors.push("observedAt must be an ISO timestamp");
+  }
+  if (Date.parse(snapshot.observedAt) > Date.parse(snapshot.asOf)) {
+    errors.push("observedAt must not be later than asOf");
+  }
+  if (!snapshot.samplePolicyVersion.trim()) {
+    errors.push("samplePolicyVersion is required");
+  }
+  if (!snapshot.processingVersion.trim()) errors.push("processingVersion is required");
+  if (!snapshot.calculationVersion.trim()) errors.push("calculationVersion is required");
+  if (!Number.isInteger(snapshot.revision) || snapshot.revision < 1) {
+    errors.push("revision must be a positive integer");
+  }
+  if (
+    !Number.isInteger(snapshot.fundCount) ||
+    snapshot.fundCount < 0 ||
+    snapshot.fundCount !== snapshot.selectedReports.length
+  ) {
+    errors.push("fundCount must equal selectedReports.length and be non-negative");
+  }
+  for (const [index, report] of snapshot.selectedReports.entries()) {
+    errors.push(...validateSnapshotProvenanceReport(report, index));
+  }
+  if (!Object.values(FundDisclosureStatus).includes(snapshot.availability)) {
+    errors.push("availability is not a recognized disclosure status");
+  }
+  const NON_VALUE = new Set<FundDisclosureStatus>([
+    FundDisclosureStatus.Unavailable,
+    FundDisclosureStatus.Failed,
+    FundDisclosureStatus.PendingReview,
+    FundDisclosureStatus.IncompleteReconstruction,
+  ]);
+  if (NON_VALUE.has(snapshot.availability) && snapshot.statusReason === null) {
+    errors.push("non-value snapshot availability requires statusReason");
+  }
+  return errors;
+}
+
+export function assertFundConcentrationSnapshot(snapshot: FundConcentrationSnapshot): void {
+  const errors = validateFundConcentrationSnapshot(snapshot);
+  if (errors.length > 0) {
+    throw new Error(`Invalid fund concentration snapshot ${snapshot.id}: ${errors.join("; ")}`);
+  }
+}
