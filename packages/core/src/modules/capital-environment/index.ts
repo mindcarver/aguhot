@@ -61,6 +61,19 @@ export type {
   CapitalRecordAppendResult,
   CapitalRecordListOptions,
 } from "./record-repository.js";
+export type {
+  CapitalProviderPort,
+  CapitalProviderRequest,
+  ProviderObservation,
+  ProviderObservationBatch,
+} from "./provider-port.js";
+export {
+  appendCapitalProviderObservations,
+} from "./provider-service.js";
+export type {
+  AppendCapitalProviderObservationsOptions,
+  AppendCapitalProviderObservationsResult,
+} from "./provider-service.js";
 export { mapAshareObservation } from "./ashare-observation-adapter.js";
 export type {
   AshareObservationInput,

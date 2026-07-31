@@ -81,6 +81,7 @@ export {
   syncAshareCapitalEnvironmentRecords,
   validateCapitalMetricCatalogEntry,
   validateCapitalDataRecord,
+  appendCapitalProviderObservations,
 } from "./modules/capital-environment/index.js";
 export type {
   CapitalDataRecord,
@@ -95,6 +96,12 @@ export type {
   CapitalRecordListOptions,
   CapitalSourceBaseline,
   CapitalSourceReference,
+  CapitalProviderPort,
+  CapitalProviderRequest,
+  ProviderObservation,
+  ProviderObservationBatch,
+  AppendCapitalProviderObservationsOptions,
+  AppendCapitalProviderObservationsResult,
   CapitalAvailability as CapitalAvailabilityType,
   CapitalCatalogStatus as CapitalCatalogStatusType,
   CapitalDimension as CapitalDimensionType,

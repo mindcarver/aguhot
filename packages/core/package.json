@@ -17,6 +17,7 @@
     "verify:capital-data-contract": "tsx src/modules/capital-environment/capital-data-contract.selfcheck.ts",
     "verify:capital-source-field-catalog": "tsx src/modules/capital-environment/source-field-catalog.selfcheck.ts",
     "verify:capital-environment-record": "tsx src/modules/capital-environment/capital-environment-record.selfcheck.ts",
+    "verify:capital-provider-port": "tsx src/modules/capital-environment/provider-port.selfcheck.ts",
     "verify:fund-concentration": "tsx src/modules/fund-concentration/fund-concentration.selfcheck.ts",
     "verify:fund-concentration-snapshot": "tsx src/modules/fund-concentration/fund-concentration-snapshot.selfcheck.ts",
     "verify:breadth-projection": "tsx src/modules/publish-orchestrator/breadth-projection.selfcheck.ts",

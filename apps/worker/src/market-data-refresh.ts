@@ -18,6 +18,17 @@ export interface MarketDataRefreshDependencies {
     unchanged: number;
     failed: number;
   }>;
+  /**
+   * Optional external capital-provider sync (Issue #51). When omitted or when it
+   * resolves no providers, the job completes normally — the A 股 sidecar path
+   * still runs via `syncCapitalEnvironmentRecords`.
+   */
+  syncCapitalProviders?: () => Promise<{
+    inserted: number;
+    unchanged: number;
+    pendingReview: number;
+    failed: number;
+  }>;
   detectCrashDays: () => Promise<{ upserted: number; crashDays: readonly unknown[] }>;
   publishCrashDays: () => Promise<{ projected: number; pruned: number }>;
   detectSurgeDays: () => Promise<{ upserted: number; surgeDays: readonly unknown[] }>;
@@ -39,6 +50,10 @@ export interface MarketDataRefreshResult {
   capitalRecordsInserted: number;
   capitalRecordsUnchanged: number;
   capitalRecordsFailed: number;
+  capitalProvidersInserted: number;
+  capitalProvidersUnchanged: number;
+  capitalProvidersPendingReview: number;
+  capitalProvidersFailed: number;
 }
 
 /** Execute the refresh stages in strict order. A failed stage stops later writes. */
@@ -66,6 +81,18 @@ export async function runMarketDataRefresh(
   // Per-source sidecar failures are captured as durable failed records by the
   // core service. An unexpected sync failure remains loud so BullMQ retries it.
   const capitalRecordSync = await dependencies.syncCapitalEnvironmentRecords();
+  // External capital providers (FRED/NBS/ECOS/KRX) are optional. When the
+  // resolver returns no providers or the dependency is absent, the job skips
+  // this stage without error — the A 股 sidecar path already ran above.
+  let capitalProviderSync = {
+    inserted: 0,
+    unchanged: 0,
+    pendingReview: 0,
+    failed: 0,
+  };
+  if (dependencies.syncCapitalProviders !== undefined) {
+    capitalProviderSync = await dependencies.syncCapitalProviders();
+  }
   let breadthProjection = { projected: 0, pruned: 0 };
   try {
     breadthProjection = await dependencies.publishMarketBreadthHistory();
@@ -95,6 +122,10 @@ export async function runMarketDataRefresh(
     capitalRecordsInserted: capitalRecordSync.inserted,
     capitalRecordsUnchanged: capitalRecordSync.unchanged,
     capitalRecordsFailed: capitalRecordSync.failed,
+    capitalProvidersInserted: capitalProviderSync.inserted,
+    capitalProvidersUnchanged: capitalProviderSync.unchanged,
+    capitalProvidersPendingReview: capitalProviderSync.pendingReview,
+    capitalProvidersFailed: capitalProviderSync.failed,
   };
 }
 
@@ -110,12 +141,17 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
     upsertSurgeDays,
   } = await import("@aguhot/core");
   const prisma = getPrisma();
+  const { syncCapitalProviders } = await import("./capital-provider-sync.js");
+  const observedTo = new Date().toISOString();
+  const observedFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
   return runMarketDataRefresh({
     ingestIndices: () => runIncrementalSidecar("index", 10 * 60 * 1000),
     ingestSectors: () => runIncrementalSidecar("sector", 30 * 60 * 1000),
     ingestBreadth: () => runIncrementalSidecar("breadth", 30 * 60 * 1000),
     syncCapitalEnvironmentRecords: () => syncAshareCapitalEnvironmentRecords(prisma, { traceId }),
+    syncCapitalProviders: () =>
+      syncCapitalProviders({ observedFrom, observedTo, traceId, prisma }),
     detectCrashDays: () => upsertCrashDays({ prisma, traceId }),
     publishCrashDays: () => refreshPublishedCrashDays({ prisma, traceId }),
     detectSurgeDays: () => upsertSurgeDays({ prisma, traceId }),
