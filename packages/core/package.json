@@ -19,6 +19,7 @@
     "verify:capital-environment-record": "tsx src/modules/capital-environment/capital-environment-record.selfcheck.ts",
     "verify:capital-provider-port": "tsx src/modules/capital-environment/provider-port.selfcheck.ts",
     "verify:capital-snapshot-schema": "tsx src/modules/capital-environment/snapshot-schema.selfcheck.ts",
+    "verify:capital-snapshot-service": "tsx src/modules/capital-environment/snapshot-service.selfcheck.ts",
     "verify:point-in-time-replay": "tsx src/modules/capital-environment/point-in-time-replay.selfcheck.ts",
     "verify:trend-comparison": "tsx src/modules/capital-environment/trend-comparison.selfcheck.ts",
     "verify:fund-concentration": "tsx src/modules/fund-concentration/fund-concentration.selfcheck.ts",

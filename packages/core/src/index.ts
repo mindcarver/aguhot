@@ -30,6 +30,9 @@ export type { PublicationStatus as PublicationStatusType } from "./shared/public
 
 // Prisma client singleton (worker-only; never imported by the web app).
 export { getPrisma, resetPrisma } from "./db.js";
+// Re-export Prisma types so downstream packages (worker) can type PrismaClient
+// and raw JSON payloads without depending on core's internal generated path.
+export type { PrismaClient, Prisma } from "../generated/client.js";
 
 // source-ingest module.
 export type { SourceAdapter } from "./modules/source-ingest/adapter.js";
@@ -82,6 +85,10 @@ export {
   validateCapitalMetricCatalogEntry,
   validateCapitalDataRecord,
   appendCapitalProviderObservations,
+  appendCapitalProviderSnapshot,
+  listCapitalProviderSnapshots,
+  snapshotsToProviderBatch,
+  capitalSnapshotKey,
   replayCapitalEnvironmentAt,
   compareCapitalEnvironment,
   TrendDirection,
@@ -105,6 +112,13 @@ export type {
   ProviderObservationBatch,
   AppendCapitalProviderObservationsOptions,
   AppendCapitalProviderObservationsResult,
+  CapitalProviderSnapshotRow,
+  CapitalSnapshotAppendOptions,
+  CapitalSnapshotAppendResult,
+  CapitalSnapshotInput,
+  CapitalSnapshotKeyInput,
+  SnapshotsToBatchOptions,
+  SnapshotValueExtractor,
   CapitalReplayDimension,
   CapitalReplayMarket,
   CapitalReplayResult,
