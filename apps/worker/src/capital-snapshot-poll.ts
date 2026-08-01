@@ -26,6 +26,8 @@ import {
   type SnapshotValueExtractor,
 } from "@aguhot/core";
 
+import { resolveEastmoneyTargets } from "./eastmoney-capital-adapter.js";
+
 /**
  * One provider's polling configuration. The raw-fetch + value extraction are
  * provider-specific and injected; this module only orchestrates the
@@ -156,14 +158,14 @@ export async function runCapitalSnapshotPoll(
  * contributes its targets; providers without credentials/config are omitted
  * (honest degradation, mirroring capital-provider-resolver.ts).
  *
- * Concrete provider registration (NBS/ECOS/KRX) happens in #69 and follow-on
- * adapter Issues. Until then this returns an empty list — the poll job runs as
- * a no-op, validating the cron schedule without external calls.
+ * #69 registers the Eastmoney (China GDP/CPI) targets. ECOS/KRX register in
+ * their follow-on adapter Issues.
  */
 export function resolveSnapshotPollTargets(): SnapshotPollTarget[] {
-  // #69 registers NBS targets here; ECOS/KRX register in their Issues.
-  // Returning [] keeps the cron schedule live (A1) without external deps.
-  return [];
+  const targets: SnapshotPollTarget[] = [];
+  // #69: China GDP/CPI via akshare/Eastmoney (NBS WAF-blocked, Eastmoney bypasses it).
+  targets.push(...resolveEastmoneyTargets());
+  return targets;
 }
 
 /** Production entry used by BullMQ. */

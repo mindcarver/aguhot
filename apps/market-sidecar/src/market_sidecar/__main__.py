@@ -27,6 +27,7 @@ import sys
 from datetime import date
 
 from .ingest import ingest_breadth, ingest_indices, ingest_sectors
+from .macro import run_macro
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,12 +73,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Breadth --backfill only: inclusive end date. Requires --from.",
     )
+
+    sub.add_parser(
+        "macro",
+        help="Fetch China GDP/CPI YoY via akshare (Eastmoney), emit JSON-lines. Issue #69.",
+    )
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    _configure_logging(args.verbose)
+    _configure_logging(getattr(args, "verbose", 0))
+
+    if args.command == "macro":
+        return run_macro()
 
     if args.command != "ingest":
         return 2
