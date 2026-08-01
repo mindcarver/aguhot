@@ -14,6 +14,7 @@
     "verify:market-data-refresh": "tsx src/verify-market-data-refresh.ts",
     "verify:fred-provider-adapter": "tsx src/verify-fred-provider-adapter.ts",
     "verify:capital-snapshot-poll": "tsx src/verify-capital-snapshot-poll.ts",
+    "verify:eastmoney-adapter": "tsx src/verify-eastmoney-adapter.ts",
     "run:surge-review": "tsx src/run-surge-review.ts",
     "verify:associations": "tsx src/verify-associations.ts",
     "verify:themes": "tsx src/verify-themes.ts",

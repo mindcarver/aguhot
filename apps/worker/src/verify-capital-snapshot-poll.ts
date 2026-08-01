@@ -167,12 +167,16 @@ assertions.push({
   detail: JSON.stringify(result4[0]),
 });
 
-// A1: resolveSnapshotPollTargets returns [] until #69+ register providers.
+// A1: resolveSnapshotPollTargets returns the Eastmoney targets (#69 registered).
 const targets = resolveSnapshotPollTargets();
+const eastmoneyTargets = targets.filter((t) => t.providerId === "cn-eastmoney");
 assertions.push({
-  name: "A1 resolveSnapshotPollTargets is empty until provider adapters register",
-  ok: Array.isArray(targets) && targets.length === 0,
-  detail: `length=${targets.length}`,
+  name: "A1 resolveSnapshotPollTargets includes Eastmoney GDP+CPI targets (#69)",
+  ok:
+    Array.isArray(targets) &&
+    eastmoneyTargets.length === 2 &&
+    targets.some((t) => t.fetchLatest !== undefined),
+  detail: `total=${targets.length} eastmoney=${eastmoneyTargets.length}`,
 });
 
 const failed = assertions.filter((a) => !a.ok);
