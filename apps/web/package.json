@@ -15,6 +15,7 @@
     "verify:operator-auth": "tsx lib/operator-auth.selfcheck.ts",
     "verify:capital-conclusion": "tsx lib/capital-conclusion.selfcheck.ts",
     "verify:capital-integration": "tsx lib/capital-integration.selfcheck.ts",
+    "verify:capital-snapshot-integration": "tsx lib/capital-snapshot-integration.selfcheck.ts",
     "e2e": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep-invert \"@console|@detail|@revision|@merge-split|@market-reaction|@surge-calendar|@associations|@themes|@daily|@loop|@search|@follow|@watchlist|@search-return|@timeline\"",
     "e2e:a11y": "NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 playwright test --grep @a11y",
     "e2e:console": "tsx e2e/seed-console.ts && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 SESSION_SECRET=dev-operator-e2e-secret-32chars playwright test --grep @console",
