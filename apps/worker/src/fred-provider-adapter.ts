@@ -45,6 +45,17 @@ interface FredSeriesMapping {
    * `identity` leaves the value as-is (already in the target unit).
    */
   readonly valueTransform: "identity" | "year_over_year_percent";
+  /**
+   * Pre-seeded series→release_id (AD-CAP-2 cache clause). FRED's
+   * `/series/releases` endpoint returns HTTP 404 for these series (verified
+   * against the live API for all five), so dynamic resolution is impossible —
+   * the mapping is seeded from FRED's authoritative `/releases` table instead.
+   * `publishedAt` values still originate from `/release/dates` (AD-CAP-2);
+   * this only short-circuits the unreliable `series → release_id` hop. Omitted
+   * for series whose release has no publication calendar (DFF/WALCL) — those
+   * keep degrading honestly to unknown per AD-CAP-2.
+   */
+  readonly releaseId?: number;
 }
 
 /**
@@ -58,6 +69,7 @@ const FRED_SERIES: readonly FredSeriesMapping[] = [
     dimension: CapitalDimension.Growth,
     unit: "percent",
     valueTransform: "year_over_year_percent",
+    releaseId: 53,
   },
   {
     seriesId: "CPIAUCSL",
@@ -65,8 +77,12 @@ const FRED_SERIES: readonly FredSeriesMapping[] = [
     dimension: CapitalDimension.Inflation,
     unit: "percent",
     valueTransform: "year_over_year_percent",
+    releaseId: 10,
   },
   {
+    // WALCL release 481 has a single release date (2018-07-18) — no usable
+    // publication calendar. Left without a releaseId so it degrades honestly
+    // to unknown per AD-CAP-2 rather than fabricating a publishedAt.
     seriesId: "WALCL",
     metricKey: "us-liquidity",
     dimension: CapitalDimension.Liquidity,
@@ -74,6 +90,9 @@ const FRED_SERIES: readonly FredSeriesMapping[] = [
     valueTransform: "identity",
   },
   {
+    // DFF release 472 has zero release dates — the daily federal funds rate
+    // is not published via a release calendar. Left without a releaseId so it
+    // degrades honestly to unknown per AD-CAP-2.
     seriesId: "DFF",
     metricKey: "us-funding-price",
     dimension: CapitalDimension.FundingPrice,
@@ -86,6 +105,7 @@ const FRED_SERIES: readonly FredSeriesMapping[] = [
     dimension: CapitalDimension.RiskCredit,
     unit: "percent",
     valueTransform: "identity",
+    releaseId: 209,
   },
 ];
 
@@ -182,6 +202,15 @@ function parseIsoTimestamp(value: string): number {
 }
 
 /**
+ * Truncate an ISO timestamp to the `YYYY-MM-DD` FRED date format. FRED's
+ * observation_start/observation_end params reject ISO 8601 timestamps with
+ * time/timezone components (HTTP 400); they require a bare calendar date.
+ */
+function toFredDate(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+/**
  * Apply the series value transform. `year_over_year_percent` needs the prior
  * period's value; when no prior is available the observation degrades to
  * unknown (the first data point of a series has no YoY).
@@ -252,15 +281,15 @@ export class FredProviderAdapter implements CapitalProviderPort {
   ): Promise<ProviderObservation[]> {
     const url = buildUrl(this.apiBase, this.apiKey, "/series/observations", {
       series_id: series.seriesId,
-      observation_start: request.observedFrom,
-      observation_end: request.observedTo,
+      observation_start: toFredDate(request.observedFrom),
+      observation_end: toFredDate(request.observedTo),
       order_by: "observation_date",
       sort_order: "asc",
     });
     const wire = (await this.transport(url)) as FredObservationsResponse;
     const rows = Array.isArray(wire.observations) ? wire.observations : [];
 
-    const releaseId = await this.resolveReleaseId(series.seriesId, request.traceId);
+    const releaseId = await this.resolveReleaseId(series, request.traceId);
     const releaseDates =
       releaseId === null ? null : await this.resolveReleaseDates(releaseId, request.traceId);
 
@@ -277,8 +306,15 @@ export class FredProviderAdapter implements CapitalProviderPort {
       }
 
       const transformed = applyTransform(raw, priorRaw, series.valueTransform);
+      // AD-CAP-2: publishedAt comes from the release/dates entry corresponding
+      // to this observation period. Match by observation date (the period the
+      // data describes), NOT realtime_start — in a live realtime vintage, FRED
+      // pins realtime_start to "today" for every still-current observation, so
+      // it cannot locate the actual publication date. The earliest release date
+      // on or after the observation date is when this period's data was first
+      // published. realtime_start is never returned as publishedAt.
       const publishedAt =
-        releaseDates === null ? null : this.matchReleaseDate(releaseDates, row.realtime_start);
+        releaseDates === null ? null : this.matchReleaseDate(releaseDates, row.date);
 
       if (transformed.degraded) {
         result.push(
@@ -314,13 +350,24 @@ export class FredProviderAdapter implements CapitalProviderPort {
   }
 
   /**
-   * AD-CAP-2 step 1: resolve a series to its release_id via series/releases.
-   * Cached per seriesId. Returns null when the mapping is ambiguous (multiple
-   * releases) or absent — the caller degrades rather than guessing.
+   * AD-CAP-2 step 1: resolve a series to its release_id. The pre-seeded
+   * `mapping.releaseId` (sourced from FRED's `/releases` table) wins — FRED's
+   * `/series/releases` returns HTTP 404 for these series, so the dynamic hop is
+   * only a fallback for future series without a seed. Cached per seriesId.
+   * Returns null when the mapping is ambiguous (multiple releases) or absent —
+   * the caller degrades rather than guessing.
    */
-  private async resolveReleaseId(seriesId: string, traceId: string): Promise<number | null> {
+  private async resolveReleaseId(
+    mapping: FredSeriesMapping,
+    traceId: string,
+  ): Promise<number | null> {
+    const { seriesId } = mapping;
     if (this.releaseIdCache.has(seriesId)) {
       return this.releaseIdCache.get(seriesId) ?? null;
+    }
+    if (mapping.releaseId !== undefined) {
+      this.releaseIdCache.set(seriesId, mapping.releaseId);
+      return mapping.releaseId;
     }
     const url = buildUrl(this.apiBase, this.apiKey, "/series/releases", {
       series_id: seriesId,
@@ -365,21 +412,23 @@ export class FredProviderAdapter implements CapitalProviderPort {
 
   /**
    * Find the publication date for an observation. A release date qualifies when
-   * it is on or after the observation's `realtime_start` — the vintage boundary
-   * marking when this observation first became available in FRED. The earliest
-   * qualifying release date is the publication date.
+   * it is on or after the observation's own date (the period the data
+   * describes) — the data for a given period is published at, not before, that
+   * period. The earliest qualifying release date is the publication date.
    *
-   * AD-CAP-2: `realtime_start` is used only as a matching boundary to locate the
-   * correct release entry; it is never returned as `publishedAt`. The value of
+   * AD-CAP-2: matching is by observation date, NOT by `realtime_start`. In a
+   * live realtime vintage FRED pins `realtime_start` to "today" for every
+   * still-current observation, so it cannot locate the historical publication
+   * date. `realtime_start` is never returned as `publishedAt`; the value of
    * `publishedAt` always comes from the `release/dates` endpoint.
    */
   private matchReleaseDate(
     releaseDates: readonly string[],
-    realtimeStart: string,
+    observationDate: string,
   ): string | null {
-    const vintageTs = parseIsoTimestamp(`${realtimeStart}T00:00:00.000Z`);
+    const observedTs = parseIsoTimestamp(`${observationDate}T00:00:00.000Z`);
     for (const date of releaseDates) {
-      if (parseIsoTimestamp(`${date}T00:00:00.000Z`) >= vintageTs) {
+      if (parseIsoTimestamp(`${date}T00:00:00.000Z`) >= observedTs) {
         return `${date}T00:00:00.000Z`;
       }
     }
