@@ -5,6 +5,11 @@
  * no real FRED API call is made and CI is not gated on network or credentials.
  * A minimal inline fake Prisma exercises the end-to-end path through #51's
  * appendCapitalProviderObservations → #47's listCapitalDataRecordsAt.
+ *
+ * Fixture release IDs (RELEASE_ID_*) match the live FRED `/releases` table and
+ * the adapter's pre-seeded `releaseId` values — this regression-guards the bug
+ * where `/series/releases` returns HTTP 404 for these series (verified against
+ * the live API), which had left every publishedAt null and the dashboard empty.
  */
 
 import {
@@ -69,50 +74,27 @@ function fakePrisma() {
   return { client, rows };
 }
 
-// ---- FRED wire fixtures ----
+// ---- FRED wire fixtures (release IDs match the live FRED release table) ----
 
-const RELEASE_ID_DFF = 123;
-const RELEASE_ID_GDP = 53;
+// Real FRED release IDs (verified via /releases + /release/dates on the live API).
+// These mirror the pre-seeded releaseId values in FredSeriesMapping.
+const RELEASE_ID_GDP = 53; // Gross Domestic Product (GDPC1)
+const RELEASE_ID_CPI = 10; // Consumer Price Index (CPIAUCSL)
+const RELEASE_ID_BOFA = 209; // ICE BofA Indices (BAMLH0A0HYM2)
 
 /**
- * DFF observations. realtime_start is the vintage boundary (when the value first
- * appeared in FRED), NOT the publication date. The 2024-02-01 observation's
- * realtime_start (2024-02-02) matches release date 2024-02-02. The 2024-01-31
- * observation's realtime_start (2024-02-04) is after the last release date →
- * no match → publishedAt=null → unknown.
+ * GDPC1 observations. realtime_start is the vintage boundary (when the value
+ * first appeared in FRED), NOT the publication date. The 2024-01-01 obs's
+ * earliest qualifying release date (>= its observation date) is 2024-01-25 →
+ * that becomes publishedAt; the 2023-10-01 obs is the first period (no prior
+ * for YoY → degraded).
  */
-const dffObservations = {
-  observations: [
-    {
-      realtime_start: "2024-02-04",
-      realtime_end: "2024-02-10",
-      date: "2024-01-31",
-      value: "5.5",
-    },
-    {
-      realtime_start: "2024-02-02",
-      realtime_end: "2024-02-08",
-      date: "2024-02-01",
-      value: "5.49",
-    },
-  ],
-};
-
-const dffReleases = { releases: [{ id: RELEASE_ID_DFF, name: "Selected Interest Rates" }] };
-const dffReleaseDates = {
-  release_dates: [
-    { release_id: RELEASE_ID_DFF, date: "2024-02-02" },
-    { release_id: RELEASE_ID_DFF, date: "2024-02-03" },
-  ],
-};
-
 const gdpObservations = {
   observations: [
     { realtime_start: "2024-01-25", realtime_end: "2024-02-28", date: "2023-10-01", value: "22500" },
     { realtime_start: "2024-04-25", realtime_end: "2024-05-30", date: "2024-01-01", value: "22750" },
   ],
 };
-const gdpReleases = { releases: [{ id: RELEASE_ID_GDP, name: "Gross Domestic Product" }] };
 const gdpReleaseDates = {
   release_dates: [
     { release_id: RELEASE_ID_GDP, date: "2024-01-25" },
@@ -121,14 +103,59 @@ const gdpReleaseDates = {
 };
 
 /**
- * Per-series FRED responses for one or more series. The transport routes by
- * endpoint path AND series_id/release_id, since a URL like
- * `/series/releases?series_id=DFF` contains both the path and the param.
+ * CPIAUCSL observations. Both have qualifying release dates → both produce
+ * publishedAt (after YoY transform). 2024-02 is the first period (degraded).
+ */
+const cpiObservations = {
+  observations: [
+    { realtime_start: "2024-03-12", realtime_end: "2024-04-09", date: "2024-02-01", value: "310" },
+    { realtime_start: "2024-04-10", realtime_end: "2024-05-13", date: "2024-03-01", value: "312" },
+  ],
+};
+const cpiReleaseDates = {
+  release_dates: [
+    { release_id: RELEASE_ID_CPI, date: "2024-03-12" },
+    { release_id: RELEASE_ID_CPI, date: "2024-04-10" },
+  ],
+};
+
+/**
+ * BAMLH0A0HYM2 observations. identity transform → no degradation. realtime_start
+ * 2024-02-05 matches a release date; realtime_start 2024-03-15 has no later
+ * release date → publishedAt=null → unknown.
+ */
+const bofaObservations = {
+  observations: [
+    { realtime_start: "2024-02-05", realtime_end: "2024-03-04", date: "2024-02-02", value: "5.8" },
+    { realtime_start: "2024-03-15", realtime_end: "2024-04-12", date: "2024-03-01", value: "5.9" },
+  ],
+};
+const bofaReleaseDates = {
+  release_dates: [{ release_id: RELEASE_ID_BOFA, date: "2024-02-05" }],
+};
+
+/**
+ * DFF observations — used to verify honest degradation. DFF has NO pre-seeded
+ * releaseId (release 472 has zero release dates on the live API), so the
+ * dynamic `/series/releases` fallback runs and returns empty → releaseId=null
+ * → publishedAt=null → unknown for every observation.
+ */
+const dffObservations = {
+  observations: [
+    { realtime_start: "2024-02-04", realtime_end: "2024-02-10", date: "2024-01-31", value: "5.5" },
+    { realtime_start: "2024-02-02", realtime_end: "2024-02-08", date: "2024-02-01", value: "5.49" },
+  ],
+};
+
+/**
+ * Per-series FRED responses. The transport routes by endpoint path AND
+ * series_id/release_id, since a URL like `/release/dates?release_id=53` contains
+ * both the path and the param.
  */
 interface FredFixture {
   /** seriesId → observations response. */
   readonly observations?: Record<string, unknown>;
-  /** seriesId → series/releases response. */
+  /** seriesId → series/releases response (only hit for series without a pre-seeded releaseId). */
   readonly releases?: Record<string, unknown>;
   /** releaseId (as string) → release/dates response. */
   readonly releaseDates?: Record<string, unknown>;
@@ -164,26 +191,31 @@ function fixtureTransport(fixture: FredFixture): FredTransport {
   };
 }
 
-/** Full fixture covering all 5 series for end-to-end / multi-series checks. */
+/**
+ * Full fixture covering all 5 series for end-to-end / multi-series checks. Only
+ * series with a pre-seeded releaseId (GDPC1/CPIAUCSL/BAMLH0A0HYM2) provide
+ * release/dates; DFF/WALCL have no seed and the dynamic fallback returns empty
+ * releases (mirroring the live 404), so they degrade to unknown.
+ */
 function fullFixture(overrides: Partial<FredFixture> = {}): FredFixture {
   return {
     observations: {
-      DFF: dffObservations,
       GDPC1: gdpObservations,
-      CPIAUCSL: { observations: [] },
+      CPIAUCSL: cpiObservations,
+      BAMLH0A0HYM2: bofaObservations,
+      DFF: dffObservations,
       WALCL: { observations: [] },
-      BAMLH0A0HYM2: { observations: [] },
     },
     releases: {
-      DFF: dffReleases,
-      GDPC1: gdpReleases,
-      CPIAUCSL: { releases: [] },
+      // DFF/WALCL have no pre-seeded releaseId → the dynamic fallback calls
+      // /series/releases, which returns empty (live API: 404). Both degrade.
+      DFF: { releases: [] },
       WALCL: { releases: [] },
-      BAMLH0A0HYM2: { releases: [] },
     },
     releaseDates: {
-      [String(RELEASE_ID_DFF)]: dffReleaseDates,
       [String(RELEASE_ID_GDP)]: gdpReleaseDates,
+      [String(RELEASE_ID_CPI)]: cpiReleaseDates,
+      [String(RELEASE_ID_BOFA)]: bofaReleaseDates,
     },
     ...overrides,
   };
@@ -242,36 +274,9 @@ assertions.push({
   ok: adapter.providerId === "us-fred" && typeof adapter.fetchObservations === "function",
 });
 
-// A2/A3: DFF observations — publishedAt comes from release/dates, NOT realtime_start.
-// The 2024-02-01 obs has a qualifying release date (2024-02-02); the 2024-01-31 obs
-// has no qualifying release date → publishedAt=null → unknown.
-const dffAdapter = new FredProviderAdapter({
-  apiKey: "test-key",
-  transport: fixtureTransport(fullFixture()),
-});
-const dffBatch = await dffAdapter.fetchObservations(request);
-const dffObs = dffBatch.observations.filter((o) => o.metricKey === "us-funding-price");
-const dffPublished = dffObs.find((o) => o.observedAt === "2024-02-01T00:00:00.000Z");
-const dffUnpublished = dffObs.find((o) => o.observedAt === "2024-01-31T00:00:00.000Z");
-assertions.push({
-  name: "A2 publishedAt resolved from release/dates (not realtime_start)",
-  ok:
-    dffPublished?.publishedAt === "2024-02-02T00:00:00.000Z" &&
-    dffPublished?.value === 5.49 &&
-    dffPublished?.availability === CapitalAvailability.Available,
-  detail: JSON.stringify(dffPublished),
-});
-assertions.push({
-  name: "A3 no qualifying release date → publishedAt=null, unknown, no realtime_start fallback",
-  ok:
-    dffUnpublished?.publishedAt === null &&
-    dffUnpublished?.availability === CapitalAvailability.Unknown &&
-    dffUnpublished?.value === null &&
-    dffUnpublished?.statusReason?.includes("not used as publishedAt") === true,
-  detail: JSON.stringify(dffUnpublished),
-});
-
-// A2: GDPC1 YoY transform — (22750-22500)/22500*100 ≈ 1.1111%.
+// A2: pre-seeded releaseId resolves publishedAt from release/dates (not realtime_start).
+// GDPC1 2024-01-01 obs: releaseId=53 seeded, earliest release date >= 2024-01-01 is
+// 2024-01-25 → publishedAt=2024-01-25.
 const gdpAdapter = new FredProviderAdapter({
   apiKey: "test-key",
   transport: fixtureTransport(fullFixture()),
@@ -281,12 +286,13 @@ const gdpObs = gdpBatch.observations.filter((o) => o.metricKey === "us-growth");
 const gdpYoY = gdpObs.find((o) => o.observedAt === "2024-01-01T00:00:00.000Z");
 const gdpFirst = gdpObs.find((o) => o.observedAt === "2023-10-01T00:00:00.000Z");
 assertions.push({
-  name: "A2 GDPC1 year_over_year_percent transform applied with prior value",
+  name: "A2 pre-seeded releaseId resolves publishedAt from release/dates (GDPC1)",
   ok:
+    gdpYoY?.publishedAt === "2024-01-25T00:00:00.000Z" &&
     gdpYoY?.value !== null &&
     Math.abs((gdpYoY!.value as number) - 1.11111111) < 1e-6 &&
     gdpYoY?.unit === "percent" &&
-    gdpYoY?.publishedAt === "2024-04-25T00:00:00.000Z",
+    gdpYoY?.availability === CapitalAvailability.Available,
   detail: JSON.stringify(gdpYoY),
 });
 assertions.push({
@@ -296,6 +302,72 @@ assertions.push({
     gdpFirst?.availability === CapitalAvailability.Unknown &&
     gdpFirst?.statusReason?.includes("no prior value") === true,
   detail: JSON.stringify(gdpFirst),
+});
+
+// A2: CPIAUCSL + BAMLH0A0HYM2 also resolve publishedAt via their pre-seeded releaseIds.
+const cpiBatch = await new FredProviderAdapter({
+  apiKey: "test-key",
+  transport: fixtureTransport(fullFixture()),
+}).fetchObservations(request);
+const cpiObs = cpiBatch.observations.filter((o) => o.metricKey === "us-inflation");
+const cpiPublished = cpiObs.find((o) => o.observedAt === "2024-03-01T00:00:00.000Z");
+assertions.push({
+  name: "A2 pre-seeded releaseId resolves publishedAt (CPIAUCSL)",
+  ok:
+    cpiPublished?.publishedAt === "2024-03-12T00:00:00.000Z" &&
+    cpiPublished?.availability === CapitalAvailability.Available &&
+    cpiPublished?.value !== null,
+  detail: JSON.stringify(cpiPublished),
+});
+
+const bofaBatch = await new FredProviderAdapter({
+  apiKey: "test-key",
+  transport: fixtureTransport(fullFixture()),
+}).fetchObservations(request);
+const bofaObs = bofaBatch.observations.filter((o) => o.metricKey === "us-risk-credit");
+const bofaPublished = bofaObs.find((o) => o.observedAt === "2024-02-02T00:00:00.000Z");
+assertions.push({
+  name: "A2 pre-seeded releaseId resolves publishedAt (BAMLH0A0HYM2)",
+  ok:
+    bofaPublished?.publishedAt === "2024-02-05T00:00:00.000Z" &&
+    bofaPublished?.value === 5.8 &&
+    bofaPublished?.availability === CapitalAvailability.Available,
+  detail: JSON.stringify(bofaPublished),
+});
+
+// A3: DFF (no pre-seeded releaseId + empty /series/releases) → publishedAt=null,
+// unknown, no realtime_start fallback. This is the honest-degradation guarantee
+// for series whose release has no publication calendar (live release 472 = 0 dates).
+const dffAdapter = new FredProviderAdapter({
+  apiKey: "test-key",
+  transport: fixtureTransport(fullFixture()),
+});
+const dffBatch = await dffAdapter.fetchObservations(request);
+const dffObs = dffBatch.observations.filter((o) => o.metricKey === "us-funding-price");
+assertions.push({
+  name: "A3 no releaseId + no qualifying release date → publishedAt=null, unknown (DFF)",
+  ok:
+    dffObs.length === 2 &&
+    dffObs.every(
+      (o) =>
+        o.publishedAt === null &&
+        o.availability === CapitalAvailability.Unknown &&
+        o.value === null &&
+        o.statusReason?.includes("not used as publishedAt") === true,
+    ),
+  detail: JSON.stringify(dffObs),
+});
+
+// A3: BAMLH0A0HYM2 observation whose realtime_start (2024-03-15) is after the
+// last release date (2024-02-05) → no qualifying release date → publishedAt=null.
+const bofaUnpublished = bofaObs.find((o) => o.observedAt === "2024-03-01T00:00:00.000Z");
+assertions.push({
+  name: "A3 seeded releaseId but no qualifying release date → publishedAt=null, unknown",
+  ok:
+    bofaUnpublished?.publishedAt === null &&
+    bofaUnpublished?.availability === CapitalAvailability.Unknown &&
+    bofaUnpublished?.value === null,
+  detail: JSON.stringify(bofaUnpublished),
 });
 
 // A3: multiple releases → releaseId=null → publishedAt=null (no guess).
@@ -336,20 +408,19 @@ assertions.push({
   detail: JSON.stringify({ availability: failBatch?.availability, count: failBatch?.observations.length }),
 });
 
-// A5: caching — series/releases and release/dates are fetched once per series/release,
-// not once per observation.
+// A5: caching — observations per series; series/releases + release/dates cached.
+// GDPC1/CPIAUCSL/BAMLH0A0HYM2 use pre-seeded releaseId (no /series/releases call);
+// only DFF/WALCL fall back to /series/releases (2 calls). The 3 seeded releases
+// each fetch /release/dates once, cached across both fetchObservations calls.
 const counter = countingTransport(fixtureTransport(fullFixture()));
 const cacheAdapter = new FredProviderAdapter({ apiKey: "test-key", transport: counter.transport });
 await cacheAdapter.fetchObservations(request);
 await cacheAdapter.fetchObservations(request);
 const srCount = counter.counts.get("series/releases") ?? 0;
 const rdCount = counter.counts.get("release/dates") ?? 0;
-// 5 series → 5 series/releases calls (cached on 2nd fetch). Only DFF and GDPC1
-// have a release_id (others have empty releases → null → no release/dates call),
-// and those release/dates calls are cached across both fetches.
 assertions.push({
-  name: "A5 series/releases + release/dates cached across observations and fetches",
-  ok: srCount === 5 && rdCount === 2,
+  name: "A5 seeded releaseId skips /series/releases; both endpoints cached across fetches",
+  ok: srCount === 2 && rdCount === 3,
   detail: JSON.stringify({ seriesReleasesCalls: srCount, releaseDatesCalls: rdCount }),
 });
 
@@ -364,22 +435,47 @@ const e2eResult = await appendCapitalProviderObservations(store.client, e2eBatch
   asOf: "2024-12-31T00:00:00.000Z",
   traceId: request.traceId,
 });
-// visible at a cutoff after the 2024-02-02 release but the 2024-01-31 unknown
-// record is also visible (non-value, asOf fallback). The available DFF record
-// must be readable by publishedAt <= asOf.
-const visible = await listCapitalDataRecordsAt(store.client, "2024-02-15T00:00:00.000Z");
-const visibleDff = visible.filter((r) => r.metricKey === "us-funding-price");
+// GDPC1 publishedAt 2024-01-25 is visible at a 2024-05 cutoff.
+const visible = await listCapitalDataRecordsAt(store.client, "2024-05-15T00:00:00.000Z");
+const visibleGdp = visible.filter((r) => r.metricKey === "us-growth");
 assertions.push({
   name: "A6 end-to-end: adapter → append → listCapitalDataRecordsAt point-in-time read-back",
   ok:
     e2eResult.inserted > 0 &&
-    visibleDff.some(
+    visibleGdp.some(
       (r) =>
-        r.value === 5.49 &&
-        r.publishedAt === "2024-02-02T00:00:00.000Z" &&
-        r.availability === CapitalAvailability.Available,
+        r.publishedAt === "2024-01-25T00:00:00.000Z" &&
+        r.availability === CapitalAvailability.Available &&
+        r.value !== null,
     ),
-  detail: JSON.stringify({ inserted: e2eResult.inserted, visibleDffCount: visibleDff.length }),
+  detail: JSON.stringify({ inserted: e2eResult.inserted, visibleGdpCount: visibleGdp.length }),
+});
+
+// A7: ISO timestamps in observedFrom/observedTo are truncated to YYYY-MM-DD.
+// FRED's observation_start/observation_end reject ISO 8601 timestamps (HTTP
+// 400); regression-guards the bug where a full-timestamp window left every
+// series fetch failing with 400 and degrading to unknown.
+let observedUrl: string | undefined;
+const capturingTransport: FredTransport = async (url) => {
+  if (url.includes("/series/observations")) observedUrl = url;
+  return fixtureTransport(fullFixture())(url);
+};
+const tsAdapter = new FredProviderAdapter({ apiKey: "test-key", transport: capturingTransport });
+const tsBatch = await tsAdapter.fetchObservations({
+  observedFrom: "2024-01-01T12:34:56.789Z",
+  observedTo: "2024-12-31T23:59:59.999Z",
+  traceId: "fred-timestamp-trace",
+});
+const tsGdp = tsBatch.observations.find((o) => o.metricKey === "us-growth" && o.value !== null);
+assertions.push({
+  name: "A7 ISO timestamp window truncated to YYYY-MM-DD (no HTTP 400, observations fetched)",
+  ok:
+    observedUrl !== undefined &&
+    !observedUrl!.includes("T") &&
+    !observedUrl!.includes("%3A") &&
+    tsGdp?.availability === CapitalAvailability.Available &&
+    tsGdp?.publishedAt === "2024-01-25T00:00:00.000Z",
+  detail: JSON.stringify({ observedUrl, tsGdpAvailable: tsGdp?.availability }),
 });
 
 const failed = assertions.filter((a) => !a.ok);
