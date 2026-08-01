@@ -1196,21 +1196,21 @@ model SectorDailyBar {
 // to crash_days / index_daily_bars — breadth is a market-data time series keyed by date,
 // not a sub-aggregate (mirrors the no-FK invariant above).
 model MarketBreadthDaily {
-  id                   String   @id // UUIDv7, assigned in the Python sidecar (uuid7.str → str)
-  tradeDate            DateTime @map("trade_date") @db.Date // A-share trading day (UTC midnight); unique
-  limitUpCount         Int      @map("limit_up_count") // 涨停家数 (stock_zt_pool_em row count)
-  limitDownCount       Int      @map("limit_down_count") // 跌停家数 (stock_zt_pool_dtgc_em row count)
-  consecutiveBoardMax  Int      @map("consecutive_board_max") // 最高连板高度 (涨停池 连板数 max)
-  brokenBoardCount     Int      @map("broken_board_count") // 炸板家数 (stock_zt_pool_zbgc_em row count)
-  advancingCount       Int?     @map("advancing_count") // 上涨家数 (spot pctChange > 0); nullable — stock_zh_a_spot_em serves ONLY the latest trading day, so historical-day rows are NULL (NFR-5 honest empty, not fabricated)
-  decliningCount       Int?     @map("declining_count") // 下跌家数 (spot pctChange < 0); nullable — advancing/declining/flat/turnover populated only on the latest day (window end)
-  flatCount            Int?     @map("flat_count") // 平盘家数 (spot pctChange == 0); nullable — same latest-day-only constraint
-  totalTurnover        Decimal? @map("total_turnover") @db.Decimal(20, 2) // 两市成交额(元) (spot 成交额 sum); nullable — spot is latest-day-only, so historical-day rows are NULL (NFR-5)
-  marginBalanceChange  Decimal? @map("margin_balance_change") @db.Decimal(20, 2) // 融资融券余额变化(T-1, nullable NFR-5)
-  dragonTiger          Json?    @map("dragon_tiger") // 龙虎榜 aggregate (nullable; zero object on no-listing day, NFR-5)
-  source               String // MarketDataSource union value ("akshare")
-  ingestedAt           DateTime @default(now()) @map("ingested_at") // UTC write instant
-  traceId              String?  @map("trace_id")
+  id                  String   @id // UUIDv7, assigned in the Python sidecar (uuid7.str → str)
+  tradeDate           DateTime @map("trade_date") @db.Date // A-share trading day (UTC midnight); unique
+  limitUpCount        Int      @map("limit_up_count") // 涨停家数 (stock_zt_pool_em row count)
+  limitDownCount      Int      @map("limit_down_count") // 跌停家数 (stock_zt_pool_dtgc_em row count)
+  consecutiveBoardMax Int      @map("consecutive_board_max") // 最高连板高度 (涨停池 连板数 max)
+  brokenBoardCount    Int      @map("broken_board_count") // 炸板家数 (stock_zt_pool_zbgc_em row count)
+  advancingCount      Int?     @map("advancing_count") // 上涨家数 (spot pctChange > 0); nullable — stock_zh_a_spot_em serves ONLY the latest trading day, so historical-day rows are NULL (NFR-5 honest empty, not fabricated)
+  decliningCount      Int?     @map("declining_count") // 下跌家数 (spot pctChange < 0); nullable — advancing/declining/flat/turnover populated only on the latest day (window end)
+  flatCount           Int?     @map("flat_count") // 平盘家数 (spot pctChange == 0); nullable — same latest-day-only constraint
+  totalTurnover       Decimal? @map("total_turnover") @db.Decimal(20, 2) // 两市成交额(元) (spot 成交额 sum); nullable — spot is latest-day-only, so historical-day rows are NULL (NFR-5)
+  marginBalanceChange Decimal? @map("margin_balance_change") @db.Decimal(20, 2) // 融资融券余额变化(T-1, nullable NFR-5)
+  dragonTiger         Json?    @map("dragon_tiger") // 龙虎榜 aggregate (nullable; zero object on no-listing day, NFR-5)
+  source              String // MarketDataSource union value ("akshare")
+  ingestedAt          DateTime @default(now()) @map("ingested_at") // UTC write instant
+  traceId             String?  @map("trace_id")
 
   // One row per trading day; re-running the same day is a no-op (ON CONFLICT DO NOTHING).
   @@unique([tradeDate])
@@ -1239,11 +1239,11 @@ model CapitalEnvironmentRecord {
   sourceDataset          String    @map("source_dataset")
   sourceDocumentationUrl String?   @map("source_documentation_url")
   processingVersion      String    @map("processing_version")
-  availability            String
-  statusReason            String?   @map("status_reason")
-  revision                Int
-  traceId                 String?   @map("trace_id")
-  ingestedAt              DateTime  @default(now()) @map("ingested_at")
+  availability           String
+  statusReason           String?   @map("status_reason")
+  revision               Int
+  traceId                String?   @map("trace_id")
+  ingestedAt             DateTime  @default(now()) @map("ingested_at")
 
   @@index([metricKey, observedAt])
   @@index([metricKey, publishedAt])
@@ -1254,6 +1254,40 @@ model CapitalEnvironmentRecord {
   @@index([asOf])
   @@index([publishedAt])
   @@map("capital_environment_records")
+}
+
+// Issue #67 — capital provider snapshot store. Retains the raw provider payload
+// + capture metadata for sources (NBS/ECOS/KRX) that provide no programmatic
+// release timestamp or historical vintages. The `firstCapturedAt` field is the
+// auditable publishedAt source per AD-SNAP-1 (capital-snapshot-store.md): AGUHOT
+// stamps the moment it first observed the data, which is conservative (>= the
+// real publication time, so FR-003 point-in-time safety holds).
+//
+// Append-only: a given provider+metric+observed-period is captured ONCE. The
+// `snapshotKey` uniqueness enforces idempotent "first occurrence" detection —
+// a later poll that finds the same period is a no-op. This mirrors the
+// append-only discipline of CapitalEnvironmentRecord and FundConcentrationSnapshot.
+model CapitalProviderSnapshot {
+  id                String   @id
+  snapshotKey       String   @unique @map("snapshot_key")
+  providerId        String   @map("provider_id")
+  metricKey         String   @map("metric_key")
+  market            String
+  dimension         String
+  observedAt        DateTime @map("observed_at")
+  // AGUHOT's first successful capture of this observed period — the publishedAt
+  // source per AD-SNAP-1. Monotonic: locked on first insert, never updated.
+  firstCapturedAt   DateTime @map("first_captured_at")
+  // The provider's original deserialized response, retained for audit/replay
+  // per FR-010. Stored as Json, mirroring EvidenceRecord.raw_payload.
+  rawPayload        Json     @map("raw_payload")
+  processingVersion String   @map("processing_version")
+  traceId           String?  @map("trace_id")
+  ingestedAt        DateTime @default(now()) @map("ingested_at")
+
+  @@index([providerId, observedAt])
+  @@index([metricKey, firstCapturedAt])
+  @@map("capital_provider_snapshots")
 }
 
 // Issue #48 — canonical, append-only concentration snapshots for the A-share

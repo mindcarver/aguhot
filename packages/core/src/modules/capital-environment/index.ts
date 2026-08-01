@@ -31,6 +31,8 @@ export {
   capitalRecordKey,
   selectCapitalRecordsAt,
 } from "./point-in-time.js";
+export { capitalSnapshotKey } from "./snapshot-key.js";
+export type { CapitalSnapshotKeyInput } from "./snapshot-key.js";
 export {
   CAPITAL_SOURCE_BASELINE,
   listCapitalSourceBaseline,
