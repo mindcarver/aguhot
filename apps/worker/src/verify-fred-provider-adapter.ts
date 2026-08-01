@@ -478,6 +478,41 @@ assertions.push({
   detail: JSON.stringify({ observedUrl, tsGdpAvailable: tsGdp?.availability }),
 });
 
+// A8: FRED encodes missing values as ".". When the YoY prior is "." (Number → NaN),
+// the observation must degrade to unknown rather than produce a non-finite YoY.
+// Regression-guards the bug where a wider window pulled in a period whose prior
+// was a FRED missing-value sentinel, yielding NaN and failing the append assert.
+const missingPriorFixture = fullFixture({
+  observations: {
+    GDPC1: {
+      observations: [
+        // prior period value is "." → Number(".") = NaN → YoY must degrade.
+        { realtime_start: "2024-01-25", realtime_end: "2024-02-28", date: "2023-10-01", value: "." },
+        { realtime_start: "2024-04-25", realtime_end: "2024-05-30", date: "2024-01-01", value: "22750" },
+      ],
+    },
+    CPIAUCSL: { observations: [] },
+    BAMLH0A0HYM2: { observations: [] },
+    DFF: { observations: [] },
+    WALCL: { observations: [] },
+  },
+});
+const missingPriorAdapter = new FredProviderAdapter({
+  apiKey: "test-key",
+  transport: fixtureTransport(missingPriorFixture),
+});
+const missingPriorBatch = await missingPriorAdapter.fetchObservations(request);
+const mpGdp = missingPriorBatch.observations.filter((o) => o.metricKey === "us-growth");
+const mpDegraded = mpGdp.find((o) => o.observedAt === "2024-01-01T00:00:00.000Z");
+assertions.push({
+  name: "A8 FRED missing-value (\".\") prior → YoY degrades to unknown, no NaN",
+  ok:
+    mpDegraded?.value === null &&
+    mpDegraded?.availability === CapitalAvailability.Unknown &&
+    mpDegraded?.statusReason?.includes("no prior value") === true,
+  detail: JSON.stringify(mpDegraded),
+});
+
 const failed = assertions.filter((a) => !a.ok);
 for (const a of assertions) {
   console.log(`${a.ok ? "PASS" : "FAIL"} ${a.name}${a.detail ? ` — ${a.detail}` : ""}`);
