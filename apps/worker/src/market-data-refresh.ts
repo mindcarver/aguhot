@@ -143,7 +143,13 @@ export async function refreshLatestMarketData(traceId: string): Promise<MarketDa
   const prisma = getPrisma();
   const { syncCapitalProviders } = await import("./capital-provider-sync.js");
   const observedTo = new Date().toISOString();
-  const observedFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  // FRED includes quarterly series (GDPC1) whose YoY transform needs the prior
+  // period — a 30-day window captures at most one quarter, leaving no prior and
+  // degrading every observation to unknown. 400 days spans ~5 quarters so the
+  // latest quarter has a prior for the YoY calculation. Daily series (DFF,
+  // BAMLH0A0HYM2) are unaffected (identity transform needs no prior; older
+  // rows are deduped idempotently by the append service).
+  const observedFrom = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
 
   return runMarketDataRefresh({
     ingestIndices: () => runIncrementalSidecar("index", 10 * 60 * 1000),

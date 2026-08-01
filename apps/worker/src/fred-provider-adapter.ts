@@ -213,7 +213,9 @@ function toFredDate(iso: string): string {
 /**
  * Apply the series value transform. `year_over_year_percent` needs the prior
  * period's value; when no prior is available the observation degrades to
- * unknown (the first data point of a series has no YoY).
+ * unknown (the first data point of a series has no YoY). FRED encodes missing
+ * values as "." which `Number()` turns into NaN, so a non-finite prior must
+ * also degrade rather than produce a NaN YoY.
  */
 function applyTransform(
   current: number,
@@ -221,7 +223,9 @@ function applyTransform(
   transform: FredSeriesMapping["valueTransform"],
 ): { value: number | null; degraded: boolean } {
   if (transform === "identity") return { value: current, degraded: false };
-  if (prior === null || prior === 0) return { value: null, degraded: true };
+  if (prior === null || !Number.isFinite(prior) || prior === 0) {
+    return { value: null, degraded: true };
+  }
   const yoy = ((current - prior) / prior) * 100;
   return { value: Math.round(yoy * 1e8) / 1e8, degraded: false };
 }
