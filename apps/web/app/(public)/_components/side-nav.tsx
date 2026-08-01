@@ -39,6 +39,16 @@ const MORE: NavItem[] = [
   { href: "/about", label: "关于", icon: "❤" },
 ];
 
+// Internal entries point into the (operator) route group. They are plain GET
+// <Link>s only — the operator auth gate (proxy.ts) and per-action
+// isOperatorAuthenticated() checks remain authoritative, so an unauthenticated
+// click still redirects to /console/login. Surfacing the labels here is a
+// convenience trade-off accepted by the operator; the target pages are noindex.
+const INTERNAL: NavItem[] = [
+  { href: "/capital-environment", label: "资本环境", icon: "◉" },
+  { href: "/console", label: "运营台", icon: "⚙" },
+];
+
 function isActive(pathname: string, item: NavItem): boolean {
   if (item.exact === true) return pathname === "/";
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -61,6 +71,11 @@ export function SideNav() {
         </SidebarGroup>
         <SidebarGroup title="更多">
           {MORE.map((item) => (
+            <SidebarLink key={item.href} item={item} active={isActive(pathname, item)} />
+          ))}
+        </SidebarGroup>
+        <SidebarGroup title="内部">
+          {INTERNAL.map((item) => (
             <SidebarLink key={item.href} item={item} active={isActive(pathname, item)} />
           ))}
         </SidebarGroup>
