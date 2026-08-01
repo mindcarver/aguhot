@@ -63,6 +63,21 @@ export type {
   CapitalRecordAppendResult,
   CapitalRecordListOptions,
 } from "./record-repository.js";
+export {
+  appendCapitalProviderSnapshot,
+  listCapitalProviderSnapshots,
+} from "./snapshot-repository.js";
+export type {
+  CapitalProviderSnapshotRow,
+  CapitalSnapshotAppendOptions,
+  CapitalSnapshotAppendResult,
+  CapitalSnapshotInput,
+} from "./snapshot-repository.js";
+export { snapshotsToProviderBatch } from "./snapshot-service.js";
+export type {
+  SnapshotsToBatchOptions,
+  SnapshotValueExtractor,
+} from "./snapshot-service.js";
 export type {
   CapitalProviderPort,
   CapitalProviderRequest,

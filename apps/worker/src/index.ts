@@ -54,6 +54,10 @@ import {
   registerInvestmentTargetsWorker,
   scheduleInvestmentTargetsSelfHeal,
 } from "./queues/investment-targets-queue.js";
+import {
+  registerCapitalSnapshotPollWorker,
+  scheduleCapitalSnapshotPoll,
+} from "./queues/capital-snapshot-poll-queue.js";
 import { enqueueStartupRefreshes } from "./startup-refresh.js";
 
 async function main(): Promise<void> {
@@ -77,6 +81,7 @@ async function main(): Promise<void> {
   const deepReadWorker = registerDeepReadWorker();
   const investmentTargetsWorker = registerInvestmentTargetsWorker();
   const pipelineRefreshWorker = registerPipelineRefreshWorker();
+  const capitalSnapshotPollWorker = registerCapitalSnapshotPollWorker();
 
   // Wire the timeline self-heal repeatable schedule (Story 4.1). Corrective
   // only — the main timeline refresh is the in-tx refreshPublishedTimeline-
@@ -93,13 +98,17 @@ async function main(): Promise<void> {
   // Keep index_daily_bars → crash_days → published_crash_days current without
   // requiring an operator to run the Epic 8 dev runners by hand.
   await scheduleMarketDataRefresh();
+  // Wire the capital snapshot poll cron (AD-SNAP-2). The repo's first cron-
+  // pattern schedule; polls NBS/ECOS/KRX near their release windows. No-op
+  // until #69+ register concrete provider targets.
+  await scheduleCapitalSnapshotPoll();
   // Do not leave a freshly started local app showing stale data until the next
   // 10/30-minute scheduler tick. Simple-mode deduplication prevents concurrent
   // startup jobs while allowing a completed or failed refresh to be retried.
   const startupRefresh = await enqueueStartupRefreshes();
 
   console.log(
-    "[worker] source-ingest + event-cluster + explain + market-reaction + market-data-refresh + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh workers registered and running",
+    "[worker] source-ingest + event-cluster + explain + market-reaction + market-data-refresh + theme-backfill + daily-digest + publish-timeline + recommendation-reason + deep-read + investment-targets + pipeline-refresh + capital-snapshot-poll workers registered and running",
   );
   console.log(
     `[worker] startup refresh queued pipeline=${startupRefresh.pipelineJobId} market=${startupRefresh.marketDataJobId}`,
@@ -120,6 +129,7 @@ async function main(): Promise<void> {
       deepReadWorker.close(),
       investmentTargetsWorker.close(),
       pipelineRefreshWorker.close(),
+      capitalSnapshotPollWorker.close(),
     ]);
     await closeRedis();
     process.exit(0);
